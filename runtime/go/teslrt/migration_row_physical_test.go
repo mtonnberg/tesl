@@ -170,10 +170,10 @@ func TestRowPhysicalRegistrationRefusesAtomically(t *testing.T) {
 	t.Run("malformed JSON", func(t *testing.T) { rejected(t, "{") })
 	registerCompiledRowPhysicalHistory(rowPhysicalCompilerSeed)
 	entry := compiledRowPhysicalHistories[compiled]
-	if entry == nil || len(entry.versions) != 2 {
+	if entry == nil || len(entry.raw) != 2 || len(entry.known()) != 2 {
 		t.Fatal("valid complete retry lost physical inventory")
 	}
-	for _, plan := range entry.versions {
+	for _, plan := range entry.known() {
 		if plan.compiled != compiled {
 			t.Fatal("physical registration changed exact source owner")
 		}

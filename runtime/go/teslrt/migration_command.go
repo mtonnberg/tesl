@@ -169,6 +169,11 @@ func pgRunSchemaCommandContext(serviceContext context.Context, command pgSchemaC
 		return fmt.Errorf("migration namespace disagrees with connection")
 	}
 	if command.verb == "install" || command.verb == "deploy" || command.verb == "worker" || command.verb == "catch-up" || command.verb == "contract" || command.verb == "close-epoch" {
+		// Commands that change the database validate every linked release
+		// first, including the ones serving processes do not read.
+		if err := pgValidateCompleteHistory(database); err != nil {
+			return err
+		}
 		if err := pgVerifyMigrationFacilities(database); err != nil {
 			return err
 		}

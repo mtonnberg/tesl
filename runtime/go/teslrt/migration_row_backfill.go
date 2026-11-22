@@ -65,7 +65,7 @@ func pgAttachRowBackfill[From, To any](storage *PgRowStorage[From, To]) error {
 	if !r.storageAttached || r.sealed || compiledRowBackfills[r] != nil || compiledRowPhysicalHistories[r.compiled] == nil {
 		return fmt.Errorf("duplicate, closed or unbound backfill storage")
 	}
-	d := r.compiled.inventory.Transforms[r.index]
+	d := r.compiled.transforms[r.index]
 	binding := &pgRowBackfillBinding{registration: r}
 	binding.read = func(ctx context.Context, tx pgx.Tx, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, cursor json.RawMessage, limit int) (chunk pgRowBackfillChunk, err error) {
 		if plan == nil || entity == nil || plan.compiled != r.compiled || plan.version != d.MigrationVersion || entity.identity != d.Entity || entity.generation != d.TargetGeneration || limit < 1 || limit > 10000 {

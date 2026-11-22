@@ -373,13 +373,16 @@ func pgRecordRowQueueLineage(ctx context.Context, tx pgx.Tx, namespace string, s
 }
 
 func pgCreateRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, roles PgMigrationControlRoles) error {
-	if len(b.queues) == 0 {
+	if b.queues == nil || b.queues.len() == 0 {
 		return fmt.Errorf("missing complete row queue source inventory")
 	}
 	if err := pgCreateQueueCandidateTables(ctx, tx, b.history.Namespace, roles); err != nil {
 		return err
 	}
-	source := b.queues[0]
+	source, err := b.queues.at(1)
+	if err != nil {
+		return err
+	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
 	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_queue_baseline(id,inventory_authority,established_by,initial_version,inventory_hash) values(1,'complete','fresh-install',1,$1)", source.inventoryHash); err != nil {
 		return err
@@ -387,15 +390,18 @@ func pgCreateRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, 
 	if err := pgInsertQueueCandidateInventory(ctx, tx, b.history, source.version, source.inventoryHash); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_sources values(1,$1,$2,$3,$4)", []byte(source.binding), source.bindingHash, source.inventoryHash, b.catalogHash)
+	_, err = tx.Exec(ctx, "insert into "+ns+"tesl_row_queue_sources values(1,$1,$2,$3,$4)", []byte(source.binding), source.bindingHash, source.inventoryHash, b.catalogHash)
 	return err
 }
 
 func pgRegisterRowQueueSource(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, plan *pgRowPhysicalPlan) error {
-	if plan == nil || plan.version < 2 || plan.version > len(b.queues) {
+	if plan == nil || plan.version < 2 || plan.version > b.queues.len() {
 		return fmt.Errorf("row expansion lacks exact complete queue source")
 	}
-	source := b.queues[plan.version-1]
+	source, err := b.queues.at(plan.version)
+	if err != nil {
+		return err
+	}
 	if source.version.SchemaSnapshotHash != plan.schemaSnapshotHash || source.version.StorageSnapshotHash != plan.storageSnapshotHash {
 		return fmt.Errorf("row queue source differs from exact physical source snapshots")
 	}
@@ -409,11 +415,14 @@ func pgRegisterRowQueueSource(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, 
 }
 
 func pgVerifyRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state PgMigrationControlState) error {
-	if len(b.queues) == 0 {
+	if b.queues == nil || b.queues.len() == 0 {
 		return fmt.Errorf("missing complete row queue source inventory")
 	}
 	ns := quoteIdentifier(b.history.Namespace) + "."
-	source := b.queues[0]
+	source, err := b.queues.at(1)
+	if err != nil {
+		return err
+	}
 	var initial, versions, physicalVersions int
 	var authority, established string
 	var hash *string
@@ -463,8 +472,16 @@ func pgVerifyRowQueueBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, 
 		if recorded.Hash != expected.inventoryHash || item.inventory != recorded.Hash || item.hash != expected.bindingHash || !bytes.Equal(item.body, []byte(expected.binding)) {
 			return fmt.Errorf("row-owned queue canonical source binding differs")
 		}
-		if i < len(b.queues) && expected.inventoryHash != b.queues[i].inventoryHash {
-			return fmt.Errorf("row queue inventory differs from local checked source")
+		// A recorded version is compared by identity with its linked bytes; a
+		// schema command validated that version when it published it.
+		if i < b.queues.len() {
+			local, err := b.queues.identityHash(i + 1)
+			if err != nil {
+				return err
+			}
+			if expected.inventoryHash != local {
+				return fmt.Errorf("row queue inventory differs from local checked source")
+			}
 		}
 		if i > 0 && !pgQueueInventoryPreserves(previous, recorded.Version) {
 			if err := pgVerifyRowQueueTransition(ctx, tx, b.history.Namespace, state, previous, recorded.Version); err != nil {

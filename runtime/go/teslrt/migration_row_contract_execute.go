@@ -18,7 +18,10 @@ func pgRowContractFor(database *Database, version int) (*pgRowContract, error) {
 	}
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
-	c := compiledRowContracts[plan.compiled][version]
+	c, err := pgRowContractAt(plan.compiled, version)
+	if err != nil {
+		return nil, err
+	}
 	if c == nil || c.compiled != plan.compiled || c.window != plan || c.settled.compiled != plan.compiled {
 		return nil, fmt.Errorf("row Contract requires exact compiler-bound window and settled plan")
 	}

@@ -61,7 +61,7 @@ func RegisterCompiledRowStorage[From, To any](transform *PgRowTransform[From, To
 	if r.storageAttached {
 		panic("database: duplicate row storage attachment")
 	}
-	d := r.compiled.inventory.Transforms[r.index]
+	d := r.compiled.transforms[r.index]
 	if len(d.SourceProjection) == 0 || len(d.TargetProjection) == 0 {
 		panic("database: row storage requires a compiled v2 projection")
 	}
@@ -89,7 +89,8 @@ func (storage *PgRowStorage[From, To]) TargetProjection() PgRowProjection {
 func (storage *PgRowStorage[From, To]) ready() bool {
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
-	return storage != nil && storage.transform != nil && storage.transform.registration != nil && storage.transform.registration.sealed && storage.transform.registration.storageAttached && storage.source != nil && storage.target != nil
+	return storage != nil && storage.transform != nil && storage.transform.registration != nil && storage.transform.registration.sealed && storage.transform.registration.storageAttached && storage.source != nil && storage.target != nil &&
+		pgCheckRowRegistrationTypes(storage.transform.registration) == nil
 }
 
 func pgRowScalarOID(scalar string) uint32 {

@@ -37,7 +37,7 @@ func LookupCompiledRowCurrent(database *Database, family string, version int, en
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		panic(err)
 	}
-	for i, d := range compiled.inventory.CurrentCodecs {
+	for i, d := range compiled.codecs {
 		if d.SchemaVersion == version && d.Entity == entity {
 			return PgRowCurrentSourceRef{database, compiled, i}
 		}
@@ -78,26 +78,26 @@ func RegisterCompiledRowCurrentStorage[Row any](ref PgRowCurrentSourceRef, codec
 	if err := pgCheckRowOwner(ref.database, ref.compiled); err != nil {
 		panic(err)
 	}
-	if ref.index < 0 || ref.index >= len(ref.compiled.inventory.CurrentCodecs) {
+	if ref.index < 0 || ref.index >= len(ref.compiled.codecs) {
 		panic("database: invalid current row codec")
 	}
 	if pgMigrationClosedFamilies[ref.compiled.history.Family] {
 		panic("database: current row codec registration is closed")
 	}
-	d := ref.compiled.inventory.CurrentCodecs[ref.index]
+	d := ref.compiled.codecs[ref.index]
 	if err := pgCheckCurrentCodecOrder(codec, d); err != nil {
 		panic(err)
 	}
-	e, ok := pgRowFindEntity(ref.compiled.inventory.Versions[d.SchemaVersion-1], d.Entity)
+	e, ok := pgRowFindEntity(ref.compiled.mustVersion(d.SchemaVersion), d.Entity)
 	actual := reflect.TypeFor[Row]()
 	if !ok || actual.Kind() != reflect.Struct || actual.Name() != e.GoTypeName || actual.PkgPath() != e.GoTypePackage {
 		panic("database: current row nominal type differs from compiler-owned source inventory")
 	}
 	physical := compiledRowPhysicalHistories[ref.compiled]
-	if physical == nil || d.SchemaVersion != ref.compiled.history.CurrentVersion || len(physical.versions) < d.SchemaVersion {
+	if physical == nil || d.SchemaVersion != ref.compiled.history.CurrentVersion || len(physical.raw) < d.SchemaVersion {
 		panic("database: current row codec requires its exact current physical history")
 	}
-	plan := physical.versions[d.SchemaVersion-1]
+	plan := physical.mustPlan(d.SchemaVersion)
 	entity := plan.entity(d.Entity)
 	if plan.compiled != ref.compiled || plan.settled || plan.window(d.Entity) != nil || entity == nil || entity.generation != d.Generation || entity.typeContractHash != d.TypeContractHash || plan.schemaSnapshotHash != d.SchemaSnapshot || plan.storageSnapshotHash != d.StorageSnapshot || len(entity.aliases) != 0 || len(entity.reverseWrites) != 0 || len(entity.columns) != len(entity.projection) || entity.insertGeneration != entity.generation {
 		panic("database: current row codec requires a complete zero-window physical projection")
@@ -152,8 +152,12 @@ func pgCheckApplicationCurrentRows(database *Database, history PgCompiledMigrati
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		return nil, err
 	}
-	expected := pgExpectedRowCurrentCodecs(compiled.inventory)
-	descriptors := compiled.inventory.CurrentCodecs
+	last, err := compiled.version(compiled.history.CurrentVersion)
+	if err != nil {
+		return nil, err
+	}
+	expected := pgExpectedRowCurrentCodecsAt(compiled.transforms, compiled.history.CurrentVersion, last)
+	descriptors := compiled.codecs
 	registrations := compiledRowCurrentRegistrations[compiled]
 	if len(expected) != len(descriptors) || len(registrations) != len(descriptors) {
 		return nil, fmt.Errorf("compiled current row codec bindings are incomplete")

@@ -46,11 +46,15 @@ func TestRowQueueCompleteSourceBinding(t *testing.T) {
 				delete(compiledQueueHistories.families, h.Family)
 				compiledQueueHistories.Unlock()
 			})
-			sources, err := pgRowQueueSources(h)
+			set, err := pgRowQueueSources(h)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(sources) != h.CurrentVersion {
+			sources, err := set.complete()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if set.len() != h.CurrentVersion || len(sources) != h.CurrentVersion {
 				t.Fatal("incomplete source versions")
 			}
 			for _, source := range sources {

@@ -17,7 +17,18 @@ func pgQueueRemovalWindow(b *pgRowBaseline) (*pgRowBaseline, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(window.queues) < version || !pgQueueRemovalMatches(window.queues[version-2].version, window.queues[version-1].version, window.target) || window.queues[version-2].version.SourceSealInventory != "complete" || window.queues[version-1].version.SourceSealInventory != "complete" {
+	if window.queues.len() < version {
+		return nil, fmt.Errorf("RemoveEmpty requires complete sealed before/after inventories")
+	}
+	before, err := window.queues.at(version - 1)
+	if err != nil {
+		return nil, err
+	}
+	after, err := window.queues.at(version)
+	if err != nil {
+		return nil, err
+	}
+	if !pgQueueRemovalMatches(before.version, after.version, window.target) || before.version.SourceSealInventory != "complete" || after.version.SourceSealInventory != "complete" {
 		return nil, fmt.Errorf("RemoveEmpty requires complete sealed before/after inventories")
 	}
 	return window, nil
@@ -86,7 +97,14 @@ func pgStageRowQueueRemoval(ctx context.Context, conn *pgx.Conn, input *pgRowBas
 			return fmt.Errorf("queue removal predecessor physical descriptor differs")
 		}
 	}
-	old, fresh := b.queues[version-2], b.queues[version-1]
+	old, err := b.queues.at(version - 1)
+	if err != nil {
+		return err
+	}
+	fresh, err := b.queues.at(version)
+	if err != nil {
+		return err
+	}
 	oldJSON, err := pgQueueRegistrationJSON(old.version.Contracts)
 	if err != nil {
 		return err
@@ -102,7 +120,11 @@ func pgStageRowQueueRemoval(ctx context.Context, conn *pgx.Conn, input *pgRowBas
 		if err != nil {
 			return err
 		}
-		member := []string{fmt.Sprint(older), plan.hash, b.queues[older-1].inventoryHash}
+		olderQueues, err := b.queues.at(older)
+		if err != nil {
+			return err
+		}
+		member := []string{fmt.Sprint(older), plan.hash, olderQueues.inventoryHash}
 		prefix = append(prefix, member)
 		prefixNodes = append(prefixNodes, pgRowList(pgRowAtom(member[0]), pgRowAtom(member[1]), pgRowAtom(member[2])))
 	}

@@ -2,7 +2,6 @@ package teslrt
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -68,7 +67,111 @@ type pgRowPhysicalPlan struct {
 type pgCompiledRowPhysicalHistory struct {
 	compiled *pgCompiledRowHistory
 	payload  string
-	versions []*pgRowPhysicalPlan
+	// Linked contract/hash text of every version, index = version-1.
+	raw []pgRowPhysicalText
+	// Plans of the serving window, parsed and bound at registration. The
+	// complete history reuses these pointers, so a plan's identity never
+	// depends on which path loaded it.
+	window map[int]*pgRowPhysicalPlan
+	full   pgMemo[[]*pgRowPhysicalPlan]
+}
+
+type pgRowPhysicalText struct{ contract, hash string }
+
+// complete parses and binds every version, reusing the window plans, once.
+func (entry *pgCompiledRowPhysicalHistory) complete() ([]*pgRowPhysicalPlan, error) {
+	return entry.full.get(func() ([]*pgRowPhysicalPlan, error) {
+		pgHistoryCounters.complete.Add(1)
+		compiled := entry.compiled
+		if _, err := compiled.complete(); err != nil {
+			return nil, err
+		}
+		plans := make([]*pgRowPhysicalPlan, 0, len(entry.raw))
+		var previous *pgRowPhysicalPlan
+		for i, text := range entry.raw {
+			plan := entry.window[i+1]
+			fresh := plan == nil
+			if fresh {
+				var err error
+				if plan, err = pgParseRowPhysicalPlan(text.contract, text.hash); err != nil {
+					return nil, err
+				}
+			}
+			if plan.version != i+1 {
+				return nil, fmt.Errorf("invalid compiled migration history: physical revisions are not complete and ordered")
+			}
+			if err := pgBindRowPhysicalPlan(compiled, previous, plan); err != nil {
+				return nil, err
+			}
+			if fresh {
+				plan.compiled = compiled
+			}
+			plans = append(plans, plan)
+			previous = plan
+		}
+		return plans, nil
+	})
+}
+
+// plan returns version k's bound plan; outside the window it validates the
+// complete physical history first.
+func (entry *pgCompiledRowPhysicalHistory) plan(k int) (*pgRowPhysicalPlan, error) {
+	if plan := entry.window[k]; plan != nil {
+		return plan, nil
+	}
+	if k < 1 || k > len(entry.raw) {
+		return nil, fmt.Errorf("physical plan requires a known revision")
+	}
+	plans, err := entry.complete()
+	if err != nil {
+		return nil, err
+	}
+	return plans[k-1], nil
+}
+
+func (entry *pgCompiledRowPhysicalHistory) mustPlan(k int) *pgRowPhysicalPlan {
+	plan, err := entry.plan(k)
+	if err != nil {
+		panic(err)
+	}
+	return plan
+}
+
+// all returns every plan, validating the complete physical history.
+func (entry *pgCompiledRowPhysicalHistory) all() ([]*pgRowPhysicalPlan, error) {
+	return entry.complete()
+}
+
+// known returns every plan when the complete history has been validated in
+// this process, and otherwise only the serving window, in version order. It is
+// for checks that a serving process applies to the versions it uses and that
+// complete validation applies to all of them.
+func (entry *pgCompiledRowPhysicalHistory) known() []*pgRowPhysicalPlan {
+	if plans, err, ok := entry.full.peek(); ok && err == nil {
+		return plans
+	}
+	var plans []*pgRowPhysicalPlan
+	for k := 1; k <= len(entry.raw); k++ {
+		if plan := entry.window[k]; plan != nil {
+			plans = append(plans, plan)
+		}
+	}
+	return plans
+}
+
+// isComplete reports that every plan has been validated in this process.
+func (entry *pgCompiledRowPhysicalHistory) isComplete() bool {
+	_, err, done := entry.full.peek()
+	return done && err == nil
+}
+
+// identity returns version k's linked contract and hash text without parsing
+// it, for comparison with a version that a schema command recorded.
+func (entry *pgCompiledRowPhysicalHistory) identity(k int) (pgRowPhysicalText, bool) {
+	if k < 1 || k > len(entry.raw) {
+		return pgRowPhysicalText{}, false
+	}
+	return entry.raw[k-1], true
 }
 
 // A structural plan is a description only. No pointer to local compiled code is
@@ -706,16 +809,16 @@ func pgValidateRowPhysicalLineage(previous, plan *pgRowPhysicalPlan) error {
 var compiledRowPhysicalHistories = map[*pgCompiledRowHistory]*pgCompiledRowPhysicalHistory{}
 
 func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRowPhysicalPlan) error {
-	if compiled == nil || plan.family != compiled.history.Family || plan.namespace != compiled.history.Namespace || plan.version < 1 || plan.version > len(compiled.inventory.Versions) {
+	if compiled == nil || plan.family != compiled.history.Family || plan.namespace != compiled.history.Namespace || plan.version < 1 || plan.version > compiled.history.CurrentVersion {
 		return fmt.Errorf("physical plan has no exact compiled source")
 	}
 	expectedContract := 0
-	for _, d := range compiled.inventory.Transforms {
+	for _, d := range compiled.transforms {
 		if d.MigrationVersion == plan.version-1 {
 			expectedContract = d.MigrationVersion
 		}
 	}
-	for _, retirement := range compiled.inventory.Retirements {
+	for _, retirement := range compiled.retirements {
 		if retirement.MigrationVersion == plan.version-1 {
 			expectedContract = retirement.MigrationVersion
 		}
@@ -743,12 +846,15 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 	if err := pgValidateRowPhysicalLineage(previous, plan); err != nil {
 		return err
 	}
-	source := compiled.inventory.Versions[plan.version-1]
+	source, err := compiled.version(plan.version)
+	if err != nil {
+		return err
+	}
 	if source.Version != plan.version || source.SchemaSnapshotHash != plan.schemaSnapshotHash || source.StorageSnapshotHash != plan.storageSnapshotHash || len(source.Entities)+len(plan.retirements) != len(plan.entities) {
 		return fmt.Errorf("physical plan source snapshot differs")
 	}
 	expectedRetirements := []pgRowPhysicalRetirement{}
-	for _, d := range compiled.inventory.Retirements {
+	for _, d := range compiled.retirements {
 		if d.MigrationVersion == plan.version {
 			expectedRetirements = append(expectedRetirements, pgRowPhysicalRetirement{entity: d.Entity, fromSchemaHash: d.FromSchemaSnapshot, toSchemaHash: d.ToSchemaSnapshot})
 		}
@@ -830,8 +936,8 @@ func pgBindRowPhysicalPlan(compiled *pgCompiledRowHistory, previous, plan *pgRow
 		}
 		window := plan.window(entity.Entity)
 		var descriptor *PgRowTransformDescriptor
-		for i := range compiled.inventory.Transforms {
-			d := &compiled.inventory.Transforms[i]
+		for i := range compiled.transforms {
+			d := &compiled.transforms[i]
 			if d.MigrationVersion == plan.version && d.Entity == entity.Entity {
 				descriptor = d
 			}
@@ -940,92 +1046,140 @@ func registerCompiledRowPhysicalHistory(payload string) {
 	if len(payload) == 0 || len(payload) > pgRowSourceLimit {
 		panic("database: invalid physical companion size")
 	}
-	if err := pgMigrationCheckJSON(payload); err != nil {
+	if err := pgJSONIntegrity(payload); err != nil {
 		panic(err)
 	}
-	r := &pgMigrationWireReader{}
-	root := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
-	if pgMigrationRead[int](r, root["version"]) != 1 || pgMigrationRead[string](r, root["kind"]) != "compiled-retained-physical-history" {
-		r.fail("unsupported physical companion")
+	fail := func(message string) { panic(fmt.Errorf("invalid compiled migration history: %s", message)) }
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
 	}
-	abi, compatibility := pgMigrationRead[string](r, root["compilerAbi"]), pgMigrationRead[string](r, root["storedValueCompatibility"])
-	databases := pgMigrationRead[[]json.RawMessage](r, root["databases"])
+	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	must(err)
+	format, err := pgJSONValue[int](root["version"])
+	must(err)
+	kind, err := pgJSONValue[string](root["kind"])
+	must(err)
+	if format != 1 || kind != "compiled-retained-physical-history" {
+		fail("unsupported physical companion")
+	}
+	abi, err := pgJSONValue[string](root["compilerAbi"])
+	must(err)
+	compatibility, err := pgJSONValue[string](root["storedValueCompatibility"])
+	must(err)
+	databases, err := pgJSONArray(root["databases"])
+	must(err)
 	if len(databases) == 0 {
-		r.fail("physical companion requires complete databases")
+		fail("physical companion requires complete databases")
 	}
 	var pending []*pgCompiledRowPhysicalHistory
 	seen := map[string]bool{}
 	for _, raw := range databases {
-		db := r.object(raw, "database", "family", "namespace", "currentVersion", "versions")
-		identity, family, namespace := pgMigrationRead[string](r, db["database"]), pgMigrationRead[string](r, db["family"]), pgMigrationRead[string](r, db["namespace"])
-		version := pgMigrationRead[int](r, db["currentVersion"])
+		db, err := pgJSONObject(raw, "database", "family", "namespace", "currentVersion", "versions")
+		must(err)
+		identity, err := pgJSONValue[string](db["database"])
+		must(err)
+		family, err := pgJSONValue[string](db["family"])
+		must(err)
+		namespace, err := pgJSONValue[string](db["namespace"])
+		must(err)
+		version, err := pgJSONValue[int](db["currentVersion"])
+		must(err)
 		compiled := compiledRowHistories[family]
 		if compiled == nil || seen[family] || pgMigrationClosedFamilies[family] {
-			r.fail("physical companion source missing, duplicated or closed")
-			continue
+			panic(fmt.Errorf("invalid compiled migration history: physical companion source missing, duplicated or closed"))
 		}
 		seen[family] = true
 		h := compiled.history
 		if h.Database != identity || h.Namespace != namespace || h.CurrentVersion != version || h.SourceCompilerABI != abi || h.StoredValueCompatibility != compatibility {
-			r.fail("physical companion owner/source identity differs")
+			fail("physical companion owner/source identity differs")
 		}
-		entry := &pgCompiledRowPhysicalHistory{compiled: compiled, payload: payload}
-		versions := pgMigrationRead[[]json.RawMessage](r, db["versions"])
-		if len(versions) != len(compiled.inventory.Versions) {
-			r.fail("physical source revision inventory differs")
+		entry := &pgCompiledRowPhysicalHistory{compiled: compiled, payload: payload, window: map[int]*pgRowPhysicalPlan{}}
+		versions, err := pgJSONArray(db["versions"])
+		must(err)
+		if len(versions) != compiled.history.CurrentVersion {
+			fail("physical source revision inventory differs")
 		}
-		var previous *pgRowPhysicalPlan
-		for i, raw := range versions {
-			encoded := r.object(raw, "contract", "hash")
-			plan, err := pgParseRowPhysicalPlan(pgMigrationRead[string](r, encoded["contract"]), pgMigrationRead[string](r, encoded["hash"]))
-			if err != nil {
-				r.fail(err.Error())
-				break
-			}
-			if plan.version != i+1 {
-				r.fail("physical revisions are not complete and ordered")
-			}
-			if err := pgBindRowPhysicalPlan(compiled, previous, plan); err != nil {
-				r.fail(err.Error())
-				break
-			}
-			entry.versions = append(entry.versions, plan)
-			previous = plan
+		for _, raw := range versions {
+			encoded, err := pgJSONObject(raw, "contract", "hash")
+			must(err)
+			// The contract text is hex; its exact bytes are checked when parsed.
+			contract, err := pgJSONValue[string](encoded["contract"])
+			must(err)
+			hash, err := pgJSONValue[string](encoded["hash"])
+			must(err)
+			entry.raw = append(entry.raw, pgRowPhysicalText{contract: contract, hash: hash})
 		}
 		if old := compiledRowPhysicalHistories[compiled]; old != nil && old.payload != payload {
-			r.fail("conflicting physical history")
+			fail("conflicting physical history")
+		}
+		if pgHistoryInWindow(version) || pgLinkedSourceOf(h) == nil {
+			plans, err := entry.complete()
+			must(err)
+			for i, plan := range plans {
+				entry.window[i+1] = plan
+			}
+		} else {
+			var previous *pgRowPhysicalPlan
+			for k := 1; k <= version; k++ {
+				if !pgServingWindow(version, k) {
+					previous = nil
+					continue
+				}
+				pgHistoryCounters.elements.Add(1)
+				plan, err := pgParseRowPhysicalPlan(entry.raw[k-1].contract, entry.raw[k-1].hash)
+				must(err)
+				if plan.version != k {
+					fail("physical revisions are not complete and ordered")
+				}
+				// V1 binds as the origin; VN binds against V(N-1). V(N-1) itself
+				// is bound against its predecessor by complete validation.
+				if k == 1 || previous != nil {
+					must(pgBindRowPhysicalPlan(compiled, previous, plan))
+				}
+				entry.window[k] = plan
+				previous = plan
+			}
 		}
 		pending = append(pending, entry)
 	}
 	// Require the same complete database set as the linked source envelope. An
 	// incomplete sidecar must not make an omitted database look unversioned.
 	if len(pending) > 0 {
-		bases, err := pgReadRowBase(pending[0].compiled.history)
-		if err != nil {
-			r.fail(err.Error())
-		} else if len(bases) != len(pending) {
-			r.fail("physical database set is incomplete")
+		var families []string
+		if source := pgLinkedSourceOf(pending[0].compiled.history); source != nil && !pgHistoryInWindow(pending[0].compiled.history.CurrentVersion) {
+			header, err := source.readHeader()
+			must(err)
+			for family := range header.databases {
+				families = append(families, family)
+			}
 		} else {
+			bases, err := pgReadRowBase(pending[0].compiled.history)
+			must(err)
 			for _, base := range bases {
-				if !seen[base.Family] {
-					r.fail("physical database set differs")
-				}
+				families = append(families, base.Family)
+			}
+		}
+		if len(families) != len(pending) {
+			fail("physical database set is incomplete")
+		}
+		for _, family := range families {
+			if !seen[family] {
+				fail("physical database set differs")
 			}
 		}
 		for _, entry := range pending {
 			if entry.compiled.history.HistoryJSON != pending[0].compiled.history.HistoryJSON {
-				r.fail("physical databases belong to different source envelopes")
+				fail("physical databases belong to different source envelopes")
 			}
 		}
-	}
-	if r.err != nil {
-		panic(r.err)
 	}
 	for _, entry := range pending {
 		if compiledRowPhysicalHistories[entry.compiled] != nil {
 			continue
 		}
-		for _, plan := range entry.versions {
+		for _, plan := range entry.window {
 			plan.compiled = entry.compiled
 		}
 		compiledRowPhysicalHistories[entry.compiled] = entry
@@ -1053,10 +1207,88 @@ func pgCompiledRowPhysicalPlan(database *Database, version int) (*pgRowPhysicalP
 	sealed := database.applicationPreflightClosed
 	database.mutex.RUnlock()
 	entry := compiledRowPhysicalHistories[compiled]
-	if !sealed || entry == nil || version < 1 || version > len(entry.versions) {
+	if !sealed || entry == nil || version < 1 || version > len(entry.raw) {
 		return nil, fmt.Errorf("physical plan requires a sealed exact application and known revision")
 	}
-	return entry.versions[version-1], nil
+	return entry.plan(version)
+}
+
+// pgCompiledRowStageCancellations returns the stage cancellations planned by
+// one version. Startup marks recorded index jobs with them for every version,
+// so a version outside the serving window is read from its linked bytes: only
+// the stage-cancellation document format can carry cancellations, and that
+// format is recognized from the document's leading bytes. Such a version is
+// parsed (its hash checked) but not validated again; see
+// pgCompiledRowPhysicalIdentity.
+func pgCompiledRowStageCancellations(database *Database, version int) ([]pgStagePreparation, error) {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	history, ok := database.CompiledMigrationHistory()
+	if !ok {
+		return nil, fmt.Errorf("missing physical source history")
+	}
+	compiled := compiledRowHistories[history.Family]
+	if err := pgCheckRowOwner(database, compiled); err != nil {
+		return nil, err
+	}
+	database.mutex.RLock()
+	sealed := database.applicationPreflightClosed
+	database.mutex.RUnlock()
+	entry := compiledRowPhysicalHistories[compiled]
+	if !sealed || entry == nil || version < 1 || version > len(entry.raw) {
+		return nil, fmt.Errorf("physical plan requires a sealed exact application and known revision")
+	}
+	if plan := entry.window[version]; plan != nil {
+		return plan.stageCancellations, nil
+	}
+	if plans, err, done := entry.full.peek(); done && err == nil {
+		return plans[version-1].stageCancellations, nil
+	}
+	text := entry.raw[version-1]
+	const marker = "s34:tesl-retained-physical-version-v12"
+	prefix := text.contract[:min(len(text.contract), 2*160)]
+	decoded, err := hex.DecodeString(prefix[:len(prefix)/2*2])
+	if err != nil {
+		return nil, fmt.Errorf("invalid retained physical document")
+	}
+	if !strings.Contains(string(decoded), marker) {
+		return nil, nil
+	}
+	plan, err := pgParseRowPhysicalPlan(text.contract, text.hash)
+	if err != nil {
+		return nil, err
+	}
+	if plan.version != version {
+		return nil, fmt.Errorf("invalid compiled migration history: physical revisions are not complete and ordered")
+	}
+	return plan.stageCancellations, nil
+}
+
+// pgCompiledRowPhysicalIdentity returns a version's linked contract and hash
+// text without parsing it. It grants nothing beyond a byte comparison.
+func pgCompiledRowPhysicalIdentity(database *Database, version int) (pgRowPhysicalText, error) {
+	pgMigrationRegistrations.Lock()
+	defer pgMigrationRegistrations.Unlock()
+	history, ok := database.CompiledMigrationHistory()
+	if !ok {
+		return pgRowPhysicalText{}, fmt.Errorf("missing physical source history")
+	}
+	compiled := compiledRowHistories[history.Family]
+	if err := pgCheckRowOwner(database, compiled); err != nil {
+		return pgRowPhysicalText{}, err
+	}
+	database.mutex.RLock()
+	sealed := database.applicationPreflightClosed
+	database.mutex.RUnlock()
+	entry := compiledRowPhysicalHistories[compiled]
+	if !sealed || entry == nil {
+		return pgRowPhysicalText{}, fmt.Errorf("physical plan requires a sealed exact application and known revision")
+	}
+	text, ok := entry.identity(version)
+	if !ok {
+		return pgRowPhysicalText{}, fmt.Errorf("physical plan requires a sealed exact application and known revision")
+	}
+	return text, nil
 }
 
 // Only the dedicated provenance member is separated. The full local link is
@@ -1094,7 +1326,7 @@ func pgBindRowSettledPlan(compiled *pgCompiledRowHistory, window, settled *pgRow
 	if compiled == nil || window == nil || settled == nil || window.compiled != compiled || window.settled || !settled.settled || settled.compiled != nil ||
 		settled.family != window.family || settled.namespace != window.namespace || settled.version != window.version ||
 		settled.schemaSnapshotHash != window.schemaSnapshotHash || settled.storageSnapshotHash != window.storageSnapshotHash ||
-		len(settled.entities)+len(window.retirements) != len(window.entities) || len(settled.windows) != 0 || len(settled.retirements) != 0 || settled.version < 1 || settled.version > len(compiled.inventory.Versions) {
+		len(settled.entities)+len(window.retirements) != len(window.entities) || len(settled.windows) != 0 || len(settled.retirements) != 0 || settled.version < 1 || settled.version > compiled.history.CurrentVersion {
 		return fmt.Errorf("settled physical description has no exact compiled window")
 	}
 	if len(window.stageGuards) > 0 {
@@ -1108,7 +1340,10 @@ func pgBindRowSettledPlan(compiled *pgCompiledRowHistory, window, settled *pgRow
 		settled.stages = slices.Clone(window.stages)
 		return nil
 	}
-	source := compiled.inventory.Versions[settled.version-1]
+	source, err := compiled.version(settled.version)
+	if err != nil {
+		return err
+	}
 	if len(settled.entities) != len(source.Entities) {
 		return fmt.Errorf("settled entity inventory differs from current source")
 	}
@@ -1182,7 +1417,7 @@ func pgBindRowSettledPlan(compiled *pgCompiledRowHistory, window, settled *pgRow
 // It has neither a durable hash nor a compiled execution pointer. Runtime
 // expansion still requires the exact recorded Contract and its settled plan.
 func pgRowSettledSourceShape(compiled *pgCompiledRowHistory, window *pgRowPhysicalPlan) (*pgRowPhysicalPlan, error) {
-	if compiled == nil || window == nil || window.version < 1 || window.version > len(compiled.inventory.Versions) {
+	if compiled == nil || window == nil || window.version < 1 || window.version > compiled.history.CurrentVersion {
 		return nil, fmt.Errorf("settled source shape lacks checked predecessor")
 	}
 	result := *window
@@ -1194,7 +1429,10 @@ func pgRowSettledSourceShape(compiled *pgCompiledRowHistory, window *pgRowPhysic
 	result.windows = nil
 	result.retirements = nil
 	result.entities = nil
-	source := compiled.inventory.Versions[window.version-1]
+	source, err := compiled.version(window.version)
+	if err != nil {
+		return nil, err
+	}
 	reader := &pgMigrationWireReader{}
 	storage := pgRowDocument(reader, source.StorageContract, source.StorageSnapshotHash, "migration")
 	if reader.err != nil || !storage.list(3) || storage.children[2].atom {

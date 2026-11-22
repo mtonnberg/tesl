@@ -354,9 +354,9 @@ func physicalProjectionNode(n *pgRowCanonical,logical string) *pgRowCanonical {
 func TestActualCompiledPhysicalLineage(t *testing.T) {
  if len(compiledRowPhysicalHistories)!=1 {t.Fatal("missing complete physical registration")}
  for compiled,history:=range compiledRowPhysicalHistories {
-  if len(history.versions)!=2 {t.Fatal("missing adjacent physical revision")};before,after:=history.versions[0],history.versions[1]
+  if len(history.known())!=2 {t.Fatal("missing adjacent physical revision")};before,after:=history.known()[0],history.known()[1]
   if before.compiled!=compiled||after.compiled!=compiled {t.Fatal("physical authority owner differs")}
-  for _,p:=range history.versions {
+  for _,p:=range history.known() {
    parsed,err:=pgParseRowPhysicalPlan(p.contract,p.hash);if err!=nil||parsed.compiled!=nil {t.Fatal("structural parse minted execution authority",err)}
    e:=p.entity("Note");if e.field("userURL")!="user_url"||e.field("userUri")!="user_uri" {t.Fatal("logical acronym order lost")}
   }
@@ -428,7 +428,7 @@ func TestActualPhysicalRegistrationAtomicity(t *testing.T) {
  compiledRowPhysicalHistories=map[*pgCompiledRowHistory]*pgCompiledRowPhysicalHistory{}
  registerCompiledRowPhysicalHistory(payload)
  if len(compiledRowPhysicalHistories)!=2{t.Fatal("valid complete retry did not register both owners")}
- for owner,h:=range compiledRowPhysicalHistories{for _,p:=range h.versions{if p.compiled!=owner{t.Fatal("cross database physical authority")}}}
+ for owner,h:=range compiledRowPhysicalHistories{for _,p:=range h.known(){if p.compiled!=owner{t.Fatal("cross database physical authority")}}}
  registerCompiledRowPhysicalHistory(payload)
  if len(compiledRowPhysicalHistories)!=2{t.Fatal("exact repeated registration changed registry")}
  for owner:=range original {

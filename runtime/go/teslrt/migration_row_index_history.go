@@ -95,11 +95,11 @@ func pgReadRowIndexJobs(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, forwar
 	}
 	if b.target != nil && b.target.compiled != nil {
 		for v := 2; v <= b.history.CurrentVersion; v++ {
-			plan, err := pgCompiledRowPhysicalPlan(b.database, v)
+			cancellations, err := pgCompiledRowStageCancellations(b.database, v)
 			if err != nil {
 				return nil, err
 			}
-			for _, cancel := range plan.stageCancellations {
+			for _, cancel := range cancellations {
 				for i := range jobs {
 					j := &jobs[i]
 					if j.Version < v && !j.Index.Unique && j.Table == cancel.table && j.Index.Name == cancel.index && slices.Equal(j.Index.Columns, []string{cancel.column}) {

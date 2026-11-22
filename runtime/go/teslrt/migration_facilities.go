@@ -153,8 +153,25 @@ func pgCheckMigrationFacilities(database *Database) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		for _, plan := range physical.versions {
-			if len(plan.windows) > 0 && (len(plan.queueConversions) > 0 || plan.version < 2 || plan.version > len(queues) || !pgQueueInventoryPreserves(queues[plan.version-2].version, queues[plan.version-1].version) || !pgQueueInventoryPreserves(queues[plan.version-1].version, queues[plan.version-2].version)) {
+		// Every version once the complete history is validated (schema
+		// commands); otherwise the versions this process serves.
+		complete := physical.isComplete()
+		for _, plan := range physical.known() {
+			if len(plan.windows) == 0 || !complete && !pgServingWindow(history.CurrentVersion, plan.version-1) {
+				continue
+			}
+			if len(plan.queueConversions) > 0 || plan.version < 2 || plan.version > queues.len() {
+				return false, fmt.Errorf("schema V%d changes row data and queue payloads or membership together; split the row change with its reviewed Contract from the queue-payload change, then run the latest binary's --schema install as Installer and --schema catch-up as Worker", plan.version)
+			}
+			before, err := queues.at(plan.version - 1)
+			if err != nil {
+				return false, err
+			}
+			after, err := queues.at(plan.version)
+			if err != nil {
+				return false, err
+			}
+			if !pgQueueInventoryPreserves(before.version, after.version) || !pgQueueInventoryPreserves(after.version, before.version) {
 				return false, fmt.Errorf("schema V%d changes row data and queue payloads or membership together; split the row change with its reviewed Contract from the queue-payload change, then run the latest binary's --schema install as Installer and --schema catch-up as Worker", plan.version)
 			}
 		}

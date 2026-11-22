@@ -116,7 +116,7 @@ func pgCheckRowData[From, To any](a *pgRowTransactionAdmission, storage *PgRowSt
 	if a.plan.compiled == nil || !storage.ready() || storage.transform.registration.database != a.database || storage.transform.registration.compiled != a.plan.compiled {
 		return fmt.Errorf("physical data operation requires its exact typed storage owner")
 	}
-	d := a.plan.compiled.inventory.Transforms[storage.transform.registration.index]
+	d := a.plan.compiled.transforms[storage.transform.registration.index]
 	if d.MigrationVersion != a.plan.version || d.Entity != a.entity.identity || d.TargetGeneration != a.entity.generation {
 		return fmt.Errorf("physical data operation requires the current typed window")
 	}
@@ -160,7 +160,7 @@ func pgDecodePhysicalRow[From, To any](a *pgRowTransactionAdmission, storage *Pg
 	if err := row.Scan(markerDest...); err != nil {
 		return value, err
 	}
-	descriptor := a.plan.compiled.inventory.Transforms[storage.transform.registration.index]
+	descriptor := a.plan.compiled.transforms[storage.transform.registration.index]
 	if a.acceptsCurrentGeneration(int(marker)) {
 		projection, err := pgPhysicalProjection(row, a.entity, a.entity, storage.target)
 		if err != nil {

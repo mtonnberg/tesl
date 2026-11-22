@@ -33,8 +33,11 @@ func pgRowSettledMode(ctx context.Context, tx pgx.Tx, database *Database, window
 		return false, err
 	}
 	pgMigrationRegistrations.Lock()
-	contract := compiledRowContracts[window.compiled][window.version]
+	contract, err := pgRowContractAt(window.compiled, window.version)
 	pgMigrationRegistrations.Unlock()
+	if err != nil {
+		return false, err
+	}
 	if contract == nil || contract.window != window || contract.settled != settled {
 		return false, fmt.Errorf("settled admission lacks exact compiler Contract")
 	}

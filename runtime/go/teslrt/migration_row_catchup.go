@@ -161,7 +161,7 @@ func pgStageRetainedQueueBatch(ctx context.Context, conn *pgx.Conn, b *pgRowBase
 		if _, err := tx.Exec(ctx, "set local role "+quoteIdentifier(roles.Owner)); err != nil {
 			return err
 		}
-		if err := pgRecordRowQueueLineage(ctx, tx, b.history.Namespace, state, lineage, b.queues[previous.version-1].inventoryHash, expansion, pgQueueConversionPayloadContract(root, false)); err != nil {
+		if err := pgRecordRowQueueLineage(ctx, tx, b.history.Namespace, state, lineage, b.queues.must(previous.version).inventoryHash, expansion, pgQueueConversionPayloadContract(root, false)); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "reset role"); err != nil {
@@ -360,7 +360,7 @@ func pgExecuteRowCatchupFor(ctx context.Context, conn *pgx.Conn, config *pgx.Con
 			if next.target.queueRemoval != nil {
 				state, err = pgExecuteRowQueueRemoval(step, conn, next, roles, expected)
 			} else if len(next.target.queueConversions) > 0 {
-				err = pgPublishRowQueueTarget(step, conn, b.history.Namespace, roles, b.queues[next.target.version-1].version, next.target.contract, next.target.hash)
+				err = pgPublishRowQueueTarget(step, conn, b.history.Namespace, roles, b.queues.must(next.target.version).version, next.target.contract, next.target.hash)
 				if err == nil {
 					state, err = observe()
 				}

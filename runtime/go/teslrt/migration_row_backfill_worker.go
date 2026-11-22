@@ -62,7 +62,7 @@ func pgRowBackfillBindingFor(database *Database, plan *pgRowPhysicalPlan, entity
 		if registration.database != database || registration.compiled != plan.compiled {
 			continue
 		}
-		d := plan.compiled.inventory.Transforms[registration.index]
+		d := plan.compiled.transforms[registration.index]
 		if d.MigrationVersion == plan.version && d.Entity == entity.identity {
 			if !registration.sealed || !registration.storageAttached || !registration.accessAttached {
 				return nil, fmt.Errorf("backfill typed bindings are unsealed")

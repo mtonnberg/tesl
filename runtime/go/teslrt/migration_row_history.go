@@ -311,7 +311,59 @@ func pgRowCheckStorage(r *pgMigrationWireReader, schema, storage pgRowCanonical,
 	}
 }
 
+// pgReadRowBase returns the completely validated source inventories. A linked
+// history is decoded and validated once per process; the returned outer slice is
+// the caller's own, and the shared inner slices must not be modified.
 func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, error) {
+	if source := pgLinkedSourceOf(history); source != nil {
+		all, err := source.complete()
+		if err != nil {
+			return nil, err
+		}
+		if err := pgRowBaseSelect(all, history); err != nil {
+			return nil, err
+		}
+		return slices.Clone(all), nil
+	}
+	return pgReadRowBaseDecode(history)
+}
+
+// pgReadRowSourceVersion reads one source version with every check that needs
+// only that version. Cross-version checks belong to pgReadRowBaseDecode.
+func pgReadRowSourceVersion(r *pgMigrationWireReader, raw json.RawMessage, family, abi, compatibility string) PgRowSourceVersion {
+	v := r.object(raw, "version", "schemaContract", "schemaSnapshotHash", "storageContract", "storageSnapshotHash", "entities")
+	version := PgRowSourceVersion{Version: pgMigrationRead[int](r, v["version"]), SchemaContract: pgMigrationRead[string](r, v["schemaContract"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), StorageContract: pgMigrationRead[string](r, v["storageContract"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"])}
+	schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
+	storage := pgRowDocument(r, version.StorageContract, version.StorageSnapshotHash, "migration")
+	version.Entities = pgMigrationReadArray(r, v["entities"], func(raw json.RawMessage) PgRowSourceEntity { return pgRowEntity(r, raw) })
+	lastEntity := ""
+	seen := map[string]bool{}
+	for _, entity := range version.Entities {
+		if entity.Entity <= lastEntity || seen[entity.Table] {
+			r.fail("row entities require unique sorted owners and tables")
+		}
+		lastEntity, seen[entity.Table] = entity.Entity, true
+	}
+	pgRowCheckStorage(r, schema, storage, version.Entities)
+	pgRowCheckTypeInventory(r, schema, family, abi, compatibility, version.Entities)
+	pgCheckStageSource(r, schema, storage, family, abi, compatibility)
+	return version
+}
+
+func pgRowBaseSelect(result []PgRowSourceInventory, history PgCompiledMigrationHistory) error {
+	for _, d := range result {
+		if d.Database == history.Database {
+			if d.Family != history.Family || d.Namespace != history.Namespace || d.CurrentVersion != history.CurrentVersion {
+				return fmt.Errorf("invalid compiled migration history: row source history belongs to another linked database")
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid compiled migration history: row source history is missing its linked database")
+}
+
+func pgReadRowBaseDecode(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, error) {
+	pgHistoryCounters.complete.Add(1)
 	if len(history.HistoryJSON) > pgRowSourceLimit {
 		return nil, fmt.Errorf("row source history exceeds size budget")
 	}
@@ -340,23 +392,7 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 		}
 		last, families[d.Family] = d.Database, true
 		d.Versions = pgMigrationReadArray(r, o["versions"], func(raw json.RawMessage) PgRowSourceVersion {
-			v := r.object(raw, "version", "schemaContract", "schemaSnapshotHash", "storageContract", "storageSnapshotHash", "entities")
-			version := PgRowSourceVersion{Version: pgMigrationRead[int](r, v["version"]), SchemaContract: pgMigrationRead[string](r, v["schemaContract"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), StorageContract: pgMigrationRead[string](r, v["storageContract"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"])}
-			schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
-			storage := pgRowDocument(r, version.StorageContract, version.StorageSnapshotHash, "migration")
-			version.Entities = pgMigrationReadArray(r, v["entities"], func(raw json.RawMessage) PgRowSourceEntity { return pgRowEntity(r, raw) })
-			lastEntity := ""
-			seen := map[string]bool{}
-			for _, entity := range version.Entities {
-				if entity.Entity <= lastEntity || seen[entity.Table] {
-					r.fail("row entities require unique sorted owners and tables")
-				}
-				lastEntity, seen[entity.Table] = entity.Entity, true
-			}
-			pgRowCheckStorage(r, schema, storage, version.Entities)
-			pgRowCheckTypeInventory(r, schema, d.Family, history.SourceCompilerABI, history.StoredValueCompatibility, version.Entities)
-			pgCheckStageSource(r, schema, storage, d.Family, history.SourceCompilerABI, history.StoredValueCompatibility)
-			return version
+			return pgReadRowSourceVersion(r, raw, d.Family, history.SourceCompilerABI, history.StoredValueCompatibility)
 		})
 		if len(d.Versions) != d.CurrentVersion {
 			r.fail("row source versions must be complete")
@@ -607,6 +643,21 @@ func pgRowMapping(r *pgMigrationWireReader, raw json.RawMessage) PgRowFieldMappi
 }
 
 func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSourceInventory, abi string, version int) PgRowTransformDescriptor {
+	d := pgRowDescriptorFields(r, raw, version)
+	if r.err != nil {
+		return d
+	}
+	if d.MigrationVersion < 2 || d.MigrationVersion > len(base.Versions) {
+		r.fail("unsupported row transform or source version")
+		return d
+	}
+	pgRowCheckDescriptor(r, d, base.Family, base.Versions[d.MigrationVersion-2], base.Versions[d.MigrationVersion-1], abi, version)
+	return d
+}
+
+// pgRowDescriptorFields decodes one transform descriptor's fields without the
+// checks against its source versions and semantic link.
+func pgRowDescriptorFields(r *pgMigrationWireReader, raw json.RawMessage, version int) PgRowTransformDescriptor {
 	fields := []string{"migrationVersion", "entity", "table", "mode", "previousGeneration", "targetGeneration", "fromSchemaSnapshot", "toSchemaSnapshot", "fromStorageSnapshot", "toStorageSnapshot", "fromTypeContractHash", "toTypeContractHash", "sourceSchemaColumns", "targetSchemaColumns", "fieldMapping", "transformContractFormat", "transformContract", "transformContractHash"}
 	if version >= 2 {
 		fields = append(fields, "sourceProjection", "targetProjection")
@@ -632,15 +683,20 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 	if version >= 4 {
 		d.LegacyWrites = pgMigrationRead[[]string](r, o["legacyWrites"])
 	}
+	return d
+}
+
+// pgRowCheckDescriptor checks one decoded descriptor against its adjacent
+// validated source versions and its compiler-checked semantic link.
+func pgRowCheckDescriptor(r *pgMigrationWireReader, d PgRowTransformDescriptor, family string, from, to PgRowSourceVersion, abi string, version int) {
 	link := pgRowDocument(r, d.TransformContract, d.TransformContractHash, "migration")
 	if !link.list(5) || !link.children[0].isAtom("checked-transform-link") || !link.children[1].isAtom("1") || !link.children[2].list(2) || !link.children[2].children[0].isAtom("compiler-abi") || !link.children[2].children[1].isAtom(abi) || link.children[3].atom || len(link.children[3].children) == 0 || link.children[4].atom {
 		r.fail("row transform semantic link or ABI mismatch")
 	}
-	if (d.Mode != "migrate" && d.Mode != "derived") || d.TransformContractFormat != "tesl-row-transform-v1" || d.MigrationVersion < 2 || d.MigrationVersion > len(base.Versions) {
+	if (d.Mode != "migrate" && d.Mode != "derived") || d.TransformContractFormat != "tesl-row-transform-v1" || from.Version != d.MigrationVersion-1 || to.Version != d.MigrationVersion {
 		r.fail("unsupported row transform or source version")
-		return d
+		return
 	}
-	from, to := base.Versions[d.MigrationVersion-2], base.Versions[d.MigrationVersion-1]
 	a, foundA := pgRowFindEntity(from, d.Entity)
 	b, foundB := pgRowFindEntity(to, d.Entity)
 	if !foundA || !foundB || d.Table != a.Table || d.Table != b.Table || d.PreviousGeneration != a.Generation || d.TargetGeneration != b.Generation || d.TargetGeneration != d.PreviousGeneration+1 || d.FromSchemaSnapshot != from.SchemaSnapshotHash || d.ToSchemaSnapshot != to.SchemaSnapshotHash || d.FromStorageSnapshot != from.StorageSnapshotHash || d.ToStorageSnapshot != to.StorageSnapshotHash || d.FromTypeContractHash != a.TypeContractHash || d.ToTypeContractHash != b.TypeContractHash || !slices.Equal(d.SourceSchemaColumns, a.Columns) || !slices.Equal(d.TargetSchemaColumns, b.Columns) {
@@ -682,8 +738,7 @@ func pgRowDescriptor(r *pgMigrationWireReader, raw json.RawMessage, base PgRowSo
 	if version >= 3 {
 		pgRowCheckWriteBacks(r, d, before, after)
 	}
-	pgRowCheckLinkMapping(r, link, base.Family, d, a, b)
-	return d
+	pgRowCheckLinkMapping(r, link, family, d, a, b)
 }
 
 // Proof semantics belong to the compiler-bound old/new closures and callback.
@@ -1205,41 +1260,51 @@ func pgRowCheckWriteBacks(r *pgMigrationWireReader, d PgRowTransformDescriptor, 
 // origin must be the exact Retype edge, and later snapshots retain that identity.
 func pgRowCheckColumnOrigins(r *pgMigrationWireReader, base PgRowSourceInventory, format int) {
 	for i, v := range base.Versions {
-		for _, entity := range v.Entities {
-			var old PgRowSourceEntity
-			if i > 0 {
-				old, _ = pgRowFindEntity(base.Versions[i-1], entity.Entity)
+		var previous PgRowSourceVersion
+		if i > 0 {
+			previous = base.Versions[i-1]
+		}
+		pgRowCheckColumnOriginsAt(r, v, previous, i == 0, base.Transforms, format)
+	}
+}
+
+// pgRowCheckColumnOriginsAt checks one version's columns against its
+// predecessor (absent for V1) and the transforms that target it.
+func pgRowCheckColumnOriginsAt(r *pgMigrationWireReader, v, previous PgRowSourceVersion, first bool, transforms []PgRowTransformDescriptor, format int) {
+	for _, entity := range v.Entities {
+		var old PgRowSourceEntity
+		if !first {
+			old, _ = pgRowFindEntity(previous, entity.Entity)
+		}
+		for _, c := range entity.Columns {
+			if c.Name == pgRowSQLColumnName(c.Field) {
+				continue
 			}
-			for _, c := range entity.Columns {
-				if c.Name == pgRowSQLColumnName(c.Field) {
-					continue
+			if format < 3 || first {
+				r.fail("versioned column requires a checked Retype history")
+				continue
+			}
+			retained := false
+			for _, p := range old.Columns {
+				if p.Field == c.Field && p.Name == c.Name {
+					retained = true
 				}
-				if format < 3 || i == 0 {
-					r.fail("versioned column requires a checked Retype history")
-					continue
-				}
-				retained := false
-				for _, p := range old.Columns {
-					if p.Field == c.Field && p.Name == c.Name {
-						retained = true
-					}
-				}
-				if retained {
-					continue
-				}
-				introduced := false
-				for _, d := range base.Transforms {
-					if d.MigrationVersion == v.Version && d.Entity == entity.Entity {
-						for _, m := range d.FieldMapping {
-							if m.Kind == "retype" && m.Target == c.Field && c.Name == pgRowSQLColumnName(c.Field)+"__v"+fmt.Sprint(v.Version) {
-								introduced = true
-							}
+			}
+			if retained {
+				continue
+			}
+			introduced := false
+			for _, d := range transforms {
+				if d.MigrationVersion == v.Version && d.Entity == entity.Entity {
+					for _, m := range d.FieldMapping {
+						if m.Kind == "retype" && m.Target == c.Field && c.Name == pgRowSQLColumnName(c.Field)+"__v"+fmt.Sprint(v.Version) {
+							introduced = true
 						}
 					}
 				}
-				if !introduced {
-					r.fail("versioned column lacks its exact introducing Retype mapping")
-				}
+			}
+			if !introduced {
+				r.fail("versioned column lacks its exact introducing Retype mapping")
 			}
 		}
 	}

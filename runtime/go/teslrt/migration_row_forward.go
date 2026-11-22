@@ -150,7 +150,9 @@ func pgReadRowForwardManifest(ctx context.Context, tx pgx.Tx, b *pgRowBaseline) 
 		// queue transitions carry creator-linked callback identities instead;
 		// their existing source/retirement observers verify those identities.
 		if version > 1 && version <= b.history.CurrentVersion && (pgRowEpochPreserving(plan) || plan.queueRemoval != nil) {
-			local, err := pgCompiledRowPhysicalPlan(b.database, version)
+			// Compared by identity with the linked bytes of that version; the
+			// schema command that published it validated its contents.
+			local, err := pgCompiledRowPhysicalIdentity(b.database, version)
 			if err != nil {
 				return nil, err
 			}

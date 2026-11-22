@@ -147,7 +147,7 @@ func RegisterCompiledRowAccess[From, To any](storage *PgRowStorage[From, To], sl
 	if slot.owners == nil || slot.owners[r.database] != nil {
 		panic("compiled row access slot already bound to database")
 	}
-	d := r.compiled.inventory.Transforms[r.index]
+	d := r.compiled.transforms[r.index]
 	data := pgRowAccessData[To]{
 		check: func(a *pgRowTransactionAdmission, write bool) error { return pgCheckRowData(a, storage, write) },
 		decode: func(a *pgRowTransactionAdmission, row pgx.CollectableRow) (To, error) {

@@ -15,7 +15,7 @@ func calibrationPlan[From, To any](db *Database, storage *PgRowStorage[From, To]
 	if err != nil {
 		return nil, nil, err
 	}
-	d := storage.transform.registration.compiled.inventory.Transforms[storage.transform.registration.index]
+	d := storage.transform.registration.compiled.transforms[storage.transform.registration.index]
 	return p, p.entity(d.Entity), nil
 }
 func CalibrationRead[From, To any](ctx context.Context, db *Database, storage *PgRowStorage[From, To], key any) (value To, found bool, err error) {

@@ -62,6 +62,14 @@ func pgWaitForRowBaseline(ctx context.Context, conn *pgx.Conn, b *pgRowBaseline,
 }
 
 func openRowPostgres(database *Database) (*PostgresDB, func()) {
+	// An Embedded process executes schema steps itself, so it validates the
+	// complete history first. A Worker-topology request process only serves
+	// and relies on the window validated at registration.
+	if topology, err := pgMigrationRoles(database.Config, database.Config.User); err == nil && topology.Request == "" {
+		if err := pgValidateCompleteHistory(database); err != nil {
+			panic(err)
+		}
+	}
 	baseline, err := pgCompiledRowBaseline(database)
 	if err != nil {
 		panic(err)
@@ -73,7 +81,7 @@ func openRowPostgres(database *Database) (*PostgresDB, func()) {
 	if err != nil {
 		panic(err)
 	}
-	key := fmt.Sprintf("row-v5\x00%x\x00%d", sha256.Sum256([]byte(config.Schema+"\x00"+baseline.history.Database+"\x00"+baseline.history.Family+"\x00"+dsn+"\x00"+baseline.history.HistoryJSON+"\x00"+roles.Owner+"\x00"+roles.Worker+"\x00"+roles.Request+"\x00"+config.DDLConnection)), poolConfig.MaxConns)
+	key := fmt.Sprintf("row-v5\x00%x\x00%d", sha256.Sum256([]byte(config.Schema+"\x00"+baseline.history.Database+"\x00"+baseline.history.Family+"\x00"+dsn+"\x00"+pgHistoryIdentity(baseline.history)+"\x00"+roles.Owner+"\x00"+roles.Worker+"\x00"+roles.Request+"\x00"+config.DDLConnection)), poolConfig.MaxConns)
 	created := &postgresInitialization{done: make(chan struct{})}
 	actual, loaded := postgresConnectOnce.LoadOrStore(key, created)
 	initialization, ok := actual.(*postgresInitialization)
@@ -191,7 +199,7 @@ func initializeRowPostgres(key string, initialization *postgresInitialization, p
 	}
 	db = &PostgresDB{schema: b.history.Namespace, migration: &pgMigrationAdmission{version: b.history.CurrentVersion, fenceNamespace: state.FenceNamespace, databaseUUID: state.DatabaseUUID, worker: principal, roles: roles, controlFormat: pgRowControlFormat, rowBaseline: b}}
 	db.migration.rowObservation = &pgRowObservationCache{owner: db.migration}
-	if len(b.queues[len(b.queues)-1].version.Contracts) > 0 || pgHasBroadcast(b.database) {
+	if len(b.queues.must(b.queues.len()).version.Contracts) > 0 || pgHasBroadcast(b.database) {
 		if roles.Request == "" {
 			panic(pgMigrationQueueStorageError(b.database.Name))
 		}
