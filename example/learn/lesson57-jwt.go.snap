@@ -199,7 +199,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson57-jwt.tesl:287
 			if teslLeft1 != raw {
 //line lesson57-jwt.tesl:287
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, raw)
 			}
 		}
 	}
@@ -247,7 +247,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson57-jwt.tesl:301
 						if teslLeft3 != teslRight3 {
 //line lesson57-jwt.tesl:301
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, teslRight3)
 						}
 					}
 				}
@@ -324,7 +324,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson57-jwt.tesl:316
 				if teslLeft4 != teslRight4 {
 //line lesson57-jwt.tesl:316
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, teslRight4)
 				}
 			}
 		}
@@ -623,7 +623,7 @@ func TestTesl12(teslT *testing.T) {
 //line lesson57-jwt.tesl:383
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(16)) {
 //line lesson57-jwt.tesl:383
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(16)))
 			}
 //line lesson57-jwt.tesl:384
 			if (MakeLoginToken("user", a)).Value == (MakeLoginToken("user", b)).Value {

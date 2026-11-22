@@ -414,7 +414,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson46-result-type.tesl:187
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
 //line lesson46-result-type.tesl:187
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 }
 
@@ -434,7 +434,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson46-result-type.tesl:191
 	if teslLeft2 != "division by zero" {
 //line lesson46-result-type.tesl:191
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "division by zero")
 	}
 }
 
@@ -492,7 +492,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson46-result-type.tesl:203
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(42)) {
 //line lesson46-result-type.tesl:203
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(42)))
 	}
 }
 
@@ -512,7 +512,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson46-result-type.tesl:207
 	if teslLeft4 != "input is empty" {
 //line lesson46-result-type.tesl:207
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "input is empty")
 	}
 }
 
@@ -589,7 +589,7 @@ func TestTesl9(teslT *testing.T) {
 //line lesson46-result-type.tesl:223
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(30)) {
 //line lesson46-result-type.tesl:223
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(30)))
 	}
 }
 
@@ -609,7 +609,7 @@ func TestTesl10(teslT *testing.T) {
 //line lesson46-result-type.tesl:227
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(25)) {
 //line lesson46-result-type.tesl:227
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(25)))
 	}
 //line lesson46-result-type.tesl:228
 	if !(IsErr(ProcessAge("abc"))) {
@@ -711,13 +711,13 @@ func TestTesl14(teslT *testing.T) {
 //line lesson46-result-type.tesl:248
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(99)) {
 //line lesson46-result-type.tesl:248
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(99)))
 	}
 	teslLeft8 := SafeDivideOrDefault(teslrt.FromInt64(10), teslrt.FromInt64(2), teslrt.FromInt64(99))
 //line lesson46-result-type.tesl:249
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(5)) {
 //line lesson46-result-type.tesl:249
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 }
 

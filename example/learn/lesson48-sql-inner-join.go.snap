@@ -104,6 +104,33 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue string) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode3(teslValue Order) any {
+	return map[string]any{
+		"id":         teslEncode1(teslValue.Id),
+		"customerId": teslEncode1(teslValue.CustomerId),
+		"amount":     teslEncode2(teslValue.Amount),
+		"status":     teslEncode1(teslValue.Status),
+	}
+}
+
+func teslEncode4(teslValue []Order) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode3(teslItem)
+		}
+		return teslOut
+	}()
+}
+
 func teslEqualOrder(teslX, teslY Order) bool {
 	return ((teslX.Id == teslY.Id) && (teslX.CustomerId == teslY.CustomerId) && teslrt.Equal(teslX.Amount, teslY.Amount) && (teslX.Status == teslY.Status))
 }
@@ -292,7 +319,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson48-sql-inner-join.tesl:190
 			if !teslrt.ListEqualBy(results, teslRight1, teslEqualOrder) {
 //line lesson48-sql-inner-join.tesl:190
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode4(results)), teslrt.EncodeJSONValue(teslEncode4(teslRight1)))
 			}
 		}
 	}

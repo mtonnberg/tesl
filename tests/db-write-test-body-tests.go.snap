@@ -86,7 +86,7 @@ func TestTesl0(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:40
 		if teslLeft1 != "new" {
 //line db-write-test-body-tests.tesl:40
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "new")
 		}
 	}
 }
@@ -116,7 +116,7 @@ func TestTesl1(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:46
 		if teslLeft2 != "new" {
 //line db-write-test-body-tests.tesl:46
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "new")
 		}
 //line db-write-test-body-tests.tesl:47
 		_ = teslrt.TableUpdate(OrderTable, func(o Order) bool {
@@ -130,7 +130,7 @@ func TestTesl1(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:50
 		if teslLeft3 != "shipped" {
 //line db-write-test-body-tests.tesl:50
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "shipped")
 		}
 	}
 }
@@ -160,7 +160,7 @@ func TestTesl2(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:56
 		if teslLeft4 != "new" {
 //line db-write-test-body-tests.tesl:56
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "new")
 		}
 //line db-write-test-body-tests.tesl:57
 		_ = teslrt.TableDelete(OrderTable, func(o Order) bool {
@@ -170,7 +170,7 @@ func TestTesl2(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:58
 		if teslLeft5 != "no such order" {
 //line db-write-test-body-tests.tesl:58
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "no such order")
 		}
 	}
 }
@@ -200,7 +200,7 @@ func TestTesl3(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:68
 		if teslLeft6 != "new" {
 //line db-write-test-body-tests.tesl:68
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "new")
 		}
 //line db-write-test-body-tests.tesl:69
 		_ = teslrt.TableDelete(OrderTable, func(o Order) bool {
@@ -210,7 +210,7 @@ func TestTesl3(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:71
 		if teslLeft7 != "no such order" {
 //line db-write-test-body-tests.tesl:71
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "no such order")
 		}
 	}
 }
@@ -244,13 +244,13 @@ func TestTesl4(teslT *testing.T) {
 //line db-write-test-body-tests.tesl:79
 		if teslLeft8 != "no such order" {
 //line db-write-test-body-tests.tesl:79
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "no such order")
 		}
 		teslLeft9 := statusOf("keep")
 //line db-write-test-body-tests.tesl:80
 		if teslLeft9 != "us" {
 //line db-write-test-body-tests.tesl:80
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "us")
 		}
 	}
 }

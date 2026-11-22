@@ -534,7 +534,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson74-interop-patterns.tesl:316
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson74-interop-patterns.tesl:316
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		{
 //line lesson74-interop-patterns.tesl:318
@@ -569,13 +569,13 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson74-interop-patterns.tesl:320
 				if teslLeft2 != "demo-user" {
 //line lesson74-interop-patterns.tesl:320
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "demo-user")
 				}
 				teslLeft3 := teslrt.PendingJobCount(Lesson74QueueQueue)
 //line lesson74-interop-patterns.tesl:321
 				if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
 //line lesson74-interop-patterns.tesl:321
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(0)))
 				}
 			}
 		}

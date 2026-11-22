@@ -181,13 +181,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson20-named-db-results.tesl:174
 		if teslLeft1 != "task: test-1" {
 //line lesson20-named-db-results.tesl:174
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "task: test-1")
 		}
 		teslLeft2 := t.Status
 //line lesson20-named-db-results.tesl:175
 		if teslLeft2 != "open" {
 //line lesson20-named-db-results.tesl:175
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "open")
 		}
 	}
 }
@@ -216,7 +216,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson20-named-db-results.tesl:184
 			if teslLeft3 != "task: test-proof" {
 //line lesson20-named-db-results.tesl:184
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "task: test-proof")
 			}
 		}
 	}
@@ -244,7 +244,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson20-named-db-results.tesl:193
 			if result != "task: test-2 status=open" {
 //line lesson20-named-db-results.tesl:193
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, "task: test-2 status=open")
 			}
 		}
 	}
@@ -269,7 +269,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson20-named-db-results.tesl:198
 		if result != "task: test-3 status=open" {
 //line lesson20-named-db-results.tesl:198
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", result, "task: test-3 status=open")
 		}
 	}
 }

@@ -60,13 +60,13 @@ func TestTesl0(teslT *testing.T) {
 //line agent-conversation-tests.tesl:43
 					if teslLeft1 != "First reply about cats" {
 //line agent-conversation-tests.tesl:43
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "First reply about cats")
 					}
 					teslLeft2 := teslrt.ConversationLength(conv1)
 //line agent-conversation-tests.tesl:45
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2)) {
 //line agent-conversation-tests.tesl:45
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(2)))
 					}
 					{
 //line agent-conversation-tests.tesl:48
@@ -80,13 +80,13 @@ func TestTesl0(teslT *testing.T) {
 //line agent-conversation-tests.tesl:50
 							if teslLeft3 != "Second reply still about cats" {
 //line agent-conversation-tests.tesl:50
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "Second reply still about cats")
 							}
 							teslLeft4 := teslrt.ConversationLength(conv2)
 //line agent-conversation-tests.tesl:52
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(4)) {
 //line agent-conversation-tests.tesl:52
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(4)))
 							}
 							{
 //line agent-conversation-tests.tesl:56
@@ -156,7 +156,7 @@ func TestTesl1(teslT *testing.T) {
 //line agent-conversation-tests.tesl:74
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(2)) {
 //line agent-conversation-tests.tesl:74
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(2)))
 							}
 							{
 //line agent-conversation-tests.tesl:77
@@ -170,13 +170,13 @@ func TestTesl1(teslT *testing.T) {
 //line agent-conversation-tests.tesl:79
 									if teslLeft6 != "Reply two" {
 //line agent-conversation-tests.tesl:79
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Reply two")
 									}
 									teslLeft7 := teslrt.ConversationLength(conv2)
 //line agent-conversation-tests.tesl:80
 									if !teslrt.Equal(teslLeft7, teslrt.FromInt64(4)) {
 //line agent-conversation-tests.tesl:80
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(4)))
 									}
 									{
 //line agent-conversation-tests.tesl:81

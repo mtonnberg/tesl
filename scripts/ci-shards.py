@@ -92,7 +92,7 @@ def inventory(root):
     config = json.loads(path.read_text())
     require(type(config.get('version')) is int and config['version'] == 1, 'unknown CI shard inventory version')
     phases = config.get('phases', [])
-    require(len(phases) == 24, 'the authoritative parent phase inventory must contain all 24 phases')
+    require(len(phases) == 25, 'the authoritative parent phase inventory must contain all 25 phases')
     names = [item['name'] for item in phases]
     require(len(set(names)) == len(names), 'duplicate parent phase in inventory')
     declared = re.findall(r'^phase_begin "([^"]+)"\s*$', (root / 'ci.sh').read_text(), re.M)

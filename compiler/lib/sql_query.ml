@@ -20,6 +20,7 @@ open Ast
 type sql_clause = Ast.sql_clause =
   | SqlPred of { field : string; op : binop; value : expr }
   | SqlOr of sql_clause list
+  | SqlAnd of sql_clause list
   | SqlIsNull of { field : string }
   | SqlIsNotNull of { field : string }
   | SqlIn of { field : string; values : expr list }
@@ -51,8 +52,8 @@ type sql_select_seed = Ast.sql_select_seed = {
   entity : string;
   where_field : string option;
   order : (string * string) option;
-  limit : int option;
-  offset : int option;
+  limit : Ast.sql_bound option;
+  offset : Ast.sql_bound option;
   static_clauses : sql_clause list;
   group_by : sql_group_key list;
   joins : sql_join list;
@@ -115,6 +116,10 @@ let int_literal_value = function
   | ELit { lit = LInt n; _ } -> Some n
   | _ -> None
 
+let bound_of e = match int_literal_value e with
+  | Some n -> BoundLiteral n
+  | None -> BoundExpr e
+
 let rec parse_select_tail binder where_field order limit offset group_by static_clauses joins = function
   | [] -> Some (where_field, order, limit, offset, group_by, static_clauses, joins)
   | EVar { name = "where"; _ } :: EVar { name = "isNull"; _ } :: field_expr :: rest ->
@@ -171,13 +176,9 @@ let rec parse_select_tail binder where_field order limit offset group_by static_
      | Some field -> parse_select_tail binder where_field (Some (field, dir)) limit offset group_by static_clauses joins rest
      | None -> None)
   | EVar { name = "limit"; _ } :: limit_expr :: rest ->
-    (match int_literal_value limit_expr with
-     | Some n -> parse_select_tail binder where_field order (Some n) offset group_by static_clauses joins rest
-     | None -> None)
+    parse_select_tail binder where_field order (Some (bound_of limit_expr)) offset group_by static_clauses joins rest
   | EVar { name = "offset"; _ } :: offset_expr :: rest ->
-    (match int_literal_value offset_expr with
-     | Some n -> parse_select_tail binder where_field order limit (Some n) group_by static_clauses joins rest
-     | None -> None)
+    parse_select_tail binder where_field order limit (Some (bound_of offset_expr)) group_by static_clauses joins rest
   | EVar { name = "groupBy"; _ } :: key_expr :: rest ->
     let key =
       match field_name_for_binder binder key_expr with
@@ -432,16 +433,22 @@ let rec collect_sql_clauses binder base_field_of_expr expr =
   | _ when Option.is_some (base_field_of_expr expr) -> Some []
   | _ -> None
 
+(* The disjuncts of an OR.  Each is any clause the top level accepts — a comparison, a
+   functional predicate, or a parenthesised conjunction (`(b == y && c < z)`), which becomes an
+   `SqlAnd` group.  A nested `||` flattens into the same disjunction.  A part that names no
+   comparison (`Some []` from a bare `where field`) is refused: it would OR in "true". *)
 and collect_sql_or binder base_field_of_expr expr =
   match expr with
-  | EBinop { op = BAdd; left; right; _ } ->
+  | EBinop { op = (BOr | BAdd); left; right; _ } ->
     (match collect_sql_or binder base_field_of_expr left,
            collect_sql_or binder base_field_of_expr right with
      | Some left_clauses, Some right_clauses -> Some (left_clauses @ right_clauses)
      | _ -> None)
-  | EBinop { op; left; right; _ } when is_sql_comparison op ->
-    Option.map (fun clause -> [clause]) (clause_of_comparison binder base_field_of_expr op left right)
-  | _ -> None
+  | _ ->
+    (match collect_sql_clauses binder base_field_of_expr expr with
+     | Some [] | None -> None
+     | Some [clause] -> Some [clause]
+     | Some clauses -> Some [SqlAnd clauses])
 
 (** Collect SQL modifier continuation atoms from an ELet sequence.
     Returns the list of modifier atoms (e.g. [order; user.name; asc; limit; 10])
@@ -605,9 +612,17 @@ let extract_update e =
    single-line form (`delete b from Entity where …`) is handled separately by
    extract_delete_query on the EApp/EBinop shape. *)
 let extract_delete e =
+  (* The head line `delete o from Order` is a complete query on its own (delete every row), so
+     the parser may already have wrapped it before its indented `where` lines were seen.  The
+     clauses still belong to it: read the head back out of the node, or the `where` is
+     orphaned — today that fails emission ("cannot resolve function `where`"), and a backend
+     that tolerated it would delete every row. *)
+  let delete_head = function
+    | ESqlQuery { query = QueryDelete (seed, []); _ } -> Some seed
+    | other -> parse_delete_seed other in
   match flatten_underscore_seq e with
   | first :: (_ :: _ as rest) ->
-    (match parse_delete_seed first with
+    (match delete_head first with
      | Some seed when seed.where_field = None ->
        let rec loop clauses = function
          | [] -> Some (seed, clauses)
@@ -620,6 +635,23 @@ let extract_delete e =
        loop [] rest
      | _ -> None)
    | _ -> None
+
+(* `upsert E { … }` with `onConflict [...]` / `doUpdate [...]` on their own lines (the form the
+   spec documents) arrives as an underscore chain.  Its clauses are flat atoms of the one
+   statement, so the chain is re-joined into a single application and read as the one-line
+   form. *)
+let extract_multiline_upsert e =
+  match flatten_underscore_seq e with
+  | first :: (_ :: _ as rest) ->
+    (match flatten_app_expr [] first with
+     | EVar { name = "upsert"; _ }, _ ->
+       let joined = List.fold_left (fun fn clause ->
+         let head, args = flatten_app_expr [] clause in
+         List.fold_left (fun fn arg -> EApp { fn; arg; loc = Location.dummy_loc "" })
+           fn (head :: args)) first rest in
+       parse_upsert_expr joined
+     | _ -> None)
+  | _ -> None
 
 (* Compatibility name for the canonical AST query payload. *)
 type query_node = Ast.sql_query =
@@ -651,6 +683,7 @@ let parse_query_node expr =
       first_of [
         (fun () -> Option.map (fun q -> QueryUpdate q) (extract_update expr));
         (fun () -> Option.map (fun (seed, clauses) -> QueryDelete (seed, clauses)) (extract_delete expr));
+        (fun () -> Option.map (fun q -> QueryUpsert q) (extract_multiline_upsert expr));
         (fun () -> Option.map (fun (seed, clauses) -> QuerySelect (seed, clauses)) (extract_multiline_select_query expr));
       ]
     | _ -> None

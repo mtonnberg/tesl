@@ -252,13 +252,15 @@ api OrderApi {
 
 (* Primitive base — the issue #13 scenario the delegation was built for. It
    still works, and now prints the definitions to copy. *)
+(* The helper's body is NOT translatable to Elm (a regex), so the check is delegated.  A
+   translatable helper is read through instead — see [translatable_helper_inlines]. *)
 let primitive_base_src = {|module CyclePrimitive exposing [CodeApi]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Prelude exposing [Bool(..), Int, String]
-import Tesl.String exposing [String.length]
+import Tesl.Regex exposing [Regex.matches]
 
 fn looksLikeCode(s: String) -> Bool =
-  String.length s >= 3
+  Regex.matches "^[A-Z]{3}[0-9]+$" s
 
 fact ValidCode (s: String)
 
@@ -403,6 +405,39 @@ let record_base_injects_the_predicate () =
     "`ApiHelpers.checkBig : Order -> Bool`";
   assert_helper_signatures_are_core ~label:"record base" out
 
+(* Naming a check's predicate must not change what the client gets.
+   A helper whose body IS translatable yields the same smart constructor as writing the
+   comparison inline, and no hand-written ApiHelpers module is demanded. *)
+let translatable_helper_inlines () =
+  let src = {|module CycleInline exposing [CodeApi]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length]
+
+fn looksLikeCode(s: String) -> Bool =
+  String.length s >= 3
+
+fact ValidCode (s: String)
+
+check checkCode(s: String) -> s: String ::: ValidCode s =
+  if looksLikeCode s then
+    ok s ::: ValidCode s
+  else
+    fail 400 "bad code"
+
+record CodeInput { code: String ::: ValidCode code }
+codec CodeInput {
+  toJson { code -> "code" }
+  fromJson [ { code <- "code" with_codec stringCodec via checkCode } ]
+}
+api CodeApi {
+  post "/code" body input: CodeInput -> String
+}
+|} in
+  let out = generate_elm ~module_name:"CycleInline" src in
+  assert_not_contains ~label:"no delegation" out "import ApiHelpers";
+  assert_contains ~label:"inlined predicate" out "if String.length input >= 3 then"
+
 let primitive_base_keeps_the_helper_and_prints_it () =
   let out = generate_elm ~module_name:"CyclePrimitive" primitive_base_src in
   assert_contains ~label:"primitive base still delegates" out "import ApiHelpers";
@@ -453,6 +488,8 @@ let () =
         adt_base_injects_the_predicate_instead_of_importing;
       test_case "record base injects the predicate" `Quick
         record_base_injects_the_predicate;
+      test_case "translatable helper is inlined" `Quick
+        translatable_helper_inlines;
       test_case "primitive base keeps the delegation and prints it verbatim" `Quick
         primitive_base_keeps_the_helper_and_prints_it;
       test_case "newtype base prints the underlying core type" `Quick

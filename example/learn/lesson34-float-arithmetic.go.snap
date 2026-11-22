@@ -156,6 +156,24 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 	teslThunk()
 }
 
+func teslEncode1(teslValue float64) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue teslrt.Maybe[float64]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode1(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func TestTesl0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "circleArea" && teslWanted != "TestTesl0" {
 		teslT.Skip("named test filter")
@@ -172,13 +190,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:152
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(3)) {
 //line lesson34-float-arithmetic.tesl:152
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft2 := teslrt.FloatRound(CircleArea(float64(2)))
 //line lesson34-float-arithmetic.tesl:154
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(13)) {
 //line lesson34-float-arithmetic.tesl:154
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(13)))
 	}
 }
 
@@ -198,13 +216,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:158
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(5)) {
 //line lesson34-float-arithmetic.tesl:158
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft4 := teslrt.FloatRound(Hypotenuse(float64(5), float64(12)))
 //line lesson34-float-arithmetic.tesl:159
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(13)) {
 //line lesson34-float-arithmetic.tesl:159
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(13)))
 	}
 }
 
@@ -224,19 +242,19 @@ func TestTesl2(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:163
 	if !teslrt.FloatEqual(teslLeft5, float64(0.5)) {
 //line lesson34-float-arithmetic.tesl:163
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(float64(0.5)))
 	}
 	teslLeft6 := teslrt.FloatRound((ClampUnit(float64(1.5)) * float64(1e+01)))
 //line lesson34-float-arithmetic.tesl:164
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(10)) {
 //line lesson34-float-arithmetic.tesl:164
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft7 := ClampUnit(float64(0))
 //line lesson34-float-arithmetic.tesl:165
 	if !teslrt.FloatEqual(teslLeft7, float64(0)) {
 //line lesson34-float-arithmetic.tesl:165
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(float64(0)))
 	}
 }
 
@@ -256,13 +274,13 @@ func TestTesl3(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:169
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(7)) {
 //line lesson34-float-arithmetic.tesl:169
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 	teslLeft9 := teslrt.FloatRound(sumFloats([]float64{}))
 //line lesson34-float-arithmetic.tesl:170
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
 //line lesson34-float-arithmetic.tesl:170
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -288,7 +306,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:175
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.MaybeSomething && !teslrt.FloatEqual(teslLeft10.SomethingValue, teslRight10.SomethingValue)) {
 //line lesson34-float-arithmetic.tesl:175
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft10)), teslrt.EncodeJSONValue(teslEncode2(teslRight10)))
 	}
 }
 
@@ -316,7 +334,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:183
 			if !teslrt.Equal(teslLeft11, teslrt.FromInt64(2)) {
 //line lesson34-float-arithmetic.tesl:183
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 			{
 //line lesson34-float-arithmetic.tesl:184
@@ -330,7 +348,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:186
 					if !teslrt.Equal(teslLeft12, teslrt.FromInt64(3)) {
 //line lesson34-float-arithmetic.tesl:186
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(3)))
 					}
 					{
 //line lesson34-float-arithmetic.tesl:187
@@ -344,7 +362,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:189
 							if !teslrt.Equal(teslLeft13, teslrt.FromInt64(141)) {
 //line lesson34-float-arithmetic.tesl:189
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(141)))
 							}
 							{
 //line lesson34-float-arithmetic.tesl:191
@@ -379,13 +397,13 @@ func TestTesl6(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:196
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1024)) {
 //line lesson34-float-arithmetic.tesl:196
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(1024)))
 	}
 	teslLeft15 := teslrt.FloatRound(teslrt.FloatPow(float64(3), float64(3)))
 //line lesson34-float-arithmetic.tesl:197
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(27)) {
 //line lesson34-float-arithmetic.tesl:197
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(27)))
 	}
 }
 
@@ -405,26 +423,26 @@ func TestTesl7(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:201
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
 //line lesson34-float-arithmetic.tesl:201
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft17 := teslrt.FloatCeil(float64(2.1))
 //line lesson34-float-arithmetic.tesl:202
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(3)) {
 //line lesson34-float-arithmetic.tesl:202
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft18 := teslrt.FloatToIntTruncating(float64(3.9))
 //line lesson34-float-arithmetic.tesl:203
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(3)) {
 //line lesson34-float-arithmetic.tesl:203
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft19 := teslrt.FloatToIntTruncating(float64(-3.9))
 	teslRight19 := teslrt.Neg(teslrt.FromInt64(3))
 //line lesson34-float-arithmetic.tesl:204
 	if !teslrt.Equal(teslLeft19, teslRight19) {
 //line lesson34-float-arithmetic.tesl:204
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslRight19))
 	}
 }
 
@@ -455,14 +473,14 @@ func TestTesl8(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:210
 	if teslLeft20.Tag != teslRight20.Tag || (teslLeft20.Tag == teslrt.MaybeSomething && !teslrt.FloatEqual(teslLeft20.SomethingValue, teslRight20.SomethingValue)) {
 //line lesson34-float-arithmetic.tesl:210
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft20)), teslrt.EncodeJSONValue(teslEncode2(teslRight20)))
 	}
 	teslLeft21 := teslrt.ParseFloat("")
 	teslRight21 := teslrt.Maybe[float64]{Tag: teslrt.MaybeNothing}
 //line lesson34-float-arithmetic.tesl:211
 	if teslLeft21.Tag != teslRight21.Tag || (teslLeft21.Tag == teslrt.MaybeSomething && !teslrt.FloatEqual(teslLeft21.SomethingValue, teslRight21.SomethingValue)) {
 //line lesson34-float-arithmetic.tesl:211
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft21)), teslrt.EncodeJSONValue(teslEncode2(teslRight21)))
 	}
 }
 
@@ -550,24 +568,24 @@ func TestTesl11(teslT *testing.T) {
 //line lesson34-float-arithmetic.tesl:229
 	if !teslrt.Equal(teslLeft22, teslrt.FromInt64(2)) {
 //line lesson34-float-arithmetic.tesl:229
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft22), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft23 := teslrt.FloatRound(teslrt.FloatAbs(float64(-3.5)))
 //line lesson34-float-arithmetic.tesl:230
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(4)) {
 //line lesson34-float-arithmetic.tesl:230
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft23), teslrt.DescribeValue(teslrt.FromInt64(4)))
 	}
 	teslLeft24 := teslrt.FloatRound(teslrt.FloatMin(float64(1), float64(2)))
 //line lesson34-float-arithmetic.tesl:231
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(1)) {
 //line lesson34-float-arithmetic.tesl:231
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft24), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft25 := teslrt.FloatRound(teslrt.FloatMax(float64(1), float64(2)))
 //line lesson34-float-arithmetic.tesl:232
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(2)) {
 //line lesson34-float-arithmetic.tesl:232
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 }

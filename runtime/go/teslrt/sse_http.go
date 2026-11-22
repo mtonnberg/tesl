@@ -185,8 +185,10 @@ const sseTestBufferLimit = 256
 
 // SubscribeStream opens `path` on the emitted server as an event stream. `cookies` are the
 // api-test cookie headers, so a stream behind `auth … via cookieAuth` can be subscribed the
-// way the endpoint expects.
-func SubscribeStream(server Server, path string, cookies []string) *SseTestStream {
+// way the endpoint expects; `headers` are the `headers { … }` modifier, sent as written, the
+// same as on a request verb — a stream behind header auth (`x-api-key`) is subscribed with
+// it. The headers used to be parsed and then dropped.
+func SubscribeStream(server Server, path string, cookies []string, headers []Tuple2[string, string]) *SseTestStream {
 	testServer := httptest.NewServer(server)
 	request, err := http.NewRequest(http.MethodGet, testServer.URL+path, nil) //nolint:noctx // torn down by UnsubscribeStream
 	if err != nil {
@@ -197,6 +199,14 @@ func SubscribeStream(server Server, path string, cookies []string) *SseTestStrea
 	for _, cookie := range cookies {
 		request.Header.Add("Cookie", cookie)
 	}
+	for _, header := range headers {
+		if strings.EqualFold(header.Tuple2First, "Host") {
+			request.Host = header.Tuple2Second
+			continue
+		}
+		request.Header.Add(header.Tuple2First, header.Tuple2Second)
+	}
+	addressToPublicOrigin(request, headers)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil || response == nil {
 		testServer.Close()
@@ -214,6 +224,18 @@ func SubscribeStream(server Server, path string, cookies []string) *SseTestStrea
 		// answer about the route, not a missing-events problem for the next assertion.
 		panic(fmt.Sprintf("subscribe failed for %s: %d %s", path, response.StatusCode,
 			strings.TrimSpace(string(body))))
+	}
+	// A 200 that is not an event stream means the path reached an ordinary handler — a
+	// `get "/runs/:id"` route capturing "stream" used to answer `subscribe "/runs/stream"`
+	// this way, and the test then waited out its timeout on a JSON body that would never
+	// carry an event. Name the route mismatch where it happens instead.
+	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+		testServer.Close()
+		panic(fmt.Sprintf("subscribe failed for %s: the route answered %d %s with Content-Type %q, "+
+			"not an event stream — the path reached a non-`sse` endpoint", path,
+			response.StatusCode, strings.TrimSpace(string(body)), contentType))
 	}
 	stream := &SseTestStream{
 		name: path, server: testServer, body: response.Body,

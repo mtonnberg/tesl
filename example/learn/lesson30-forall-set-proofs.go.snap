@@ -279,7 +279,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:147
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:147
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -318,7 +318,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:153
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:153
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -357,7 +357,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:159
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:159
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -392,7 +392,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:164
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:164
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -421,7 +421,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:170
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:170
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -443,6 +443,6 @@ func TestTesl5(teslT *testing.T) {
 //line lesson30-forall-set-proofs.tesl:174
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(3)) {
 //line lesson30-forall-set-proofs.tesl:174
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 }

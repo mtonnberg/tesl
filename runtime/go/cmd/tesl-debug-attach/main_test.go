@@ -20,7 +20,7 @@ func startControl(t *testing.T) (*teslrt.Debugger, string) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")
 	}
-	path := filepath.Join(t.TempDir(), "debug.sock")
+	path := filepath.Join(shortSocketDir(t), "debug.sock")
 	debugger := teslrt.NewDebugger()
 	server, err := debugger.StartDebugControl(path)
 	if err != nil {

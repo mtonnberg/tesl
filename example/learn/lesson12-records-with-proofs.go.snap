@@ -261,7 +261,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:127
 			if x != "hello" {
 //line lesson12-records-with-proofs.tesl:127
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", x, "hello")
 			}
 			{
 //line lesson12-records-with-proofs.tesl:128
@@ -274,7 +274,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:130
 					if y != "a" {
 //line lesson12-records-with-proofs.tesl:130
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", y, "a")
 					}
 				}
 			}
@@ -323,7 +323,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:140
 			if y != "" {
 //line lesson12-records-with-proofs.tesl:140
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", y, "")
 			}
 			{
 //line lesson12-records-with-proofs.tesl:141
@@ -336,7 +336,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:143
 					if x != "hello" {
 //line lesson12-records-with-proofs.tesl:143
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", x, "hello")
 					}
 				}
 			}
@@ -380,13 +380,13 @@ func TestTesl3(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:152
 						if teslLeft5 != "My Title" {
 //line lesson12-records-with-proofs.tesl:152
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "My Title")
 						}
 						teslLeft6 := msg.Body
 //line lesson12-records-with-proofs.tesl:153
 						if teslLeft6 != "Some body text" {
 //line lesson12-records-with-proofs.tesl:153
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Some body text")
 						}
 					}
 				}
@@ -439,13 +439,13 @@ func TestTesl4(teslT *testing.T) {
 //line lesson12-records-with-proofs.tesl:279
 								if !teslrt.Equal(teslLeft7, teslrt.FromInt64(10)) {
 //line lesson12-records-with-proofs.tesl:279
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(10)))
 								}
 								teslLeft8 := order.Quantity
 //line lesson12-records-with-proofs.tesl:280
 								if !teslrt.Equal(teslLeft8, teslrt.FromInt64(3)) {
 //line lesson12-records-with-proofs.tesl:280
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(3)))
 								}
 							}
 						}

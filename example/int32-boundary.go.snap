@@ -92,6 +92,24 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode1(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func TestTesl0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "in-range value round-trips unchanged" && teslWanted != "TestTesl0" {
 		teslT.Skip("named test filter")
@@ -108,7 +126,7 @@ func TestTesl0(teslT *testing.T) {
 //line int32-boundary.tesl:83
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1000)) {
 //line int32-boundary.tesl:83
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1000)))
 	}
 }
 
@@ -128,7 +146,7 @@ func TestTesl1(teslT *testing.T) {
 //line int32-boundary.tesl:87
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2147483647)) {
 //line int32-boundary.tesl:87
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(2147483647)))
 	}
 }
 
@@ -149,7 +167,7 @@ func TestTesl2(teslT *testing.T) {
 //line int32-boundary.tesl:91
 	if !teslrt.Equal(teslLeft3, teslRight3) {
 //line int32-boundary.tesl:91
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslRight3))
 	}
 }
 
@@ -170,7 +188,7 @@ func TestTesl3(teslT *testing.T) {
 //line int32-boundary.tesl:95
 	if !teslrt.Equal(teslLeft4, teslRight4) {
 //line int32-boundary.tesl:95
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslRight4))
 	}
 }
 
@@ -190,20 +208,20 @@ func TestTesl4(teslT *testing.T) {
 //line int32-boundary.tesl:99
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(2147483647)) {
 //line int32-boundary.tesl:99
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(2147483647)))
 	}
 	teslLeft6 := teslrt.Int32ToInt(Saturate(teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(9007199254740993))))
 	teslRight6 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(2147483648))
 //line int32-boundary.tesl:100
 	if !teslrt.Equal(teslLeft6, teslRight6) {
 //line int32-boundary.tesl:100
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslRight6))
 	}
 	teslLeft7 := teslrt.Int32ToInt(Saturate(teslrt.FromInt64(7)))
 //line int32-boundary.tesl:101
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(7)) {
 //line int32-boundary.tesl:101
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 }
 
@@ -224,13 +242,13 @@ func TestTesl5(teslT *testing.T) {
 //line int32-boundary.tesl:105
 	if !teslrt.Equal(teslLeft8, teslRight8) {
 //line int32-boundary.tesl:105
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslRight8))
 	}
 	teslLeft9 := teslrt.Int32ToInt(teslrt.Int32MaxValue)
 //line int32-boundary.tesl:106
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(2147483647)) {
 //line int32-boundary.tesl:106
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(2147483647)))
 	}
 }
 
@@ -251,14 +269,14 @@ func TestTesl6(teslT *testing.T) {
 //line int32-boundary.tesl:110
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft10.SomethingValue, teslRight10.SomethingValue)) {
 //line int32-boundary.tesl:110
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft10)), teslrt.EncodeJSONValue(teslEncode2(teslRight10)))
 	}
 	teslLeft11 := BudgetLeft(teslrt.Int32MinValue, Saturate(teslrt.FromInt64(1)))
 	teslRight11 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line int32-boundary.tesl:111
 	if teslLeft11.Tag != teslRight11.Tag || (teslLeft11.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft11.SomethingValue, teslRight11.SomethingValue)) {
 //line int32-boundary.tesl:111
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft11)), teslrt.EncodeJSONValue(teslEncode2(teslRight11)))
 	}
 }
 
@@ -279,14 +297,14 @@ func TestTesl7(teslT *testing.T) {
 //line int32-boundary.tesl:115
 	if teslLeft12.Tag != teslRight12.Tag || (teslLeft12.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft12.SomethingValue, teslRight12.SomethingValue)) {
 //line int32-boundary.tesl:115
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft12)), teslrt.EncodeJSONValue(teslEncode2(teslRight12)))
 	}
 	teslLeft13 := teslrt.Int32Add(Saturate(teslrt.FromInt64(2)), Saturate(teslrt.FromInt64(3)))
 	teslRight13 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: Saturate(teslrt.FromInt64(5))}
 //line int32-boundary.tesl:116
 	if teslLeft13.Tag != teslRight13.Tag || (teslLeft13.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft13.SomethingValue, teslRight13.SomethingValue)) {
 //line int32-boundary.tesl:116
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft13)), teslrt.EncodeJSONValue(teslEncode2(teslRight13)))
 	}
 }
 
@@ -306,7 +324,7 @@ func TestTesl8(teslT *testing.T) {
 //line int32-boundary.tesl:120
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(10)) {
 //line int32-boundary.tesl:120
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 }
 
@@ -326,7 +344,7 @@ func TestTesl9(teslT *testing.T) {
 //line int32-boundary.tesl:124
 	if teslLeft15 != "42" {
 //line int32-boundary.tesl:124
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, "42")
 	}
 //line int32-boundary.tesl:125
 	if !(teslrt.Int32IsNegative(Saturate(teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1))))) {
@@ -360,7 +378,7 @@ func TestTesl10(teslT *testing.T) {
 //line int32-boundary.tesl:131
 			if teslLeft16.Tag != teslRight16.Tag || (teslLeft16.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft16.SomethingValue, teslRight16.SomethingValue)) {
 //line int32-boundary.tesl:131
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft16)), teslrt.EncodeJSONValue(teslEncode2(teslRight16)))
 			}
 		}
 	}
@@ -391,14 +409,14 @@ func TestTesl11(teslT *testing.T) {
 //line int32-boundary.tesl:139
 			if teslLeft17.Tag != teslRight17.Tag || (teslLeft17.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft17.SomethingValue, teslRight17.SomethingValue)) {
 //line int32-boundary.tesl:139
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft17)), teslrt.EncodeJSONValue(teslEncode2(teslRight17)))
 			}
 			teslLeft18 := Halve(Saturate(teslrt.FromInt64(8)), d)
 			teslRight18 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: Saturate(teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(8)))}
 //line int32-boundary.tesl:140
 			if teslLeft18.Tag != teslRight18.Tag || (teslLeft18.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft18.SomethingValue, teslRight18.SomethingValue)) {
 //line int32-boundary.tesl:140
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft18)), teslrt.EncodeJSONValue(teslEncode2(teslRight18)))
 			}
 		}
 	}

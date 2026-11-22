@@ -270,3 +270,21 @@ func TestStringRequireNonEmpty(t *testing.T) {
 		t.Errorf("message = %q", rejected.Message())
 	}
 }
+
+func TestStringWhitespaceHelpers(t *testing.T) {
+	if got := StringTrimLeft("  a b  "); got != "a b  " {
+		t.Errorf("TrimLeft = %q", got)
+	}
+	if got := StringTrimRight("  a b  "); got != "  a b" {
+		t.Errorf("TrimRight = %q", got)
+	}
+	if got := StringWords("  a \t b\nc "); len(got) != 3 || got[0] != "a" || got[2] != "c" {
+		t.Errorf("Words = %q", got)
+	}
+	if got := StringLines("a\r\nb\nc\n"); len(got) != 3 || got[1] != "b" {
+		t.Errorf("Lines = %q", got)
+	}
+	if got := StringLines(""); len(got) != 0 {
+		t.Errorf("Lines of empty = %q", got)
+	}
+}

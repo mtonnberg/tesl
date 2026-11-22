@@ -1739,31 +1739,11 @@ func teslEncode13(teslValue []teslmodkanelmodels.Project) any {
 }
 
 func teslEncode14(teslValue teslrt.Maybe[string]) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslrt.MaybeNothing:
-			return map[string]any{"tag": "Nothing"}
-		case teslrt.MaybeSomething:
-			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": teslEncode1(teslValue.SomethingValue),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return teslrt.EncodeMaybeWire(teslValue, teslEncode1)
 }
 
 func teslEncode15(teslValue teslrt.Maybe[teslrt.PosixMillis]) any {
-	return func() any {
-		switch teslValue.Tag {
-		case teslrt.MaybeNothing:
-			return map[string]any{"tag": "Nothing"}
-		case teslrt.MaybeSomething:
-			return map[string]any{"tag": "Something", "fields": map[string]any{
-				"value": teslEncode5(teslValue.SomethingValue),
-			}}
-		}
-		panic("unreachable: checker guarantees case exhaustiveness")
-	}()
+	return teslrt.EncodeMaybeWire(teslValue, teslEncode5)
 }
 
 func teslEncode16(teslValue teslmodkanelmodels.Issue) any {
@@ -2074,7 +2054,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line KanelBackend.tesl:462
 		if teslLeft1 != "alice@example.com" {
 //line KanelBackend.tesl:462
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "alice@example.com")
 		}
 //line KanelBackend.tesl:463
 		if !(teslrt.JsonContains("Alice", teslrt.JsonFieldOf(registered.Body, "displayName"))) {
@@ -2102,7 +2082,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line KanelBackend.tesl:471
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(409)) {
 //line KanelBackend.tesl:471
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(409)))
 					}
 					{
 //line KanelBackend.tesl:473
@@ -2263,7 +2243,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line KanelBackend.tesl:515
 													if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
 //line KanelBackend.tesl:515
-														teslT.Fatal("Tesl expectation failed")
+														teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1)))
 													}
 													{
 //line KanelBackend.tesl:516
@@ -2309,7 +2289,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line KanelBackend.tesl:526
 																		if teslLeft4 != orgSlug {
 //line KanelBackend.tesl:526
-																			teslT.Fatal("Tesl expectation failed")
+																			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, orgSlug)
 																		}
 																	}
 																}
@@ -2479,7 +2459,7 @@ func TestTeslApi4(teslT *testing.T) {
 					_ = issueId
 					{
 //line KanelBackend.tesl:633
-						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))})
+						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))}, nil)
 						_ = stream
 						defer teslrt.UnsubscribeStream(stream)
 						{
@@ -2495,7 +2475,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line KanelBackend.tesl:638
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1)) {
 //line KanelBackend.tesl:638
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 							{
 //line KanelBackend.tesl:640
@@ -2528,13 +2508,13 @@ func TestTeslApi4(teslT *testing.T) {
 //line KanelBackend.tesl:642
 									if teslLeft6 != reporterId {
 //line KanelBackend.tesl:642
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, reporterId)
 									}
 									teslLeft7 := job.RecipientEmail
 //line KanelBackend.tesl:643
 									if teslLeft7 != "reporter@example.com" {
 //line KanelBackend.tesl:643
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "reporter@example.com")
 									}
 //line KanelBackend.tesl:644
 									if !(teslrt.JsonHasField("body", teslrt.JsonValueOf(teslEncode3(job)))) {
@@ -2545,7 +2525,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line KanelBackend.tesl:645
 									if !teslrt.Equal(teslLeft8, teslrt.FromInt64(0)) {
 //line KanelBackend.tesl:645
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(0)))
 									}
 									{
 //line KanelBackend.tesl:647
@@ -2635,7 +2615,7 @@ func TestTeslApi5(teslT *testing.T) {
 					_ = issueId
 					{
 //line KanelBackend.tesl:717
-						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))})
+						stream := teslrt.SubscribeStream(KanelServer, ("/events/users/" + teslrt.ApiTestFragment(teslEncode1(reporterId))), []string{("kanel_user_id=" + teslrt.ApiTestFragment(teslEncode1(reporterId)))}, nil)
 						_ = stream
 						defer teslrt.UnsubscribeStream(stream)
 						{
@@ -2651,7 +2631,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line KanelBackend.tesl:722
 							if !teslrt.Equal(teslLeft9, teslrt.FromInt64(1)) {
 //line KanelBackend.tesl:722
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 							{
 //line KanelBackend.tesl:724
@@ -2753,7 +2733,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line KanelBackend.tesl:735
 													if !teslrt.Equal(teslLeft10, teslrt.FromInt64(0)) {
 //line KanelBackend.tesl:735
-														teslT.Fatal("Tesl expectation failed")
+														teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(0)))
 													}
 													{
 //line KanelBackend.tesl:737
@@ -2786,13 +2766,13 @@ func TestTeslApi5(teslT *testing.T) {
 //line KanelBackend.tesl:739
 															if teslLeft11 != reporterId {
 //line KanelBackend.tesl:739
-																teslT.Fatal("Tesl expectation failed")
+																teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, reporterId)
 															}
 															teslLeft12 := deadJob.RecipientEmail
 //line KanelBackend.tesl:740
 															if teslLeft12 != "blocked@example.com" {
 //line KanelBackend.tesl:740
-																teslT.Fatal("Tesl expectation failed")
+																teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "blocked@example.com")
 															}
 															{
 //line KanelBackend.tesl:742

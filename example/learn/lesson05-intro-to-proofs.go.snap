@@ -113,7 +113,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson05-intro-to-proofs.tesl:121
 									if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson05-intro-to-proofs.tesl:121
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 									}
 								}
 							}
@@ -157,13 +157,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson05-intro-to-proofs.tesl:129
 					if teslLeft2 != "listening on port 80" {
 //line lesson05-intro-to-proofs.tesl:129
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "listening on port 80")
 					}
 					teslLeft3 := ListenOnPort(p2)
 //line lesson05-intro-to-proofs.tesl:130
 					if teslLeft3 != "listening on port 8080" {
 //line lesson05-intro-to-proofs.tesl:130
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "listening on port 8080")
 					}
 				}
 			}
@@ -243,7 +243,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson05-intro-to-proofs.tesl:147
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson05-intro-to-proofs.tesl:147
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}

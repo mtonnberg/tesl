@@ -319,7 +319,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line api-test-template-tests.tesl:124
 		if teslLeft1 != "payload: {}" {
 //line api-test-template-tests.tesl:124
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "payload: {}")
 		}
 	}
 }

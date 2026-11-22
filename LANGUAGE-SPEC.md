@@ -2575,6 +2575,8 @@ This design is theoretically sound because:
 
 **Separate HTTP wire adapters are not implemented by the Go backend.** The forms `body req: Domain from Wire via decodeWire` and `response Wire via encodeWire` do not describe an executed request/response conversion. Do not use them to establish a boundary guarantee. Declare the actual decoded request and encoded response types, supply their codecs where required, and perform domain conversions through ordinary checked function calls in the handler.
 
+**Wire shape of a value without a codec.** A record is a JSON object of its fields. An ADT is `{"tag": "Ctor"}`, or `{"tag": "Ctor", "fields": {…}}` when the constructor carries payload; `Result`, `Either`, `Tuple2` and `Tuple3` follow the same rule (`{"tag": "Ok", "fields": {"value": v}}`, `{"tag": "Err", "fields": {"error": e}}`, `{"tag": "Tuple2", "fields": {"first": a, "second": b}}`). `Maybe T` is the exception on the HTTP wire — a request or response body, an SSE payload, a tool result: `Nothing` is JSON `null` and `Something v` is `v` itself, and a request body may omit a `Maybe` field entirely (absent reads as `Nothing`). A directly nested `Maybe (Maybe T)` keeps the tagged shape at its outer level, since `null` cannot say which `Nothing` it means. Stored JSON — a `JSONB` column, a queue job, a cache value — keeps the tagged `Maybe` shape, and decoding accepts either form. A `codec` field reads and writes this wire shape with `with_codec Maybe`. The OpenAPI document and the generated TypeScript and Elm clients describe exactly these shapes.
+
 **`adtJson` shorthand for ADT types.** When a codec is needed solely to declare the standard `{"tag": "ConstructorName"}` JSON encoding for an ADT, use the `adtJson` shorthand:
 
 ```tesl
@@ -2682,7 +2684,7 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 |---|---|---|
 | `String` | `TEXT` | NOT NULL |
 | `Int` | `NUMERIC` | NOT NULL |
-| `Int32` | `INTEGER` (int4) | NOT NULL |
+| `Int32` | `NUMERIC` (`@db(integer)` or `@db(bigint)` for int4/int8) | NOT NULL |
 | `Bool` | `BOOLEAN` | NOT NULL |
 | `Float` / `Real` | `DOUBLE PRECISION` | NOT NULL |
 | `Bytes` | `BYTEA` | NOT NULL |
@@ -2708,7 +2710,7 @@ of old decoders remain under development.
 >
 > **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring touched tables to their state before the block. Outside table readers and writers wait until commit or rollback, while the transaction reads its own writes, so uncommitted and partially rolled-back rows are not observable from another request. Memory transactions are process-wide serialized rather than PostgreSQL's concurrent MVCC transactions. Also, `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent access should be Postgres-backed.
 
-`Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer column that must fit a JavaScript number (< 2^53) or a compact `int4`, use `Int32` (`INTEGER`); a linter warning steers wire/storage `Int` fields toward `Int32`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
+`Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer that must fit a JavaScript number (< 2^53), use `Int32`; a linter warning steers wire/storage `Int` fields toward `Int32`. `Int32` keeps `Int`'s `NUMERIC` column by default (existing tables depend on that layout); annotate the field `@db(integer)` for a compact `int4` column, or `@db(bigint)` for `int8`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
 
 **NULL comparison semantics.** Comparisons follow PostgreSQL three-valued logic on both the Postgres backend and the in-memory (test) backend, so tests are faithful to production. A comparison involving `NULL` (a `Nothing` / absent `Maybe` value) is `UNKNOWN`, and a `where` row is kept only when its predicate is `TRUE` — an `UNKNOWN` result excludes the row. In particular `field == x`, `field != x`, ordered comparisons (`<`, `<=`, `>`, `>=`), `in`, `not in`, and `like`/`ilike` all **exclude** a row whose `field` is `NULL` (even `NULL == NULL` is not a match). Use the explicit null tests to inspect `NULL`-ness: only `field` being null (`IS NULL`) / not-null (`IS NOT NULL`) yield `TRUE`/`FALSE` on a `NULL` value.
 
@@ -2942,6 +2944,8 @@ evts.onmessage = (e) => {
 // Reconnects automatically — no manual reconnect code needed
 ```
 
+**Authenticating a browser stream.** `EventSource` cannot set request headers — its only option is `withCredentials` — so an `sse` route whose `auth` reads a header (`x-api-key`, `Authorization`) always refuses a browser. Use an auth that reads a **cookie** for routes a browser subscribes to: a same-origin session cookie (the `sso` session, or any cookie-reading `auth`) is sent with the request, and `{ withCredentials: true }` sends it cross-origin. Alternatively an edge proxy can inject the header. Avoid moving an API key into the query string: it lands in access logs, browser history and `Referer` headers. A header-only route still serves non-browser clients (`curl -N -H …`) and `api-test`'s `subscribe … headers { … }`.
+
 ### 11.12 Servers
 **Accepted design, Implemented.**
 
@@ -3089,6 +3093,8 @@ Two properties this buys, both of which the manual alternative (writing `/api/�
 So a reverse proxy fronting a mounted app must forward **`/auth/*` as well as the mount prefix**, and if the app serves its own SPA via `static:`, `/` too.
 
 **`healthProbePath` is api-relative.** It names one of the `api` block's own routes, so it moves under the mount with everything else: `mountPath: "/api"` plus `healthProbePath "/healthz"` means the probe lives at `/api/healthz` — point liveness/readiness checks there. Its Host-validation exemption (load balancers probe host-blind) continues to apply, while ordinary routes still refuse a mismatched `Host` with 421.
+
+**The compiled binary probes it too.** A program whose served server declares `healthProbePath` builds a binary that answers `app healthcheck [PORT]`: it requests the probe path (under the mount) on `127.0.0.1` — or the server's `listenAddress` — at the `App`'s port when that is a literal (8080 otherwise, or the `PORT` argument), and exits 0 for a 2xx answer and 1 otherwise. It runs before the program's startup chain, so it never opens a database or runs a migration. This is what a container `HEALTHCHECK` can run in an image with no shell or HTTP client: `HEALTHCHECK CMD ["/app", "healthcheck"]`.
 
 **A route only answers under the mount.** With `mountPath: "/api"`, `GET /api/widgets` dispatches and `GET /widgets` does not — a route answering at both paths would defeat the point of declaring a mount. A request outside the mount is simply "not an API call": it falls through to static files and the SPA fallback, and 404s only if those miss too.
 
@@ -3699,8 +3705,8 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
                   | "where" "like"      <field-ref> <string-expr>
                   | "where" "ilike"     <field-ref> <string-expr>
                   | "order"   <field-ref> ( "asc" | "desc" )
-                  | "limit"   <int>
-                  | "offset"  <int>
+                  | "limit"   <int-expr>
+                  | "offset"  <int-expr>
                   | "innerJoin" <entity> "on" <binder-field-ref> <entity-field-ref>
 
 <group-by-clause> ::= "groupBy" <field-ref>
@@ -3728,6 +3734,11 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
 <sql-predicate> ::= <identifier> "." <identifier> <comparison-op> <expr>
 <comparison-op> ::= "==" | "!=" | "<=" | ">=" | "<" | ">"
 ```
+
+A `limit`/`offset` bound is an integer literal or any `Int` expression (a page size the request
+chose). An expression bound is a statement parameter, never spliced into the SQL text, and a
+negative bound selects nothing. Every clause may sit on its own indented line, including the
+`onConflict`/`doUpdate` clauses of an `upsert` and the `where` clauses of a `delete`.
 
 The parser produces a dedicated `ESqlQuery` AST node for each recognized select, insert, upsert,
 update, delete, or `deleteAndReturnResult` expression. SQL clause keywords and their source spans

@@ -636,7 +636,7 @@ let stdlib_env : (string * scheme) list = [
   "Tuple3.third",      { vars = _r3_abc; mono = t_fun [t_tuple3 _a _b _c] _c };
   "Dict.fromList",     { vars = _r2_kv; mono = t_fun [t_list (t_tuple2 _k _v)] (t_dict _k _v) };
   "Dict.toList",       { vars = _r2_kv; mono = t_fun [t_dict _k _v] (t_list (t_tuple2 _k _v)) };
-  "Dict.map",          { vars = _r3_abc; mono = t_fun [t_fun [_a] _b; t_dict _k _a] (t_dict _k _b) };
+  "Dict.map",          { vars = [-1; -2; -4]; mono = t_fun [t_fun [_a] _b; t_dict _k _a] (t_dict _k _b) };
   "Dict.filter",       { vars = _r2_kv; mono = t_fun [t_fun [_v] t_bool; t_dict _k _v] (t_dict _k _v) };
   "Dict.filterCheckValues", { vars = _r2_kv; mono = t_fun [t_fun [_v] _v; t_dict _k _v] (t_dict _k _v) };
   "Dict.filterCheckKeys",   { vars = _r2_kv; mono = t_fun [t_fun [_k] _k; t_dict _k _v] (t_dict _k _v) };
@@ -645,10 +645,10 @@ let stdlib_env : (string * scheme) list = [
   "Dict.difference",   { vars = _r2_kv; mono = t_fun [t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
   (* Exported but previously unTYPED (see the Float block note). *)
   "Dict.insertWith",   { vars = _r2_kv; mono = t_fun [t_fun [_v; _v] _v; _k; _v; t_dict _k _v] (t_dict _k _v) };
-  "Dict.mapWithKey",   { vars = _r3_abc; mono = t_fun [t_fun [_k; _a] _b; t_dict _k _a] (t_dict _k _b) };
+  "Dict.mapWithKey",   { vars = [-1; -2; -4]; mono = t_fun [t_fun [_k; _a] _b; t_dict _k _a] (t_dict _k _b) };
   "Dict.filterWithKey",{ vars = _r2_kv; mono = t_fun [t_fun [_k; _v] t_bool; t_dict _k _v] (t_dict _k _v) };
-  "Dict.foldl",        { vars = _r3_abc; mono = t_fun [t_fun [_b; _v] _b; _b; t_dict _k _v] _b };
-  "Dict.foldr",        { vars = _r3_abc; mono = t_fun [t_fun [_v; _b] _b; _b; t_dict _k _v] _b };
+  "Dict.foldl",        { vars = [-2; -4; -5]; mono = t_fun [t_fun [_b; _v] _b; _b; t_dict _k _v] _b };
+  "Dict.foldr",        { vars = [-2; -4; -5]; mono = t_fun [t_fun [_v; _b] _b; _b; t_dict _k _v] _b };
   "Dict.unionWith",    { vars = _r2_kv; mono = t_fun [t_fun [_v; _v] _v; t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
   "Dict.update",       { vars = _r2_kv; mono = t_fun [_k; t_fun [t_maybe _v] (t_maybe _v); t_dict _k _v] (t_dict _k _v) };
 
@@ -1417,25 +1417,11 @@ let env_extend name sch (env : (string * scheme) list) =
     an explicit import fails before code generation; the Go seam test consumes
     the same table to ensure every backend refusal has a frontend guard. *)
 let go_backend_unavailable_exports : (string * string list) list = [
-  "Tesl.Dict", ["Dict.map"; "Dict.mapWithKey"; "Dict.filter"; "Dict.filterWithKey";
-                "Dict.foldl"; "Dict.foldr"; "Dict.insertWith"; "Dict.unionWith";
-                "Dict.update"; "Dict.difference"; "Dict.intersection"];
-  "Tesl.Set", ["Set.map"; "Set.filter"; "Set.foldl"; "Set.all"; "Set.any"; "Set.partition"];
-  "Tesl.List", ["List.zipWith"; "List.unzip"; "List.partition"; "List.groupBy";
-                "List.findIndex"; "List.dedupe"; "List.intersperse"; "List.intercalate";
-                "List.nth"];
-  "Tesl.ListPrim", ["ListPrim.head"; "ListPrim.tail"; "ListPrim.append"];
-  "Tesl.Int", ["Int.toFloat"; "Int.fromFloat"; "Int.digits"; "Int.isZero";
-               "Int.isPositive"; "Int.isNegative"];
-  "Tesl.String", ["String.toFloat"; "String.fromFloat"; "String.words"; "String.lines";
-                  "String.trimLeft"; "String.trimRight"];
   "Tesl.Json", ["int32Codec"];
   "Tesl.UUID", ["uuidV4Codec"; "uuidV7Codec"];
   "Tesl.Email", ["Email.send"; "startEmailWorker"];
   "Tesl.Cache", ["cache"];
   "Tesl.ApiTest", ["SseStream"];
-  "Tesl.Net", ["Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
-               "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
 ]
 
 let go_backend_export_available module_name export =

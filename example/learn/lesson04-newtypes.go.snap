@@ -92,7 +92,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson04-newtypes.tesl:106
 		if teslLeft1 != "user-123" {
 //line lesson04-newtypes.tesl:106
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "user-123")
 		}
 	}
 }
@@ -117,7 +117,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson04-newtypes.tesl:111
 		if teslLeft2 != "proj-456" {
 //line lesson04-newtypes.tesl:111
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "proj-456")
 		}
 	}
 }

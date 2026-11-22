@@ -107,6 +107,9 @@ func JsonValueOf(value any) JsonValue { return JsonValue{raw: jsonNormalize(valu
 // helpers below.
 func (value JsonValue) JsonRaw() any { return value.raw }
 
+// String is the value's JSON text, which is how a failed `expect` prints it.
+func (value JsonValue) String() string { return EncodeJSONValue(value.raw) }
+
 // JsonParseBody parses a response body for inspection. An empty body is JSON null — a
 // handler that answered `204` has nothing to inspect, and that is not a test failure by
 // itself.

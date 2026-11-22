@@ -202,7 +202,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:225
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(42)) {
 //line lesson38-proof-decomposition.tesl:225
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(42)))
 			}
 			{
 //line lesson38-proof-decomposition.tesl:226
@@ -216,7 +216,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:228
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
 //line lesson38-proof-decomposition.tesl:228
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 					{
 //line lesson38-proof-decomposition.tesl:229
@@ -230,7 +230,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:231
 							if !teslrt.Equal(teslLeft3, teslrt.FromInt64(100)) {
 //line lesson38-proof-decomposition.tesl:231
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(100)))
 							}
 						}
 					}
@@ -264,7 +264,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:237
 			if teslLeft4 != "score is 75" {
 //line lesson38-proof-decomposition.tesl:237
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "score is 75")
 			}
 			{
 //line lesson38-proof-decomposition.tesl:238
@@ -278,7 +278,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:240
 					if teslLeft5 != "score is 0" {
 //line lesson38-proof-decomposition.tesl:240
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "score is 0")
 					}
 				}
 			}
@@ -310,7 +310,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:246
 			if teslLeft6 != "score: 30" {
 //line lesson38-proof-decomposition.tesl:246
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "score: 30")
 			}
 			{
 //line lesson38-proof-decomposition.tesl:247
@@ -324,7 +324,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:249
 					if teslLeft7 != "score: 99" {
 //line lesson38-proof-decomposition.tesl:249
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "score: 99")
 					}
 				}
 			}
@@ -356,7 +356,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:255
 			if teslLeft8 != "proof extracted" {
 //line lesson38-proof-decomposition.tesl:255
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "proof extracted")
 			}
 		}
 	}
@@ -386,7 +386,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:261
 			if teslLeft9 != "raw value: 7 (score: 7)" {
 //line lesson38-proof-decomposition.tesl:261
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "raw value: 7 (score: 7)")
 			}
 		}
 	}
@@ -424,7 +424,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:269
 					if teslLeft10 != "tag: player = score: 88" {
 //line lesson38-proof-decomposition.tesl:269
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "tag: player = score: 88")
 					}
 				}
 			}
@@ -472,19 +472,19 @@ func TestTesl6(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:279
 							if teslLeft11 != "score is 0" {
 //line lesson38-proof-decomposition.tesl:279
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "score is 0")
 							}
 							teslLeft12 := ShowScore(n50_p)
 //line lesson38-proof-decomposition.tesl:280
 							if teslLeft12 != "score is 50" {
 //line lesson38-proof-decomposition.tesl:280
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "score is 50")
 							}
 							teslLeft13 := ShowScore(n100_p)
 //line lesson38-proof-decomposition.tesl:281
 							if teslLeft13 != "score is 100" {
 //line lesson38-proof-decomposition.tesl:281
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "score is 100")
 							}
 						}
 					}
@@ -575,13 +575,13 @@ func TestTesl8(teslT *testing.T) {
 //line lesson38-proof-decomposition.tesl:300
 							if teslLeft14 != "tag: a = score: 1" {
 //line lesson38-proof-decomposition.tesl:300
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft14, "tag: a = score: 1")
 							}
 							teslLeft15 := DecomposeThenCall(score, t2)
 //line lesson38-proof-decomposition.tesl:301
 							if teslLeft15 != "tag: hello = score: 1" {
 //line lesson38-proof-decomposition.tesl:301
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, "tag: hello = score: 1")
 							}
 						}
 					}

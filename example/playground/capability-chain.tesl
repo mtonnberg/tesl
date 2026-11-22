@@ -1,6 +1,6 @@
-module CapabilityChain exposing [Note, NoteDb, saveNote, publishNote]
+module CapabilityChain exposing [Note, NoteDb, saveNote, publishNote, noteCount]
 
-import Tesl.Prelude exposing [String]
+import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
@@ -24,3 +24,8 @@ fn saveNote(id: String, body: String) -> Note
 fn publishNote(id: String, body: String) -> Note
   requires [dbRead Note] =
   saveNote id body
+
+# Reading a note needs only read access to Note.
+fn noteCount() -> Int
+  requires [dbRead Note] =
+  selectCount n from Note

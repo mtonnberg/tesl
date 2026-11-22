@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -136,7 +137,11 @@ func oidcDiscover(conn SsoConnection) (SsoConnection, error) {
 	}
 	documentIssuer, _ := document["issuer"].(string)
 	if documentIssuer != conn.Issuer && !issuerIsTemplate(documentIssuer) {
-		return conn, ssoError{"sso-discovery: discovery issuer does not match the configured issuer"}
+		// The comparison is exact (OIDC Discovery §4.3), and providers differ on a trailing
+		// slash, so the operator needs both spellings to fix the configuration. Issuers are
+		// public URLs; this goes to the server log, never to the browser's failure page.
+		return conn, ssoError{fmt.Sprintf("sso-discovery: discovery issuer %q does not match the configured issuer %q (the comparison is exact, including a trailing slash)",
+			documentIssuer, conn.Issuer)}
 	}
 	methods, _ := document["code_challenge_methods_supported"].([]any)
 	advertisesS256 := false

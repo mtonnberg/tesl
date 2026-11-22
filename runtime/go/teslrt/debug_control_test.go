@@ -15,7 +15,7 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")
 	}
-	directory := t.TempDir()
+	directory := shortSocketDir(t)
 	path := filepath.Join(directory, "debug.sock")
 	debugger := NewDebugger()
 	server, err := debugger.StartDebugControl(path)
@@ -160,7 +160,7 @@ func TestDebugControlEvaluatesWireConditions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")
 	}
-	path := filepath.Join(t.TempDir(), "debug.sock")
+	path := filepath.Join(shortSocketDir(t), "debug.sock")
 	server, err := NewDebugger().StartDebugControl(path)
 	if err != nil {
 		t.Fatal(err)

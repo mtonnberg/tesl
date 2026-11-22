@@ -284,3 +284,26 @@ func TestCompilerSubprocessCommandsUseSelectedNativeOwner(t *testing.T) {
 		}
 	}
 }
+
+// A variable declared in tesl.toml's [env] after `tesl init` wrote `.env` must still reach
+// the program: the manifest's defaults are the lowest-precedence source.
+func TestProjectEnvironmentAppliesManifestDefaults(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "tesl.toml"),
+		[]byte("[project]\nname = \"p\"\nentrypoint = \"app.tesl\"\n[env]\nFROM_MANIFEST = \"m\"\nSHADOWED = \"m\"\nIN_DOTENV = \"m\"\n[database]\nmode = \"none\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("IN_DOTENV=d\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Environment: []string{"SHADOWED=process"}}
+	env, err := app.projectEnvironment(context.Background(), root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"FROM_MANIFEST": "m", "SHADOWED": "process", "IN_DOTENV": "d"} {
+		if got, _ := environmentValue(env, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}

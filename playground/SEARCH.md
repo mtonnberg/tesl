@@ -95,11 +95,11 @@ special forms such as `List.map` remain findable by name and description. Proof
 predicates and minted facts are visible where the existing prose names them;
 they are not yet a structured proof index. **Check an actual use with the compiler.**
 
-The first audit also found checker schemes whose quantified-variable list omits
-variables appearing in their type (for example `Dict.map` omits the key variable).
-Search exposes the actual type and quantification as `incomplete-scheme` and keeps
-these entries in text lookup. It does not silently repair compiler metadata or
-invent a polymorphic type. Their compiler-table audit is tracked separately.
+A checker scheme whose quantified-variable list omitted a variable of its type
+would be exposed as `incomplete-scheme` and kept in text lookup only; search does
+not silently repair compiler metadata or invent a polymorphic type. The first audit
+found four such schemes (`Dict.map`, `Dict.mapWithKey`, `Dict.foldl`, `Dict.foldr`);
+they are corrected in the compiler table, and no builtin is incomplete today.
 
 `catalog_id` fingerprints the complete canonical catalog, including signatures,
 types, quantified variables, aliases, docs, labels and requirements. Its MD5
