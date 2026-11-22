@@ -31,7 +31,7 @@ func TestPgRowTableDropCompiledQueueSource(t *testing.T) {
 		}
 		return b
 	}
-	generated, err := parser.ParseFile(token.NewFileSet(), "generated.go", read("internal/teslrt/migration_history_generated.go"), 0)
+	generated, err := parser.ParseFile(token.NewFileSet(), "generated.go", read("internal/teslhistory/migration_history_generated.go"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

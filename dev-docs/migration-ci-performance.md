@@ -45,6 +45,9 @@ checks. Construction took 1,807.968s and rollout/cleanup 650.759s, totaling
 2,396s result: those runs were not a controlled A/B comparison. In particular,
 each revision changes `migration_history_generated.go` inside the generated
 runtime package, so different revisions still require recompilation.
+That file now lives in its own generated package (`internal/teslhistory`), so
+a new revision recompiles that package and the packages importing it, not the
+runtime.
 
 Evidence: `.tesl-stuff/ci-speed-20261019-162324/`, including `analysis.json`,
 `final-audit.json`, per-command traces and `full20/rollout.json`.
