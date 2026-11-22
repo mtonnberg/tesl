@@ -154,3 +154,34 @@ Lane prerequisites follow from the declaration (`scripts/migration-lanes.py plan
   runs after both lane jobs and requires both job results and exactly one
   receipt per lane whose phases join into the complete inventory.
 
+## Content-addressed caches
+
+The workflows restore four caches. Each is saved only by a push to `main`, by
+one job per key (other jobs and pull requests only restore), and none stores a
+test outcome:
+
+- **Nix store** (`nix-community/cache-nix-action`, key: `flake.nix`,
+  `flake.lock`, `nix/**`; saved by `go-runtime`). Store paths are named by the
+  hash of their complete build inputs, so Nix uses a restored path only when it is
+  exactly the derivation the flake asks for; anything else is built or fetched as
+  before. The saver keeps the dev shell's closure through a profile root and
+  collects other paths down to 5 GB. This removes the per-job source builds of the
+  Go analysis tools, which the Go overlay keeps out of the public binary cache.
+- **Go modules** (`~/go/pkg/mod`, key: `runtime/go/go.sum`) and **Go build cache**
+  (`~/.cache/go-build`, key: toolchain + `go.sum`; saved by `go-runtime`). Modules
+  are checked against `go.sum`. Build actions are keyed by the hash of every input
+  (source, flags, compiler, dependencies). Each job runs `go clean -testcache`
+  before its gate, so no restored test result can be replayed; `-count=1` remains
+  on every mandatory test command.
+- **Migration runner Go seed** (key: toolchain + `go.sum`; saved by
+  `migration-kernel`). The runner still uses a private `GOCACHE`; it copies the
+  seed in, expires test results and then warms as before. The seed is captured
+  right after warming, before any phase runs.
+- **Dune cache** (`~/.cache/dune`, key: toolchain + compiler sources; saved and
+  trimmed to 1 GB by `compiler-integration`) with
+  `DUNE_CACHE=enabled-except-user-rules`. Dune reuses only outputs of its own
+  compilation rules, keyed by the digest of all their inputs; user rules, which
+  include generators and any rule that runs a program, always execute.
+
+The supported-major workflow cancels a superseded run of the same branch or pull
+request. Runs on `main` and scheduled runs are never cancelled.

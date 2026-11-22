@@ -2,6 +2,11 @@
 # runners (the migration shard runs as the parallel lanes declared in
 # scripts/ci-shards.py). The required gate accepts only the complete, successful
 # union for the checked revision; no shard alone means the repository is green.
+#
+# Caches restore only content-addressed inputs (the Nix store, Go module and
+# build caches, Dune's compilation cache). They are saved only by pushes to
+# main, by one job per key; dev-docs/migration-ci-performance.md explains why
+# none of them can change a check's result.
 name: CI
 
 on:
@@ -13,6 +18,11 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Reuse outputs of Dune's own compilation rules only; user rules (generators
+  # and any rule that runs a program) always execute.
+  DUNE_CACHE: enabled-except-user-rules
 
 jobs:
   shards:
@@ -29,6 +39,7 @@ jobs:
       GOMAXPROCS: '2'
       GOFLAGS: '-p=2'
       CI_JOB: ${{ matrix.job }}
+      CACHE_SAVE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,22 +68,104 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes
 
+      - name: Restore the Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          save: ${{ env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' }}
+          # Before saving, collect paths that the dev-shell profile root (created
+          # by the gate step below) does not reach, down to this size.
+          gc-max-store-size-linux: 5G
+
+      - name: Restore Go modules
+        id: go-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('runtime/go/go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+
+      - name: Restore the Go build cache
+        id: go-build
+        # The migration runner always uses its own private build cache.
+        if: env.CI_SHARD != 'migration'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: gobuild-${{ runner.os }}-
+
+      - name: Restore the migration runner's warmed Go cache
+        id: migration-go-cache
+        if: env.CI_SHARD == 'migration'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/migration-go-seed
+          key: migration-go-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: migration-go-${{ runner.os }}-
+
+      - name: Restore the Dune compilation cache
+        id: dune-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-${{ hashFiles('compiler/**/*.ml', 'compiler/**/*.mli', 'compiler/**/dune', 'compiler/dune-project') }}
+          restore-keys: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-
+
       - name: Run the declared gate shard
         env:
           TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
+          TESL_MIGRATION_GO_CACHE_SEED: ${{ runner.temp }}/migration-go-seed
+          TESL_MIGRATION_GO_CACHE_UPDATE: ${{ env.CACHE_SAVE == 'true' && matrix.job == 'migration-kernel' && steps.migration-go-cache.outputs.cache-hit != 'true' && '1' || '0' }}
         run: |
+          # The dev-shell profile is a garbage-collection root for the Nix cache.
           # Each shard gets a private cluster. Migration latency runs sequentially
           # in its own runner, after that runner's correctness workloads stopped.
           # Variables in the quoted script expand inside the Nix shell.
           # shellcheck disable=SC2016
-          nix develop --command bash -lc '
+          nix develop --profile "$RUNNER_TEMP/nix-dev-shell" --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
             unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
             unset TESL_TEST_POSTGRES_SHARED_HOST TESL_TEST_POSTGRES_SHARED_PORT TESL_TEST_POSTGRES_SHARED_USER TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE
+            # A restored build cache must never supply a test result.
+            go clean -testcache
             ./ci.sh --shard "$CI_SHARD" --expected-revision "$GITHUB_SHA" \
               --evidence-dir "$RUNNER_TEMP/ci-evidence" 2>&1 | tee "$RUNNER_TEMP/ci-shard.log"
           '
+
+      - name: Save Go modules
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' && steps.go-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ steps.go-modules.outputs.cache-primary-key }}
+
+      - name: Save the Go build cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' && steps.go-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build.outputs.cache-primary-key }}
+
+      - name: Save the migration runner's warmed Go cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'migration-kernel' && steps.migration-go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/migration-go-seed
+          key: ${{ steps.migration-go-cache.outputs.cache-primary-key }}
+
+      - name: Trim the Dune compilation cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'compiler-integration' && steps.dune-cache.outputs.cache-hit != 'true'
+        run: nix develop --command dune cache trim --size=1GB
+
+      - name: Save the Dune compilation cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'compiler-integration' && steps.dune-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: ${{ steps.dune-cache.outputs.cache-primary-key }}
 
       - name: Retain source-bound shard receipts
         if: always()

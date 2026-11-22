@@ -138,6 +138,16 @@ runtime_test() {
 # multi-day cache retention otherwise accumulates gigabytes across these phases.
 export GOCACHE="$migration_tmp/go-build-cache"
 mkdir -p "$GOCACHE"
+# CI may hand over a previously warmed copy of this cache. Go's build cache is
+# keyed by the hash of every compilation input, so a stale entry is never used
+# for changed inputs; test results are expired so none can be replayed. The copy
+# is taken right after warming, before any phase has run a test.
+go_cache_seed="${TESL_MIGRATION_GO_CACHE_SEED:-}"
+if [[ -n "$go_cache_seed" && -d "$go_cache_seed" ]] && [[ -n "$(ls -A -- "$go_cache_seed")" ]]; then
+  cp -R -- "$go_cache_seed/." "$GOCACHE/"
+  rm -f -- "$GOCACHE/.tesl-migration-cache.json"
+fi
+go clean -testcache
 # Warm ordinary and race-instrumented standard-library/third-party dependencies
 # once. This only prepares artifacts; all actual test phases still run below.
 for instrumentation in normal race; do
@@ -145,6 +155,11 @@ for instrumentation in normal race; do
   if [[ "$instrumentation" == race ]]; then warm_flags=(-race); fi
   timeout --kill-after=30s 1800 go -C "$repo_root/runtime/go" list -test -export -deps -tags=tesl_migration_test "${warm_flags[@]}" ./teslrt >"$evidence/go-cache-warm-$instrumentation.log"
 done
+if [[ -n "$go_cache_seed" && ${TESL_MIGRATION_GO_CACHE_UPDATE:-0} == 1 ]]; then
+  rm -rf -- "$go_cache_seed"
+  mkdir -p -- "$go_cache_seed"
+  cp -R -- "$GOCACHE/." "$go_cache_seed/"
+fi
 python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
 if [[ "$lane_bootstrap" == true ]]; then
   # This runner needs compiler executables, but compiler-build belongs to
