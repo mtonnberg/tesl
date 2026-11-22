@@ -87,101 +87,39 @@ jobs:
             experimental-features = nix-command flakes
       - name: Check finite models and required counterexamples
         run: nix develop .#migration-models --command bash scripts/check-migration-models.sh
-  core:
-    name: PostgreSQL ${{ matrix.postgres }} core protocol
+  # Lanes are the contiguous slices declared in scripts/ci-shards.py, shared
+  # with the CI workflow's migration shard. Lanes that do not consume the shared
+  # fixture bundle start at once; each lane owns a private cluster.
+  lanes:
+    name: PostgreSQL ${{ matrix.postgres }} migration lane ${{ matrix.lane }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       TESL_CI_JOBS: '2'
       GOMAXPROCS: '2'
       GOFLAGS: '-p=2'
-      TESL_MIGRATION_TEST_LANE: core
+      TESL_MIGRATION_TEST_LANE: ${{ matrix.lane }}
     strategy:
       fail-fast: false
       matrix:
+        lane: [kernel, runtime, schema, releases]
         postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
-      - name: Execute early checks while shared fixtures build
-        env:
-          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
-          TESL_MIGRATION_TEST_POOLERS: '1'
-          TESL_MIGRATION_TEST_CLUSTER_CRASH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
-          TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
-          POSTGRES_MAJOR: ${{ matrix.postgres }}
-          TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
-          TESL_MIGRATION_TEST_REQUIRE_POSTGRES: '1'
-        run: |
-          nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
-          cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
-          test -x "$cluster_toolchain/bin/pg_ctl"
-          export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
-          # Variables expand inside the Nix shell.
-          # shellcheck disable=SC2016
-          nix develop --command bash -c '
-            set -euo pipefail
-            export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
-            export TESL_REPO_ROOT="$PWD"
-            bash scripts/run-migration-tests.sh
-          '
-      - name: Retain core receipt and diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migration-core-pg${{ matrix.postgres }}-${{ github.sha }}
-          path: ${{ runner.temp }}/migration-evidence
-          if-no-files-found: error
-  lifecycle:
-    name: PostgreSQL ${{ matrix.postgres }} migration lifecycle
-    needs: [fixtures]
-    if: always() && !cancelled()
-    runs-on: ubuntu-latest
-    # Full shared gate: compiler/PostgreSQL suites, adversarial reviews and V1–V20.
-    # Individual scenario deadlines stay in the runner; this bounds their sum.
-    # The complete gate has taken over four hours on supported-major runners,
-    # including all twenty releases and the independent latency comparison.
-    timeout-minutes: 360
-    env:
-      TESL_CI_JOBS: '2'
-      GOMAXPROCS: '2'
-      GOFLAGS: '-p=2'
-      TESL_MIGRATION_TEST_LANE: lifecycle
-    strategy:
-      fail-fast: false
-      matrix:
-        postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
-    steps:
-      - name: Require the selected fixture producer outcome
-        if: needs.fixtures.result != 'success' && !(github.event_name == 'workflow_dispatch' && !inputs.reuse_fixtures && needs.fixtures.result == 'skipped')
-        run: |
-          echo "::error::Shared fixture build failed; database verification cannot be skipped or replaced."
-          exit 1
       - uses: actions/checkout@v4
         with:
           # The latency gate independently builds its pinned baseline commit.
           fetch-depth: 0
+      - name: Plan this lane's prerequisites
+        id: lane
+        run: python3 scripts/migration-lanes.py plan --lane '${{ matrix.lane }}' >> "$GITHUB_OUTPUT"
       - name: Fetch the exact migration latency baseline
+        if: steps.lane.outputs.latency == 'true'
         run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
-      - uses: actions/download-artifact@v4
-        if: needs.fixtures.result == 'success'
-        with:
-          name: migration-fixtures-${{ github.sha }}
-          path: ${{ runner.temp }}/migration-fixture-download
-      - name: Unpack shared fixtures
-        if: needs.fixtures.result == 'success'
-        run: |
-          mkdir "$RUNNER_TEMP/migration-fixtures"
-          tar -xzf "$RUNNER_TEMP/migration-fixture-download/migration-fixtures.tar.gz" -C "$RUNNER_TEMP/migration-fixtures"
-          echo "TESL_MIGRATION_PREBUILT=$RUNNER_TEMP/migration-fixtures" >> "$GITHUB_ENV"
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
         with:
           extra-conf: |
             experimental-features = nix-command flakes
-      - name: Execute the complete migration gate on matching-major private clusters
+      - name: Execute this lane's migration phases on a matching-major private cluster
         env:
           TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
           TESL_MIGRATION_TEST_POOLERS: '1'
@@ -206,16 +144,95 @@ jobs:
       - name: Summarize measured phase and fixture times
         if: always()
         run: python3 scripts/migration-ci-artifacts.py summary --evidence "$RUNNER_TEMP/migration-evidence"
-      - name: Retain phase results and failure diagnostics
+      - name: Retain this lane's receipt and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migration-lifecycle-pg${{ matrix.postgres }}-${{ github.sha }}
+          name: migration-lane-${{ matrix.lane }}-pg${{ matrix.postgres }}-${{ github.sha }}
           path: ${{ runner.temp }}/migration-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
+  fixture-lanes:
+    name: PostgreSQL ${{ matrix.postgres }} migration lane ${{ matrix.lane }}
+    needs: [fixtures]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TESL_CI_JOBS: '2'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+      TESL_MIGRATION_TEST_LANE: ${{ matrix.lane }}
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [rollout]
+        postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}
+    steps:
+      - name: Require the selected fixture producer outcome
+        if: needs.fixtures.result != 'success' && !(github.event_name == 'workflow_dispatch' && !inputs.reuse_fixtures && needs.fixtures.result == 'skipped')
+        run: |
+          echo "::error::Shared fixture build failed; database verification cannot be skipped or replaced."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          # The latency gate independently builds its pinned baseline commit.
+          fetch-depth: 0
+      - name: Plan this lane's prerequisites
+        id: lane
+        run: python3 scripts/migration-lanes.py plan --lane '${{ matrix.lane }}' >> "$GITHUB_OUTPUT"
+      - name: Fetch the exact migration latency baseline
+        if: steps.lane.outputs.latency == 'true'
+        run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
+      - uses: actions/download-artifact@v4
+        if: needs.fixtures.result == 'success'
+        with:
+          name: migration-fixtures-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-fixture-download
+      - name: Unpack shared fixtures
+        if: needs.fixtures.result == 'success'
+        run: |
+          mkdir "$RUNNER_TEMP/migration-fixtures"
+          tar -xzf "$RUNNER_TEMP/migration-fixture-download/migration-fixtures.tar.gz" -C "$RUNNER_TEMP/migration-fixtures"
+          echo "TESL_MIGRATION_PREBUILT=$RUNNER_TEMP/migration-fixtures" >> "$GITHUB_ENV"
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+      - name: Execute this lane's migration phases on a matching-major private cluster
+        env:
+          TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
+          TESL_MIGRATION_TEST_POOLERS: '1'
+          TESL_MIGRATION_TEST_CLUSTER_CRASH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
+          TESL_MIGRATION_TEST_TRACE_SCALE: ${{ github.event_name == 'schedule' && '8' || '1' }}
+          POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+          TESL_MIGRATION_TEST_REQUIRE_POSTGRES: '1'
+        run: |
+          nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+          cluster_toolchain="$(nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$nixpkgs_rev#postgresql_$POSTGRES_MAJOR^out")"
+          test -x "$cluster_toolchain/bin/pg_ctl"
+          export TESL_MIGRATION_CLUSTER_BIN="$cluster_toolchain/bin"
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
+          nix develop --command bash -c '
+            set -euo pipefail
+            export PATH="$TESL_MIGRATION_CLUSTER_BIN:$PATH"
+            export TESL_REPO_ROOT="$PWD"
+            bash scripts/run-migration-tests.sh
+          '
+      - name: Summarize measured phase and fixture times
+        if: always()
+        run: python3 scripts/migration-ci-artifacts.py summary --evidence "$RUNNER_TEMP/migration-evidence"
+      - name: Retain this lane's receipt and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-lane-${{ matrix.lane }}-pg${{ matrix.postgres }}-${{ github.sha }}
+          path: ${{ runner.temp }}/migration-evidence
+          if-no-files-found: error
   protocol:
     name: PostgreSQL ${{ matrix.postgres }} protocol and race tests
-    needs: [core, lifecycle]
+    needs: [lanes, fixture-lanes]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -227,15 +244,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: migration-*-pg${{ matrix.postgres }}-${{ github.sha }}
+          pattern: migration-lane-*-pg${{ matrix.postgres }}-${{ github.sha }}
           path: ${{ runner.temp }}/migration-lanes
       - name: Verify complete same-source phase union
         env:
-          MIGRATION_CORE_RESULT: ${{ needs.core.result }}
-          MIGRATION_LIFECYCLE_RESULT: ${{ needs.lifecycle.result }}
+          MIGRATION_LANES_RESULT: ${{ needs.lanes.result }}
+          MIGRATION_FIXTURE_LANES_RESULT: ${{ needs.fixture-lanes.result }}
         run: |
           python3 scripts/migration-lanes.py verify --postgres '${{ matrix.postgres }}' \
             --revision "$GITHUB_SHA" --directory "$RUNNER_TEMP/migration-lanes" \
+            --upstream "$MIGRATION_LANES_RESULT" --upstream "$MIGRATION_FIXTURE_LANES_RESULT" \
             > "$RUNNER_TEMP/migration-union.json"
       - uses: actions/upload-artifact@v4
         with:

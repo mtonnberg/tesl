@@ -23,15 +23,15 @@ the checks which make the existing migration protocol safe.
 
 ## CI coverage and scheduling
 
-`scripts/migration-lanes.py` derives both lane inventories from the existing
-authoritative migration inventory. The split is immediately before
-`test_migration_row_indexes`: it allows kernel and early compiler/runtime work
-to overlap the shared producer. The original per-major required check name is
-retained by the final verification job.
+`scripts/migration-lanes.py` derives the lane inventories from the existing
+authoritative migration inventory. The two lanes described here have since been
+generalized to five contiguous lanes; see
+[Migration lanes](migration-ci-performance.md#migration-lanes). The original
+per-major required check name is retained by the final verification job.
 
-Both lanes own private PostgreSQL clusters. The lifecycle lane bootstraps its
-compiler and verifies copied artifacts; it does not claim a second compiler-build
-phase in the union. Receipts bind source revision/tree, PostgreSQL major, ordered
+Every lane owns a private PostgreSQL cluster. Lanes without `compiler-build`
+bootstrap their compiler; only lanes declared to reuse the shared bundle verify
+copied artifacts. No lane claims a second compiler-build phase in the union. Receipts bind source revision/tree, PostgreSQL major, ordered
 phase inventory and hashes of the actual phase evidence. Missing, reordered,
 duplicated, changed or failed work refuses. Failed upstream jobs cannot borrow
 old successful receipts. The default local and authoritative CI runner still

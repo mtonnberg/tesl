@@ -111,15 +111,16 @@ case "$CI_SHARD" in
     full|compiler-integration|go-runtime|migration) ;;
     *) printf 'unknown CI shard: %s\n' "$CI_SHARD" >&2; exit 2 ;;
 esac
-# A hosted migration shard may run one of two parallel lanes; the required gate
-# accepts either one complete migration run or both lanes.
+# A hosted migration shard may run one of the parallel lanes declared in
+# scripts/ci-shards.py; the required gate accepts either one complete migration
+# run or every lane.
 CI_LANE_ARGUMENTS=()
 if [ "$CI_SHARD" == migration ]; then
     export TESL_MIGRATION_TEST_LANE="${TESL_MIGRATION_TEST_LANE:-full}"
-    case "$TESL_MIGRATION_TEST_LANE" in
-        full|core|lifecycle) CI_LANE_ARGUMENTS=(--lane "$TESL_MIGRATION_TEST_LANE") ;;
-        *) printf 'unknown migration lane: %s\n' "$TESL_MIGRATION_TEST_LANE" >&2; exit 2 ;;
-    esac
+    if ! python3 "$SCRIPT_DIR/scripts/migration-lanes.py" phases --lane "$TESL_MIGRATION_TEST_LANE" >/dev/null 2>&1; then
+        printf 'unknown migration lane: %s\n' "$TESL_MIGRATION_TEST_LANE" >&2; exit 2
+    fi
+    CI_LANE_ARGUMENTS=(--lane "$TESL_MIGRATION_TEST_LANE")
 else
     unset TESL_MIGRATION_TEST_LANE
 fi

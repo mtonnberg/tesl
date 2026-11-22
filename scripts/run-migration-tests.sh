@@ -17,6 +17,24 @@ if [[ "$lane" != full && $# != 0 ]]; then
   exit 1
 fi
 selected_phases="$(python3 "$repo_root/scripts/migration-lanes.py" phases --lane "$lane")"
+# Per-lane runner prerequisites, derived from the lane declarations: a compiler
+# bootstrap when compiler-build runs in another lane, shared-fixture reuse only
+# in lanes declared to consume it, and the latency baseline only where
+# latency-regression runs.
+lane_plan="$(python3 "$repo_root/scripts/migration-lanes.py" plan --lane "$lane")"
+lane_bootstrap='' lane_prebuilt='' lane_latency=''
+while IFS='=' read -r key value; do
+  case "$key" in
+    bootstrap) lane_bootstrap="$value" ;;
+    prebuilt) lane_prebuilt="$value" ;;
+    latency) lane_latency="$value" ;;
+    *) echo "unknown migration lane prerequisite: $key" >&2; exit 1 ;;
+  esac
+done <<<"$lane_plan"
+if [[ -z "$lane_bootstrap" || -z "$lane_prebuilt" || -z "$lane_latency" ]]; then
+  echo 'incomplete migration lane prerequisites' >&2
+  exit 1
+fi
 unset TESL_PREBUILT_ROW_INDEX_PROGRAMS
 python3 "$repo_root/scripts/check-migration-pr.py"
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
@@ -31,7 +49,7 @@ for tool in "${required_tools[@]}"; do
 done
 # Fail before hours of database/build work when a squash merge or shallow clone
 # omitted the independent comparison input. Focused kernel runs do not need it.
-if (( $# == 0 )) && [[ "$lane" != core ]]; then
+if (( $# == 0 )) && [[ "$lane_latency" == true ]]; then
   python3 "$repo_root/scripts/compare-migration-latency.py" --prepare-baseline
 fi
 migration_tmp="$(mktemp -d "${TESL_MIGRATION_TEST_DATA_TMPDIR:-${TMPDIR:-/tmp}}/tesl-migration.XXXXXXXX")"
@@ -128,17 +146,17 @@ for instrumentation in normal race; do
   timeout --kill-after=30s 1800 go -C "$repo_root/runtime/go" list -test -export -deps -tags=tesl_migration_test "${warm_flags[@]}" ./teslrt >"$evidence/go-cache-warm-$instrumentation.log"
 done
 python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
-if [[ "$lane" == lifecycle ]]; then
-  # This runner needs compiler executables, but compiler-build belongs to core
-  # in the complete phase union. Bootstrap is measured separately, not credited
-  # as a duplicate successful phase.
+if [[ "$lane_bootstrap" == true ]]; then
+  # This runner needs compiler executables, but compiler-build belongs to
+  # another lane in the complete phase union. Bootstrap is measured separately,
+  # not credited as a duplicate successful phase.
   started=$SECONDS
   timeout --kill-after=30s 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}" >"$evidence/compiler-bootstrap.log" 2>&1
   printf '%s\n' "$((SECONDS - started))" >"$evidence/compiler-bootstrap-seconds.txt"
 fi
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
 release_args=()
-if [[ -n ${TESL_MIGRATION_PREBUILT:-} && "$lane" != core ]]; then
+if [[ -n ${TESL_MIGRATION_PREBUILT:-} && "$lane_prebuilt" == true ]]; then
   python3 "$repo_root/scripts/migration-ci-artifacts.py" restore \
     --bundle "$TESL_MIGRATION_PREBUILT" --output "$migration_tmp" \
     --evidence "$evidence/prebuilt-fixtures.json"

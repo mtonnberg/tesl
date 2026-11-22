@@ -98,7 +98,7 @@ must continue to run without competing test workloads.
 
 ## Isolated authoritative shards
 
-The hosted gate partitions its existing checks across four runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the Dune suite. The compiler suites that the shared migration runner runs as its own phases are plain executables, not `dune test` entries, so each runs once per gate; `test_suite_registration` refuses a suite that is in both places or in neither. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL. It runs as two parallel jobs, `migration-core` and `migration-lifecycle`, split at `test_migration_row_indexes` (the same partition the supported-major workflow uses); each has its own cluster. The gate accepts either one complete migration receipt or both lane receipts whose phase lists join, in order, into the complete inventory, and refuses a single lane, a duplicate lane, or a full run mixed with a lane.
+The hosted gate partitions its existing checks across isolated runners. The default `./ci.sh` remains the complete serial local gate. `compiler-integration` owns the 23 parent phases outside the Go gate, including the Dune suite. The compiler suites that the shared migration runner runs as its own phases are plain executables, not `dune test` entries, so each runs once per gate; `test_suite_registration` refuses a suite that is in both places or in neither. `go-runtime` owns the Go gate's static/build/unit/race/fuzz/CLI checks and bootstraps only the compiler executable. `migration` owns the complete shared migration runner, now 61 mandatory phases with private PostgreSQL. It runs as five parallel lane jobs (see [Migration lanes](#migration-lanes)); each has its own cluster. The gate accepts either one complete migration receipt or one receipt for every lane whose phase lists join, in order, into the complete inventory, and refuses a missing lane, a duplicate lane, or a full run mixed with lanes.
 
 Race-instrumented programs default to sleeping one second before exit (`GORACE=atexit_sleep_ms=1000`). The gates start many short-lived schema commands and generated tests, so `ci.sh` and the migration runner set `atexit_sleep_ms=0` unless `GORACE` is already set; a detected race still fails with exit code 66. On the queue release runner this removed about one second per spawned process (about 90 of 400 seconds).
 
@@ -109,3 +109,48 @@ Each shard records the exact commit, tree, clean tracked source and phase invent
 Use `./ci.sh --list-phases` or `./ci.sh --shard migration --list-phases` to inspect the plan. Explicit shard execution requires clean committed source and emits a source-bound receipt; one shard alone is not a green gate. Fresh complete workflow wall times, including startup and final export, are required before assigning any speedup factor. No assertion, timing budget or supported-major check was removed.
 
 The failed predecessor run spent 4,155 seconds in Dune before reporting an early diagnostic-anchor registry failure. The Dune phase now runs that existing small registry check first, while retaining the full suite, so broken help links fail promptly.
+
+## Migration lanes
+
+`scripts/ci-shards.py` declares the lanes once (`MIGRATION_LANE_STARTS`): each
+is a contiguous slice of the declared phase order, named by its first phase. The
+CI workflow's migration shard (dev-shell PostgreSQL 17) and every major of the
+supported-major workflow (PostgreSQL 14 and 18 per push, 14–18 nightly) run the
+same five lanes. `full` remains the one-job local run of all 61 phases.
+
+Durations are the measured phase seconds of the last complete hosted run on
+PostgreSQL 17, without prebuilt fixtures. "Setup" is runner start, Nix, cache
+restore, Go cache warm-up and (outside `kernel`) the compiler bootstrap; it was
+about 17 minutes per job before the caches below and is expected to be 5–10
+minutes with warm caches.
+
+| Lane | Phases | Measured phase time | Expected job time |
+|---|---|---:|---:|
+| `kernel` | `compiler-build`, `kernel` | 1,940s (32 min) | ~40 min |
+| `runtime` | `control` … `test_migration_row_access` (26 phases) | 2,865s (48 min) | ~57 min |
+| `schema` | `test_migration_delete` … `row-retirement` (23 phases) | 2,963s (49 min) | ~58 min |
+| `releases` | `row-releases` … `review11` (6 phases) | 2,473s (41 min) | ~50 min |
+| `rollout` | `twenty-releases`, `rolling-workload-smoke`, `latency-statistics`, `latency-regression` | 2,095s (35 min) | ~44 min; matrix: after the fixture job, with prebuilt releases |
+
+Four lanes cannot reach an hour: `kernel` alone is 32 minutes, and `review05` /
+`review11` read the row and queue release builds of their own runner, so
+`row-releases` … `review11` (41 minutes) cannot be split. The verifier refuses a
+declaration that splits such a cohort (`MIGRATION_LANE_COHORTS`).
+
+Lane prerequisites follow from the declaration (`scripts/migration-lanes.py plan`):
+
+- Every lane except `kernel` bootstraps the compiler first. That build is logged
+  separately (`compiler-bootstrap.log`) and is not credited as a second
+  `compiler-build` phase.
+- Only `rollout` runs `latency-regression`, so only it fetches the pinned latency
+  baseline. Latency still runs last in its runner, after that runner's
+  correctness workloads have stopped.
+- In the supported-major workflow only `rollout` waits for the shared fixture
+  job and restores its verified bundle (`MIGRATION_PREBUILT_LANES`). The other
+  lanes start at once and build their own fixtures, exactly as the CI workflow
+  always does. Waiting about 20 minutes for the bundle would make `releases` the
+  longest job; reuse saves the most in `twenty-releases`.
+- The per-major verification job ("PostgreSQL N protocol and race tests") always
+  runs after both lane jobs and requires both job results and exactly one
+  receipt per lane whose phases join into the complete inventory.
+

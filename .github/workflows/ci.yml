@@ -1,6 +1,7 @@
-# The same complete ci.sh gate runs locally in serial and on four isolated
-# hosted runners (the migration shard runs as two parallel lanes). The required gate accepts only the complete, successful union
-# for the checked revision; no shard alone means the repository is green.
+# The same complete ci.sh gate runs locally in serial and on isolated hosted
+# runners (the migration shard runs as the parallel lanes declared in
+# scripts/ci-shards.py). The required gate accepts only the complete, successful
+# union for the checked revision; no shard alone means the repository is green.
 name: CI
 
 on:
@@ -21,14 +22,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [compiler-integration, go-runtime, migration-core, migration-lifecycle]
+        job: [compiler-integration, go-runtime, migration-kernel, migration-runtime, migration-schema, migration-releases, migration-rollout]
     env:
       CI: 'true'
       TESL_CI_JOBS: '2'
       GOMAXPROCS: '2'
       GOFLAGS: '-p=2'
-      CI_SHARD: ${{ startsWith(matrix.job, 'migration-') && 'migration' || matrix.job }}
-      TESL_MIGRATION_TEST_LANE: ${{ matrix.job == 'migration-core' && 'core' || matrix.job == 'migration-lifecycle' && 'lifecycle' || '' }}
+      CI_JOB: ${{ matrix.job }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,8 +36,19 @@ jobs:
           # The migration latency comparison builds its pinned historical base.
           fetch-depth: 0
 
+      - name: Select the shard and migration lane
+        id: lane
+        run: |
+          case "$CI_JOB" in
+            migration-*)
+              lane="${CI_JOB#migration-}"
+              { echo "CI_SHARD=migration"; echo "TESL_MIGRATION_TEST_LANE=$lane"; } >> "$GITHUB_ENV"
+              python3 scripts/migration-lanes.py plan --lane "$lane" >> "$GITHUB_OUTPUT" ;;
+            *) echo "CI_SHARD=$CI_JOB" >> "$GITHUB_ENV" ;;
+          esac
+
       - name: Fetch the exact migration latency baseline
-        if: matrix.job == 'migration-lifecycle'
+        if: steps.lane.outputs.latency == 'true'
         run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
 
       - name: Install Nix (flakes enabled)
@@ -51,7 +62,9 @@ jobs:
           TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
         run: |
           # Each shard gets a private cluster. Migration latency runs sequentially
-          # in its own runner, after its correctness workloads have stopped.
+          # in its own runner, after that runner's correctness workloads stopped.
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
           nix develop --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
