@@ -314,7 +314,7 @@ func TestTesl0(teslT *testing.T) {
 //line emit-incidentals-regressions.tesl:43
 		if teslLeft1 != "rich" {
 //line emit-incidentals-regressions.tesl:43
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "rich")
 		}
 		{
 //line emit-incidentals-regressions.tesl:44
@@ -324,13 +324,13 @@ func TestTesl0(teslT *testing.T) {
 //line emit-incidentals-regressions.tesl:45
 			if teslLeft2 != "text" {
 //line emit-incidentals-regressions.tesl:45
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "text")
 			}
 			teslLeft3 := bodyKind(teslrt.EmailBody{Tag: teslrt.EmailBodyHTML, HTML: "<i>h</i>"})
 //line emit-incidentals-regressions.tesl:46
 			if teslLeft3 != "html" {
 //line emit-incidentals-regressions.tesl:46
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "html")
 			}
 		}
 	}
@@ -352,7 +352,7 @@ func TestTesl1(teslT *testing.T) {
 //line emit-incidentals-regressions.tesl:58
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(7)) {
 //line emit-incidentals-regressions.tesl:58
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 }
 
@@ -376,7 +376,7 @@ func TestTesl2(teslT *testing.T) {
 //line emit-incidentals-regressions.tesl:63
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(15)) {
 //line emit-incidentals-regressions.tesl:63
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(15)))
 		}
 	}
 }

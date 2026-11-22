@@ -142,8 +142,8 @@ let parse_query src =
 (* A query's lowering, reduced to the facts a spelling must not change. *)
 type lowered = {
   order   : (string * string) option;
-  limit   : int option;
-  offset  : int option;
+  limit   : Ast.sql_bound option;
+  offset  : Ast.sql_bound option;
   clauses : int;
 }
 
@@ -165,8 +165,8 @@ let lower label src =
 let pp_lowered l =
   Printf.sprintf "{order=%s; limit=%s; offset=%s; clauses=%d}"
     (match l.order with None -> "-" | Some (f, d) -> f ^ " " ^ d)
-    (match l.limit with None -> "-" | Some n -> string_of_int n)
-    (match l.offset with None -> "-" | Some n -> string_of_int n)
+    (match l.limit with None -> "-" | Some (Ast.BoundLiteral n) -> string_of_int n | Some (Ast.BoundExpr _) -> "expr")
+    (match l.offset with None -> "-" | Some (Ast.BoundLiteral n) -> string_of_int n | Some (Ast.BoundExpr _) -> "expr")
     l.clauses
 
 let assert_same_lowering label ~one_line ~multi_line =
@@ -270,13 +270,18 @@ fn q(org: String) -> Int requires [dbRead Thing] =
 
 (* ── 4. The class: an unlowerable query fails at CHECK, with the cause ───── *)
 
-(* `limit`/`offset` are lowered from an integer literal only.  Before the gate
-   this shape reached codegen, fell through to ordinary application and emitted
-   free variables; `tesl check` said nothing. *)
+(* `limit`/`offset` may be an Int expression: a page size the request
+   chose is bound as a statement parameter.  Before #77 a variable fell through to ordinary
+   application; then it was refused at check; now it lowers.  A non-Int bound is a type error. *)
 let test_non_literal_limit_rejected_at_check () =
-  should_fail "a variable `limit`" ~expect:"lowered from an integer literal"
-    {|
+  let code, out = check {|
 fn q(org: String, n: Int) -> List Thing requires [dbRead Thing] =
+  select t from Thing where t.orgId == org order t.name asc limit n offset n
+|} in
+  if code <> 0 then failf "a variable `limit`/`offset` must check clean:\n%s" out;
+  should_fail "a String `limit`" ~expect:"cannot unify"
+    {|
+fn q(org: String, n: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org order t.name asc limit n
 |}
 

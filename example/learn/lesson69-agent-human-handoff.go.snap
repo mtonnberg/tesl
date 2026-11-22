@@ -203,13 +203,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson69-agent-human-handoff.tesl:157
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson69-agent-human-handoff.tesl:157
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			teslLeft2 := teslrt.ListLength(humanOnly(user))
 //line lesson69-agent-human-handoff.tesl:158
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line lesson69-agent-human-handoff.tesl:158
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -247,13 +247,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson69-agent-human-handoff.tesl:169
 					if teslLeft3 != "That needs an admin \xe2\x80\x94 I've put a Wipe button in front of you." {
 //line lesson69-agent-human-handoff.tesl:169
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "That needs an admin \xe2\x80\x94 I've put a Wipe button in front of you.")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(teslrt.TurnReply(turn1))
 //line lesson69-agent-human-handoff.tesl:170
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line lesson69-agent-human-handoff.tesl:170
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -301,7 +301,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson69-agent-human-handoff.tesl:185
 							if teslLeft5 != "Done \xe2\x80\x94 your notes were wiped." {
 //line lesson69-agent-human-handoff.tesl:185
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "Done \xe2\x80\x94 your notes were wiped.")
 							}
 						}
 					}

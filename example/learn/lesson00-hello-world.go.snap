@@ -58,13 +58,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson00-hello-world.tesl:32
 	if teslLeft1 != "Hello, World!" {
 //line lesson00-hello-world.tesl:32
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "Hello, World!")
 	}
 	teslLeft2 := Greet("Tesl")
 //line lesson00-hello-world.tesl:33
 	if teslLeft2 != "Hello, Tesl!" {
 //line lesson00-hello-world.tesl:33
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "Hello, Tesl!")
 	}
 }
 
@@ -84,7 +84,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson00-hello-world.tesl:37
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 //line lesson00-hello-world.tesl:37
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	{
 //line lesson00-hello-world.tesl:38
@@ -94,13 +94,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson00-hello-world.tesl:39
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line lesson00-hello-world.tesl:39
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft5 := Add(teslrt.FromInt64(10), teslrt.FromInt64(-3))
 //line lesson00-hello-world.tesl:40
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(7)) {
 //line lesson00-hello-world.tesl:40
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(7)))
 		}
 	}
 }

@@ -196,21 +196,27 @@ fn mintSession(user: String) -> String requires [sessions] =
 
 # `publicOrigin` turns on a Host-header check server-wide (Risk 50/60: without
 # it, a forged Host could make the app mint links/cookies for another origin).
-# api-test's simulated request sends no Host header by default, so every call
-# below has to carry one that matches — this is not an SSO-specific quirk, any
-# publicOrigin-declaring server's api-tests need it.
-fn onHost() -> Dict String String =
-  Dict.singleton "Host" "app.example.com"
+# An api-test request that names no Host is addressed to the app's own origin,
+# exactly as a real client of the deployed app would address it — so the calls
+# below need no Host header.  A test that DOES send one keeps it, which is how
+# the refusal itself is tested:
+fn otherHost() -> Dict String String =
+  Dict.singleton "Host" "attacker.example.net"
 
 # ── Technique 1: mint the session directly — no IdP, no network, no stub ────
 
+api-test "a request for another origin is refused before any route runs" for AppServer requires [sessions] {
+  let resp = get "/me" headers (otherHost())
+  expect resp.status == 421
+}
+
 api-test "no session cookie is a 401, not a 500" for AppServer requires [sessions] {
-  let resp = get "/me" headers (onHost())
+  let resp = get "/me"
   expect resp.status == 401
 }
 
 api-test "a session minted with the app's own key reaches the protected route" for AppServer requires [sessions] {
-  let resp = get "/me" cookie { "__Host-session": mintSession "u-42" } headers (onHost())
+  let resp = get "/me" cookie { "__Host-session": mintSession "u-42" }
   expect statusOk resp.status
   expect resp.body.userId == "u-42"
 }
@@ -218,7 +224,7 @@ api-test "a session minted with the app's own key reaches the protected route" f
 # ── Technique 2: stub the login redirect ────────────────────────────────────
 
 api-test "GitHub login redirects straight to GitHub — no network call needed" for AppServer requires [sessions] {
-  let resp = get "/auth/github/login" headers (onHost())
+  let resp = get "/auth/github/login"
   expect resp.status == 303
   case Dict.lookup "location" resp.headers of
     Nothing -> expect False
@@ -231,7 +237,7 @@ api-test "a generic OIDC issuer is discovered, then redirected to" for AppServer
   stubHttp "GET" "https://idp.example.test/.well-known/openid-configuration" 200
     "{\"issuer\": \"https://idp.example.test\", \"authorization_endpoint\": \"https://idp.example.test/authorize\", \"token_endpoint\": \"https://idp.example.test/token\", \"jwks_uri\": \"https://idp.example.test/jwks\", \"code_challenge_methods_supported\": [\"S256\"]}"
 
-  let resp = get "/auth/idp/login" headers (onHost())
+  let resp = get "/auth/idp/login"
   expect resp.status == 303
   expect httpCalled "GET" "https://idp.example.test/.well-known/openid-configuration"
   case Dict.lookup "location" resp.headers of
@@ -243,7 +249,7 @@ api-test "a generic OIDC issuer is discovered, then redirected to" for AppServer
 # ── Technique 3: stub the whole callback (plain-OAuth2 providers only) ──────
 
 api-test "GitHub login all the way through: redirect, code exchange, real session" for AppServer requires [httpClient, sessions] {
-  let loginResp = get "/auth/github/login" headers (onHost())
+  let loginResp = get "/auth/github/login"
   let location = case Dict.lookup "location" loginResp.headers of
     Nothing -> ""
     Something loc -> loc
@@ -263,13 +269,13 @@ api-test "GitHub login all the way through: redirect, code exchange, real sessio
     "[{\"email\": \"ada@example.com\", \"primary\": true, \"verified\": true}]"
 
   let callbackPath = "/auth/github/callback?code=test-code-1&state=" ++ state
-  let cb = get callbackPath cookie oauthCookie headers (onHost())
+  let cb = get callbackPath cookie oauthCookie
   expect cb.status == 303
 
   case responseCookie cb of
     Nothing -> expect False
     Something sessionCookie ->
-      let profileResp = get "/me" cookie sessionCookie headers (onHost())
+      let profileResp = get "/me" cookie sessionCookie
       expect statusOk profileResp.status
       # The issuer-scoped key for (https://api.github.com, 12345).
       expect profileResp.body.userId == "8ac406c2b4ecea8f381d2a0023a65442c2d700301c19be17c96e354587b979a2"

@@ -184,7 +184,7 @@ func TestTesl0(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:78
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(6)) {
 //line critical-review-48-conjunction-regression.tesl:78
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(6)))
 			}
 		}
 	}
@@ -232,7 +232,7 @@ func TestTesl2(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:88
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(52)) {
 //line critical-review-48-conjunction-regression.tesl:88
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(52)))
 			}
 		}
 	}
@@ -298,7 +298,7 @@ func TestTesl5(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:102
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 //line critical-review-48-conjunction-regression.tesl:102
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -328,7 +328,7 @@ func TestTesl6(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:108
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(101)) {
 //line critical-review-48-conjunction-regression.tesl:108
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(101)))
 			}
 		}
 	}
@@ -358,7 +358,7 @@ func TestTesl7(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:114
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(53)) {
 //line critical-review-48-conjunction-regression.tesl:114
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(53)))
 			}
 		}
 	}
@@ -442,7 +442,7 @@ func TestTesl11(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:132
 			if !teslrt.Equal(teslLeft6, teslrt.FromInt64(4)) {
 //line critical-review-48-conjunction-regression.tesl:132
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(4)))
 			}
 		}
 	}
@@ -472,7 +472,7 @@ func TestTesl12(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:138
 			if !teslrt.Equal(teslLeft7, teslrt.FromInt64(6)) {
 //line critical-review-48-conjunction-regression.tesl:138
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(6)))
 			}
 		}
 	}
@@ -520,7 +520,7 @@ func TestTesl14(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:148
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(52)) {
 //line critical-review-48-conjunction-regression.tesl:148
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(52)))
 			}
 		}
 	}
@@ -586,7 +586,7 @@ func TestTesl17(teslT *testing.T) {
 //line critical-review-48-conjunction-regression.tesl:162
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(52)) {
 //line critical-review-48-conjunction-regression.tesl:162
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(52)))
 			}
 		}
 	}

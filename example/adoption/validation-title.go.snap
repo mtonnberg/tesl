@@ -85,7 +85,7 @@ func TestTesl0(teslT *testing.T) {
 //line validation-title.tesl:32
 	if teslLeft1 != "Read" {
 //line validation-title.tesl:32
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "Read")
 	}
 }
 
@@ -131,13 +131,13 @@ func TestTesl2(teslT *testing.T) {
 //line validation-title.tesl:42
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(120)) {
 //line validation-title.tesl:42
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(120)))
 		}
 		teslLeft3 := CreateTitle(longest)
 //line validation-title.tesl:43
 		if teslLeft3 != longest {
 //line validation-title.tesl:43
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, longest)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func TestTesl3(teslT *testing.T) {
 //line validation-title.tesl:48
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(121)) {
 //line validation-title.tesl:48
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(121)))
 		}
 //line validation-title.tesl:49
 		teslExpectFailure(teslT, func() {

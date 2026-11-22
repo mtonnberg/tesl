@@ -1290,7 +1290,9 @@ let () =
           (match out_file with
            | None -> print_endline output
            | Some f ->
-             let oc = Out_channel.open_text f in
+             (* `--out` may name a directory that does not exist yet. *)
+            ensure_directory (Filename.dirname f);
+            let oc = Out_channel.open_text f in
              Out_channel.output_string oc output;
              Out_channel.output_char oc '\n';
              Out_channel.close oc);
@@ -1318,6 +1320,8 @@ let () =
          (match out_file with
           | None -> print_string output
           | Some f ->
+            (* `--out` may name a directory that does not exist yet. *)
+            ensure_directory (Filename.dirname f);
             let oc = Out_channel.open_text f in
             Out_channel.output_string oc output;
             Out_channel.close oc);
@@ -1366,6 +1370,8 @@ let () =
          (match out_file with
           | None -> print_string output
           | Some f ->
+            (* `--out` may name a directory that does not exist yet. *)
+            ensure_directory (Filename.dirname f);
             let oc = Out_channel.open_text f in
             Out_channel.output_string oc output;
             Out_channel.close oc);

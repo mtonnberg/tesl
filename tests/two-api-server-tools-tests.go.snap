@@ -250,7 +250,7 @@ func TestTesl0(teslT *testing.T) {
 //line two-api-server-tools-tests.tesl:131
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(2)) {
 //line two-api-server-tools-tests.tesl:131
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 		}
 	}
@@ -280,7 +280,7 @@ func TestTesl1(teslT *testing.T) {
 //line two-api-server-tools-tests.tesl:139
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(3)) {
 //line two-api-server-tools-tests.tesl:139
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -322,13 +322,13 @@ func TestTesl2(teslT *testing.T) {
 //line two-api-server-tools-tests.tesl:150
 						if teslLeft3 != "Greeted." {
 //line two-api-server-tools-tests.tesl:150
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "Greeted.")
 						}
 						teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line two-api-server-tools-tests.tesl:151
 						if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line two-api-server-tools-tests.tesl:151
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -373,13 +373,13 @@ func TestTesl3(teslT *testing.T) {
 //line two-api-server-tools-tests.tesl:163
 						if teslLeft5 != "I cannot do that." {
 //line two-api-server-tools-tests.tesl:163
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "I cannot do that.")
 						}
 						teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line two-api-server-tools-tests.tesl:164
 						if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
 //line two-api-server-tools-tests.tesl:164
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}

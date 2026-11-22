@@ -230,19 +230,19 @@ func TestTesl0(teslT *testing.T) {
 //line api-auth-sum-type-tests.tesl:128
 	if teslLeft1 != "human:bob" {
 //line api-auth-sum-type-tests.tesl:128
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "human:bob")
 	}
 	teslLeft2 := describe(Caller{Tag: CallerAppActs, AppActsValue: "ci"})
 //line api-auth-sum-type-tests.tesl:129
 	if teslLeft2 != "app:ci" {
 //line api-auth-sum-type-tests.tesl:129
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "app:ci")
 	}
 	teslLeft3 := describe(Caller{Tag: CallerSystemActs})
 //line api-auth-sum-type-tests.tesl:130
 	if teslLeft3 != "system" {
 //line api-auth-sum-type-tests.tesl:130
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "system")
 	}
 }
 
@@ -270,7 +270,7 @@ func TestTesl1(teslT *testing.T) {
 //line api-auth-sum-type-tests.tesl:136
 			if teslLeft4 != "tenant:acme" {
 //line api-auth-sum-type-tests.tesl:136
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "tenant:acme")
 			}
 		}
 	}
@@ -395,7 +395,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line api-auth-sum-type-tests.tesl:124
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
 //line api-auth-sum-type-tests.tesl:124
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }

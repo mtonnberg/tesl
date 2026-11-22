@@ -1092,7 +1092,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line chat-backend.tesl:416
 									if teslLeft1 != roomId {
 //line chat-backend.tesl:416
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, roomId)
 									}
 //line chat-backend.tesl:417
 									if !teslrt.JsonEqual(teslrt.JsonFieldOf(posted.Body, "userId"), userId) {
@@ -1127,7 +1127,7 @@ func TestTeslApi1(teslT *testing.T) {
 //line chat-backend.tesl:424
 										if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line chat-backend.tesl:424
-											teslT.Fatal("Tesl expectation failed")
+											teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 										}
 //line chat-backend.tesl:425
 										if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody(teslrt.EncodeJSON(map[string]any{"id": teslEncode1(roomId), "name": teslEncode1(roomName)})).JsonRaw(), rooms.Body)) {
@@ -1349,7 +1349,7 @@ func TestTeslApi3(teslT *testing.T) {
 				_ = bobId
 				{
 //line chat-backend.tesl:484
-					stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(aliceId)))})
+					stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(aliceId)))}, nil)
 					_ = stream
 					defer teslrt.UnsubscribeStream(stream)
 					{
@@ -1365,7 +1365,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line chat-backend.tesl:489
 						if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
 //line chat-backend.tesl:489
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 						{
 //line chat-backend.tesl:491
@@ -1398,25 +1398,25 @@ func TestTeslApi3(teslT *testing.T) {
 //line chat-backend.tesl:493
 								if teslLeft4 != "bob" {
 //line chat-backend.tesl:493
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "bob")
 								}
 								teslLeft5 := job.RoomName
 //line chat-backend.tesl:494
 								if teslLeft5 != roomId {
 //line chat-backend.tesl:494
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, roomId)
 								}
 								teslLeft6 := job.Content
 //line chat-backend.tesl:495
 								if teslLeft6 != "Hello from Bob" {
 //line chat-backend.tesl:495
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Hello from Bob")
 								}
 								teslLeft7 := teslrt.PendingJobCount(NotificationQueueQueue)
 //line chat-backend.tesl:496
 								if !teslrt.Equal(teslLeft7, teslrt.FromInt64(0)) {
 //line chat-backend.tesl:496
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(0)))
 								}
 								{
 //line chat-backend.tesl:498
@@ -1477,7 +1477,7 @@ func TestTeslApi4(teslT *testing.T) {
 			_ = annaId
 			{
 //line chat-backend.tesl:512
-				stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(annaId)))})
+				stream := teslrt.SubscribeStream(ChatServer, ("/events/rooms/" + teslrt.ApiTestFragment(teslEncode1(roomId))), []string{("chatUserId=" + teslrt.ApiTestFragment(teslEncode1(annaId)))}, nil)
 				_ = stream
 				defer teslrt.UnsubscribeStream(stream)
 				{
@@ -1493,7 +1493,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line chat-backend.tesl:517
 					if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
 //line chat-backend.tesl:517
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 					{
 //line chat-backend.tesl:519
@@ -1595,7 +1595,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line chat-backend.tesl:530
 											if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
 //line chat-backend.tesl:530
-												teslT.Fatal("Tesl expectation failed")
+												teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(0)))
 											}
 											{
 //line chat-backend.tesl:532
@@ -1628,13 +1628,13 @@ func TestTeslApi4(teslT *testing.T) {
 //line chat-backend.tesl:534
 													if teslLeft10 != "anna" {
 //line chat-backend.tesl:534
-														teslT.Fatal("Tesl expectation failed")
+														teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "anna")
 													}
 													teslLeft11 := deadJob.RoomName
 //line chat-backend.tesl:535
 													if teslLeft11 != roomId {
 //line chat-backend.tesl:535
-														teslT.Fatal("Tesl expectation failed")
+														teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, roomId)
 													}
 													{
 //line chat-backend.tesl:537

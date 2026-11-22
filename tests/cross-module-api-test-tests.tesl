@@ -1,0 +1,20 @@
+module CrossModuleApiTestTests exposing []
+
+# api-tests may live in their own module, apart from the server
+# they drive.  The seed writes through the imported entity and the request goes
+# through the imported server, so both cross-module references are exercised.
+
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.ApiTest exposing [statusOk]
+import CrossModuleApiTestApp exposing [Note, NotesServer]
+
+api-test "an api-test drives a server declared in another module" for NotesServer requires [dbRead Note, dbWrite Note] {
+  seed {
+    insert Note { id: "n-1", title: "first" }
+  }
+  let found = get "/notes/n-1"
+  expect statusOk found.status
+  expect found.body == "first"
+  let missing = get "/notes/n-2"
+  expect missing.status == 404
+}

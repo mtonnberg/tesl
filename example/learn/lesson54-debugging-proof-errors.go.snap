@@ -147,7 +147,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson54-debugging-proof-errors.tesl:166
 		if result != "score: 75" {
 //line lesson54-debugging-proof-errors.tesl:166
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", result, "score: 75")
 		}
 	}
 }
@@ -197,7 +197,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson54-debugging-proof-errors.tesl:177
 				if result != "score: 40" {
 //line lesson54-debugging-proof-errors.tesl:177
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", result, "score: 40")
 				}
 			}
 		}
@@ -223,7 +223,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson54-debugging-proof-errors.tesl:182
 		if result != "score: 50" {
 //line lesson54-debugging-proof-errors.tesl:182
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", result, "score: 50")
 		}
 	}
 }

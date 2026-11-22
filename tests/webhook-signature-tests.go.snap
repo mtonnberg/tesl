@@ -270,7 +270,7 @@ func TestTesl0(teslT *testing.T) {
 //line webhook-signature-tests.tesl:187
 		if teslLeft1 != teslRight1 {
 //line webhook-signature-tests.tesl:187
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, teslRight1)
 		}
 //line webhook-signature-tests.tesl:188
 		if hexSignature(senderKey(), payload) == hexSignature(otherSenderKey(), payload) {
@@ -281,7 +281,7 @@ func TestTesl0(teslT *testing.T) {
 //line webhook-signature-tests.tesl:190
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(64)) {
 //line webhook-signature-tests.tesl:190
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(64)))
 		}
 	}
 }
@@ -446,7 +446,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line webhook-signature-tests.tesl:235
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:235
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -474,7 +474,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line webhook-signature-tests.tesl:240
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:240
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -502,7 +502,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line webhook-signature-tests.tesl:247
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:247
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 		{
 //line webhook-signature-tests.tesl:248
@@ -512,7 +512,7 @@ func TestTeslApi4(teslT *testing.T) {
 //line webhook-signature-tests.tesl:249
 			if !teslrt.Equal(teslLeft6, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:249
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -553,7 +553,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line webhook-signature-tests.tesl:257
 					if !teslrt.Equal(teslLeft7, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:257
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(401)))
 					}
 				}
 			}
@@ -588,7 +588,7 @@ func TestTeslApi6(teslT *testing.T) {
 //line webhook-signature-tests.tesl:263
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:263
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -621,7 +621,7 @@ func TestTeslApi7(teslT *testing.T) {
 //line webhook-signature-tests.tesl:271
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:271
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -654,7 +654,7 @@ func TestTeslApi8(teslT *testing.T) {
 //line webhook-signature-tests.tesl:279
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:279
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -762,7 +762,7 @@ func TestTeslApi11(teslT *testing.T) {
 //line webhook-signature-tests.tesl:307
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:307
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 		{
 //line webhook-signature-tests.tesl:308
@@ -772,7 +772,7 @@ func TestTeslApi11(teslT *testing.T) {
 //line webhook-signature-tests.tesl:309
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:309
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -805,7 +805,7 @@ func TestTeslApi12(teslT *testing.T) {
 //line webhook-signature-tests.tesl:315
 			if !teslrt.Equal(teslLeft13, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:315
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -838,7 +838,7 @@ func TestTeslApi13(teslT *testing.T) {
 //line webhook-signature-tests.tesl:321
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:321
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -871,7 +871,7 @@ func TestTeslApi14(teslT *testing.T) {
 //line webhook-signature-tests.tesl:331
 			if !teslrt.Equal(teslLeft15, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:331
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -904,7 +904,7 @@ func TestTeslApi15(teslT *testing.T) {
 //line webhook-signature-tests.tesl:337
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:337
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 		}
 	}
@@ -937,7 +937,7 @@ func TestTeslApi16(teslT *testing.T) {
 //line webhook-signature-tests.tesl:345
 			if !teslrt.Equal(teslLeft17, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:345
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 			{
 //line webhook-signature-tests.tesl:346
@@ -947,7 +947,7 @@ func TestTeslApi16(teslT *testing.T) {
 //line webhook-signature-tests.tesl:347
 				if !teslrt.Equal(teslLeft18, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:347
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(401)))
 				}
 			}
 		}
@@ -981,7 +981,7 @@ func TestTeslApi17(teslT *testing.T) {
 //line webhook-signature-tests.tesl:353
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(401)) {
 //line webhook-signature-tests.tesl:353
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(401)))
 			}
 			{
 //line webhook-signature-tests.tesl:354

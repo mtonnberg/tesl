@@ -121,9 +121,66 @@ let () =
      without allowlisting it here fails the build. *)
   let standalone_executable_allowlist = []
   in
+  (* Suites the shared migration runner (scripts/run-migration-tests.sh) runs
+     as its own phases are plain executables: they build private PostgreSQL
+     clusters and generated applications, and running them again under the
+     compiler shard's `dune test` doubled that work without adding signal.
+     Read the runner's `compiler_test NAME` lines and its single
+     `for suite in ...; do compiler_test "$suite"` inventory. *)
+  let runner_names =
+    let rec find dir n =
+      let cand = Filename.concat (Filename.concat dir "scripts") "run-migration-tests.sh" in
+      if Sys.file_exists cand then Some cand
+      else if n > 8 then None
+      else let parent = Filename.dirname dir in
+        if parent = dir then None else find parent (n + 1)
+    in
+    match find test_dir 0 with
+    | None ->
+      Printf.eprintf "test_suite_registration: could not locate scripts/run-migration-tests.sh from %s\n" test_dir;
+      exit 2
+    | Some path ->
+      let text = In_channel.with_open_text path In_channel.input_all in
+      let lines = String.split_on_char '\n' text in
+      let direct = List.filter_map (fun line ->
+        match tokens_of line with
+        | ["compiler_test"; name] when is_test_name name -> Some name
+        | _ -> None) lines in
+      let find_from sub from =
+        let n = String.length sub and m = String.length text in
+        let rec go i = if i + n > m then None
+          else if String.sub text i n = sub then Some i else go (i + 1) in
+        go from
+      in
+      let loop = match find_from "for suite in" 0 with
+        | None -> []
+        | Some start ->
+          (match find_from "; do" start with
+           | None -> []
+           | Some stop -> List.filter is_test_name (tokens_of (String.sub text start (stop - start))))
+      in
+      direct @ loop
+  in
+  let in_run_stanza n = List.mem n run_stanza_names in
+  let doubled = List.filter in_run_stanza runner_names in
+  if doubled <> [] then begin
+    Printf.eprintf
+      "SUITE-RUN FAILURE: %d suite(s) run by scripts/run-migration-tests.sh are also in a \
+       (test)/(tests) stanza, so CI runs them twice:\n" (List.length doubled);
+    List.iter (fun n -> Printf.eprintf "  - test/%s.ml\n" n) doubled;
+    Printf.eprintf "Declare each as an (executable) in compiler/test/dune.\n";
+    exit 1
+  end;
+  let unknown = List.filter (fun n -> not (List.mem n on_disk)) runner_names in
+  if unknown <> [] then begin
+    Printf.eprintf "SUITE-RUN FAILURE: scripts/run-migration-tests.sh runs missing suites:\n";
+    List.iter (fun n -> Printf.eprintf "  - test/%s.ml\n" n) unknown;
+    exit 1
+  end;
   let not_run =
     List.filter (fun n ->
       not (List.mem n run_stanza_names)
+      && not (List.mem n runner_names)
       && not (List.mem n standalone_executable_allowlist)) on_disk
   in
   if not_run <> [] then begin

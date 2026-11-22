@@ -294,7 +294,7 @@ func TestTeslApi0(teslT *testing.T) {
 	}()
 	{
 //line lesson33-sse-and-queue-tests.tesl:129
-		stream := teslrt.SubscribeStream(Lesson33Server, "/events/user-1", nil)
+		stream := teslrt.SubscribeStream(Lesson33Server, "/events/user-1", nil, nil)
 		_ = stream
 		defer teslrt.UnsubscribeStream(stream)
 		{
@@ -310,7 +310,7 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson33-sse-and-queue-tests.tesl:133
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson33-sse-and-queue-tests.tesl:133
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			{
 //line lesson33-sse-and-queue-tests.tesl:135
@@ -343,13 +343,13 @@ func TestTeslApi0(teslT *testing.T) {
 //line lesson33-sse-and-queue-tests.tesl:137
 					if teslLeft2 != "user-1" {
 //line lesson33-sse-and-queue-tests.tesl:137
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "user-1")
 					}
 					teslLeft3 := teslrt.PendingJobCount(Lesson33QueueQueue)
 //line lesson33-sse-and-queue-tests.tesl:138
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
 //line lesson33-sse-and-queue-tests.tesl:138
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 					{
 //line lesson33-sse-and-queue-tests.tesl:140

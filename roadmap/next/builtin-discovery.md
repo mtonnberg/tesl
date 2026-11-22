@@ -30,9 +30,6 @@ Remaining before calling the broader discovery initiative complete:
   observed failed queries collected only with an explicit privacy design.
 - Export structured proofs/callback capabilities before adding requirement
   filters or extending shape matching to prose-only special forms.
-- Audit unquantified variables in builtin schemes (`Dict.map` uses `_k` but
-  quantifies `_r3_abc`). Search labels these `incomplete-scheme` and excludes them
-  from structural matching until the compiler metadata is corrected and tested.
 - Keep project/current-buffer symbol indexing a separate scoped design.
 
 The main `./ci.sh` remains the authoritative repository gate. The publishing

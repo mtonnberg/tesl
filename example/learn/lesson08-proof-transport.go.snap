@@ -105,7 +105,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson08-proof-transport.tesl:169
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
 //line lesson08-proof-transport.tesl:169
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslrt.FromInt64(1)), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -161,7 +161,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson08-proof-transport.tesl:180
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(31)) {
 //line lesson08-proof-transport.tesl:180
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(31)))
 			}
 		}
 	}
@@ -191,7 +191,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson08-proof-transport.tesl:186
 			if teslLeft3 != "age is 25" {
 //line lesson08-proof-transport.tesl:186
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "age is 25")
 			}
 		}
 	}

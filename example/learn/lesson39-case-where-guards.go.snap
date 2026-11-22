@@ -515,31 +515,31 @@ func TestTesl0(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:214
 	if teslLeft1 != "huge circle" {
 //line lesson39-case-where-guards.tesl:214
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "huge circle")
 	}
 	teslLeft2 := AreaCategory(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(25)})
 //line lesson39-case-where-guards.tesl:215
 	if teslLeft2 != "large circle" {
 //line lesson39-case-where-guards.tesl:215
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "large circle")
 	}
 	teslLeft3 := AreaCategory(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(10)})
 //line lesson39-case-where-guards.tesl:216
 	if teslLeft3 != "medium circle" {
 //line lesson39-case-where-guards.tesl:216
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "medium circle")
 	}
 	teslLeft4 := AreaCategory(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(3)})
 //line lesson39-case-where-guards.tesl:217
 	if teslLeft4 != "small circle" {
 //line lesson39-case-where-guards.tesl:217
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "small circle")
 	}
 	teslLeft5 := AreaCategory(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(0)})
 //line lesson39-case-where-guards.tesl:218
 	if teslLeft5 != "small circle" {
 //line lesson39-case-where-guards.tesl:218
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "small circle")
 	}
 }
 
@@ -559,25 +559,25 @@ func TestTesl1(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:222
 	if teslLeft6 != "square" {
 //line lesson39-case-where-guards.tesl:222
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "square")
 	}
 	teslLeft7 := AreaCategory(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(40), RectangleHeight: teslrt.FromInt64(40)})
 //line lesson39-case-where-guards.tesl:223
 	if teslLeft7 != "square" {
 //line lesson39-case-where-guards.tesl:223
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "square")
 	}
 	teslLeft8 := AreaCategory(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(35), RectangleHeight: teslrt.FromInt64(32)})
 //line lesson39-case-where-guards.tesl:224
 	if teslLeft8 != "large rectangle" {
 //line lesson39-case-where-guards.tesl:224
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "large rectangle")
 	}
 	teslLeft9 := AreaCategory(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(10), RectangleHeight: teslrt.FromInt64(20)})
 //line lesson39-case-where-guards.tesl:225
 	if teslLeft9 != "small rectangle" {
 //line lesson39-case-where-guards.tesl:225
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "small rectangle")
 	}
 }
 
@@ -597,13 +597,13 @@ func TestTesl2(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:229
 	if teslLeft10 != "triangle" {
 //line lesson39-case-where-guards.tesl:229
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "triangle")
 	}
 	teslLeft11 := AreaCategory(Shape{Tag: ShapeTriangle, TriangleBase: teslrt.FromInt64(5), TriangleHeight: teslrt.FromInt64(5)})
 //line lesson39-case-where-guards.tesl:230
 	if teslLeft11 != "triangle" {
 //line lesson39-case-where-guards.tesl:230
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "triangle")
 	}
 }
 
@@ -623,43 +623,43 @@ func TestTesl3(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:234
 	if teslLeft12 != "degenerate circle (point)" {
 //line lesson39-case-where-guards.tesl:234
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "degenerate circle (point)")
 	}
 	teslLeft13 := DescribeShape(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(200)})
 //line lesson39-case-where-guards.tesl:235
 	if teslLeft13 != "enormous circle (r=200)" {
 //line lesson39-case-where-guards.tesl:235
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "enormous circle (r=200)")
 	}
 	teslLeft14 := DescribeShape(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(5)})
 //line lesson39-case-where-guards.tesl:236
 	if teslLeft14 != "circle with radius 5" {
 //line lesson39-case-where-guards.tesl:236
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft14, "circle with radius 5")
 	}
 	teslLeft15 := DescribeShape(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(7), RectangleHeight: teslrt.FromInt64(7)})
 //line lesson39-case-where-guards.tesl:237
 	if teslLeft15 != "square with side 7" {
 //line lesson39-case-where-guards.tesl:237
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, "square with side 7")
 	}
 	teslLeft16 := DescribeShape(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(4), RectangleHeight: teslrt.FromInt64(9)})
 //line lesson39-case-where-guards.tesl:238
 	if teslLeft16 != "rectangle 4x9" {
 //line lesson39-case-where-guards.tesl:238
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft16, "rectangle 4x9")
 	}
 	teslLeft17 := DescribeShape(Shape{Tag: ShapeTriangle, TriangleBase: teslrt.FromInt64(6), TriangleHeight: teslrt.FromInt64(6)})
 //line lesson39-case-where-guards.tesl:239
 	if teslLeft17 != "isosceles triangle" {
 //line lesson39-case-where-guards.tesl:239
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft17, "isosceles triangle")
 	}
 	teslLeft18 := DescribeShape(Shape{Tag: ShapeTriangle, TriangleBase: teslrt.FromInt64(3), TriangleHeight: teslrt.FromInt64(4)})
 //line lesson39-case-where-guards.tesl:240
 	if teslLeft18 != "triangle" {
 //line lesson39-case-where-guards.tesl:240
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft18, "triangle")
 	}
 }
 
@@ -679,31 +679,31 @@ func TestTesl4(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:244
 	if teslLeft19 != "drop-everything" {
 //line lesson39-case-where-guards.tesl:244
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft19, "drop-everything")
 	}
 	teslLeft20 := ClassifyByPriority(Priority{Tag: PriorityTask, TaskLabel: "critical", TaskUrgency: teslrt.FromInt64(5)})
 //line lesson39-case-where-guards.tesl:245
 	if teslLeft20 != "normal" {
 //line lesson39-case-where-guards.tesl:245
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft20, "normal")
 	}
 	teslLeft21 := ClassifyByPriority(Priority{Tag: PriorityTask, TaskLabel: "blocker", TaskUrgency: teslrt.FromInt64(9)})
 //line lesson39-case-where-guards.tesl:246
 	if teslLeft21 != "urgent" {
 //line lesson39-case-where-guards.tesl:246
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft21, "urgent")
 	}
 	teslLeft22 := ClassifyByPriority(Priority{Tag: PriorityTask, TaskLabel: "feature", TaskUrgency: teslrt.FromInt64(6)})
 //line lesson39-case-where-guards.tesl:247
 	if teslLeft22 != "normal" {
 //line lesson39-case-where-guards.tesl:247
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft22, "normal")
 	}
 	teslLeft23 := ClassifyByPriority(Priority{Tag: PriorityTask, TaskLabel: "chore", TaskUrgency: teslrt.FromInt64(2)})
 //line lesson39-case-where-guards.tesl:248
 	if teslLeft23 != "low" {
 //line lesson39-case-where-guards.tesl:248
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft23, "low")
 	}
 }
 
@@ -723,25 +723,25 @@ func TestTesl5(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:252
 	if teslLeft24 != "due today" {
 //line lesson39-case-where-guards.tesl:252
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft24, "due today")
 	}
 	teslLeft25 := ClassifyByPriority(Priority{Tag: PriorityDeadline, DeadlineLabel: "invoice", DeadlineDays: teslrt.FromInt64(-2)})
 //line lesson39-case-where-guards.tesl:253
 	if teslLeft25 != "overdue" {
 //line lesson39-case-where-guards.tesl:253
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft25, "overdue")
 	}
 	teslLeft26 := ClassifyByPriority(Priority{Tag: PriorityDeadline, DeadlineLabel: "meeting", DeadlineDays: teslrt.FromInt64(2)})
 //line lesson39-case-where-guards.tesl:254
 	if teslLeft26 != "soon" {
 //line lesson39-case-where-guards.tesl:254
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft26, "soon")
 	}
 	teslLeft27 := ClassifyByPriority(Priority{Tag: PriorityDeadline, DeadlineLabel: "review", DeadlineDays: teslrt.FromInt64(10)})
 //line lesson39-case-where-guards.tesl:255
 	if teslLeft27 != "future" {
 //line lesson39-case-where-guards.tesl:255
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft27, "future")
 	}
 }
 
@@ -761,37 +761,37 @@ func TestTesl6(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:259
 	if teslLeft28 != "VIP high-value: 99" {
 //line lesson39-case-where-guards.tesl:259
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft28, "VIP high-value: 99")
 	}
 	teslLeft29 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: "vip", LabelValue: teslrt.FromInt64(10)})
 //line lesson39-case-where-guards.tesl:260
 	if teslLeft29 != "VIP: 10" {
 //line lesson39-case-where-guards.tesl:260
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft29, "VIP: 10")
 	}
 	teslLeft30 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: "other", LabelValue: teslrt.FromInt64(75)})
 //line lesson39-case-where-guards.tesl:261
 	if teslLeft30 != "high-value: 75" {
 //line lesson39-case-where-guards.tesl:261
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft30, "high-value: 75")
 	}
 	teslLeft31 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: "other", LabelValue: teslrt.FromInt64(3)})
 //line lesson39-case-where-guards.tesl:262
 	if teslLeft31 != "positive: 3" {
 //line lesson39-case-where-guards.tesl:262
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft31, "positive: 3")
 	}
 	teslLeft32 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: "other", LabelValue: teslrt.FromInt64(0)})
 //line lesson39-case-where-guards.tesl:263
 	if teslLeft32 != "zero or negative" {
 //line lesson39-case-where-guards.tesl:263
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft32, "zero or negative")
 	}
 	teslLeft33 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledEmpty})
 //line lesson39-case-where-guards.tesl:264
 	if teslLeft33 != "empty" {
 //line lesson39-case-where-guards.tesl:264
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft33, "empty")
 	}
 }
 
@@ -811,31 +811,31 @@ func TestTesl7(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:268
 	if teslLeft34 != "premium gold" {
 //line lesson39-case-where-guards.tesl:268
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft34, "premium gold")
 	}
 	teslLeft35 := RateLabeled(Labeled[string]{Tag: LabeledLabel, LabelTag: "premium", LabelValue: "silver"})
 //line lesson39-case-where-guards.tesl:269
 	if teslLeft35 != "premium: silver" {
 //line lesson39-case-where-guards.tesl:269
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft35, "premium: silver")
 	}
 	teslLeft36 := RateLabeled(Labeled[string]{Tag: LabeledLabel, LabelTag: "basic", LabelValue: ""})
 //line lesson39-case-where-guards.tesl:270
 	if teslLeft36 != "empty value" {
 //line lesson39-case-where-guards.tesl:270
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft36, "empty value")
 	}
 	teslLeft37 := RateLabeled(Labeled[string]{Tag: LabeledLabel, LabelTag: "basic", LabelValue: "hello"})
 //line lesson39-case-where-guards.tesl:271
 	if teslLeft37 != "standard: hello" {
 //line lesson39-case-where-guards.tesl:271
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft37, "standard: hello")
 	}
 	teslLeft38 := RateLabeled(Labeled[string]{Tag: LabeledEmpty})
 //line lesson39-case-where-guards.tesl:272
 	if teslLeft38 != "nothing" {
 //line lesson39-case-where-guards.tesl:272
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft38, "nothing")
 	}
 }
 
@@ -855,42 +855,42 @@ func TestTesl8(teslT *testing.T) {
 //line lesson39-case-where-guards.tesl:276
 	if teslLeft39 != "A" {
 //line lesson39-case-where-guards.tesl:276
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft39, "A")
 	}
 	teslLeft40 := ScoreGrade(teslrt.FromInt64(85))
 //line lesson39-case-where-guards.tesl:277
 	if teslLeft40 != "B" {
 //line lesson39-case-where-guards.tesl:277
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft40, "B")
 	}
 	teslLeft41 := ScoreGrade(teslrt.FromInt64(75))
 //line lesson39-case-where-guards.tesl:278
 	if teslLeft41 != "C" {
 //line lesson39-case-where-guards.tesl:278
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft41, "C")
 	}
 	teslLeft42 := ScoreGrade(teslrt.FromInt64(65))
 //line lesson39-case-where-guards.tesl:279
 	if teslLeft42 != "D" {
 //line lesson39-case-where-guards.tesl:279
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft42, "D")
 	}
 	teslLeft43 := ScoreGrade(teslrt.FromInt64(55))
 //line lesson39-case-where-guards.tesl:280
 	if teslLeft43 != "F" {
 //line lesson39-case-where-guards.tesl:280
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft43, "F")
 	}
 	teslLeft44 := ScoreGrade(teslrt.Neg(teslrt.FromInt64(1)))
 //line lesson39-case-where-guards.tesl:281
 	if teslLeft44 != "invalid" {
 //line lesson39-case-where-guards.tesl:281
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft44, "invalid")
 	}
 	teslLeft45 := ScoreGrade(teslrt.FromInt64(101))
 //line lesson39-case-where-guards.tesl:282
 	if teslLeft45 != "invalid" {
 //line lesson39-case-where-guards.tesl:282
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft45, "invalid")
 	}
 }

@@ -201,15 +201,15 @@ let r41_01_ts_get_tuple_erased_to_unknown () =
     assert_contains ~label:"tuple response" out
       "export async function getPair(): Promise<[number, string]>";
     assert_contains ~label:"tuple parse" out
-      "z.tuple([z.number().int(), z.string()]).parse(await res.json())")
+      "z.object({ tag: z.literal(\"Tuple2\"), fields: z.object({ first: z.number().int(), second: z.string() }) }).transform((v) => [v.fields.first, v.fields.second] as [typeof v.fields.first, typeof v.fields.second]).parse(await res.json())")
 
 let r41_02_ts_get_result_erased_to_unknown () =
   with_get_api (fun path ->
     let out = generate_ts path in
     assert_contains ~label:"result response" out
-      "export async function getResult(): Promise<{ tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }>";
+      "export async function getResult(): Promise<{ tag: \"Ok\"; fields: { value: Todo } } | { tag: \"Err\"; fields: { error: string } }>";
     assert_contains ~label:"result parse" out
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), fields: z.object({ value: z.lazy(() => TodoSchema) }) }), z.object({ tag: z.literal(\"Err\"), fields: z.object({ error: z.string() }) })]).parse(await res.json())")
 
 let r41_03_ts_get_dict_erased_to_unknown () =
   with_get_api (fun path ->
@@ -241,15 +241,15 @@ let r41_06_ts_post_tuple_body_erased_to_unknown () =
     assert_contains ~label:"tuple body" out
       "export async function postTuple(pair: [number, string]): Promise<[number, string]>";
     assert_contains ~label:"tuple return parse" out
-      "z.tuple([z.number().int(), z.string()]).parse(await res.json())")
+      "z.object({ tag: z.literal(\"Tuple2\"), fields: z.object({ first: z.number().int(), second: z.string() }) }).transform((v) => [v.fields.first, v.fields.second] as [typeof v.fields.first, typeof v.fields.second]).parse(await res.json())")
 
 let r41_07_ts_post_result_body_erased_to_unknown () =
   with_post_api (fun path ->
     let out = generate_ts path in
     assert_contains ~label:"result body" out
-      "export async function postResult(result: { tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }): Promise<{ tag: \"Ok\"; value: Todo } | { tag: \"Err\"; error: string }>";
+      "export async function postResult(result: { tag: \"Ok\"; fields: { value: Todo } } | { tag: \"Err\"; fields: { error: string } }): Promise<{ tag: \"Ok\"; fields: { value: Todo } } | { tag: \"Err\"; fields: { error: string } }>";
     assert_contains ~label:"result return parse" out
-      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), value: z.lazy(() => TodoSchema) }), z.object({ tag: z.literal(\"Err\"), error: z.string() })]).parse(await res.json())")
+      "z.discriminatedUnion(\"tag\", [z.object({ tag: z.literal(\"Ok\"), fields: z.object({ value: z.lazy(() => TodoSchema) }) }), z.object({ tag: z.literal(\"Err\"), fields: z.object({ error: z.string() }) })]).parse(await res.json())")
 
 let r41_08_ts_post_dict_body_erased_to_unknown () =
   with_post_api (fun path ->
@@ -283,7 +283,7 @@ let r41_11_elm_get_tuple_erased_to_value () =
     assert_contains ~label:"tuple get" out
       "getPair : (Result Http.Error ((Int, String)) -> msg) -> Cmd msg";
     assert_contains ~label:"tuple get decoder" out
-      "Http.expectJson toMsg (D.map2 (\\x y -> ( x, y )) (D.index 0 D.int) (D.index 1 D.string))")
+      "Http.expectJson toMsg (D.map2 (\\x y -> ( x, y )) (D.at [ \"fields\", \"first\" ] D.int) (D.at [ \"fields\", \"second\" ] D.string))")
 
 let r41_12_elm_get_result_erased_to_value () =
   with_get_api (fun path ->
@@ -291,7 +291,7 @@ let r41_12_elm_get_result_erased_to_value () =
     assert_contains ~label:"result get" out
       "getResult : (Result Http.Error (Result String Todo) -> msg) -> Cmd msg";
     assert_contains ~label:"result get decoder" out
-      "Http.expectJson toMsg (D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Ok\" -> D.map Ok (D.field \"value\" todoDecoder) ; \"Err\" -> D.map Err (D.field \"error\" D.string) ; _ -> D.fail (\"Unexpected Result tag: \" ++ tag)))")
+      "Http.expectJson toMsg (D.field \"tag\" D.string |> D.andThen (\\tag -> case tag of \"Ok\" -> D.map Ok (D.at [ \"fields\", \"value\" ] todoDecoder) ; \"Err\" -> D.map Err (D.at [ \"fields\", \"error\" ] D.string) ; _ -> D.fail (\"Unexpected Result tag: \" ++ tag)))")
 
 let r41_13_elm_get_dict_erased_to_value () =
   with_get_api (fun path ->
@@ -315,7 +315,7 @@ let r41_15_elm_post_tuple_body_becomes_null () =
     assert_contains ~label:"tuple post signature" out
       "postTuple : (Int, String) -> (Result Http.Error ((Int, String)) -> msg) -> Cmd msg";
     assert_contains ~label:"tuple post body" out
-      ", body = Http.jsonBody (((\\( first, second ) -> E.list identity [ E.int first, E.string second ]) pair))")
+      ", body = Http.jsonBody (((\\( first, second ) -> E.object [ (\"tag\", E.string \"Tuple2\"), (\"fields\", E.object [ (\"first\", E.int first), (\"second\", E.string second) ]) ]) pair))")
 
 let r41_16_elm_post_result_body_becomes_null () =
   with_post_api (fun path ->
@@ -323,7 +323,7 @@ let r41_16_elm_post_result_body_becomes_null () =
     assert_contains ~label:"result post signature" out
       "postResult : Result String Todo -> (Result Http.Error (Result String Todo) -> msg) -> Cmd msg";
     assert_contains ~label:"result post body" out
-      ", body = Http.jsonBody (((\\result_ -> case result_ of Ok ok_ -> E.object [ (\"tag\", E.string \"Ok\"), (\"value\", todoEncoder ok_) ] ; Err err_ -> E.object [ (\"tag\", E.string \"Err\"), (\"error\", E.string err_) ]) result))")
+      ", body = Http.jsonBody (((\\result_ -> case result_ of Ok ok_ -> E.object [ (\"tag\", E.string \"Ok\"), (\"fields\", E.object [ (\"value\", todoEncoder ok_) ]) ] ; Err err_ -> E.object [ (\"tag\", E.string \"Err\"), (\"fields\", E.object [ (\"error\", E.string err_) ]) ]) result))")
 
 let r41_17_elm_post_dict_body_becomes_null () =
   with_post_api (fun path ->
@@ -347,7 +347,7 @@ let r41_19_elm_post_maybe_preserves_simple_record_shape () =
     assert_contains ~label:"maybe post signature" out
       "postMaybe : Maybe Todo -> (Result Http.Error (Maybe Todo) -> msg) -> Cmd msg";
     assert_contains ~label:"maybe post body" out
-      ", body = Http.jsonBody ((Maybe.withDefault E.null (Maybe.map todoEncoder)) todo)")
+      ", body = Http.jsonBody ((Maybe.withDefault E.null (Maybe.map todoEncoder todo)))")
 
 let r41_20_semantic_json_omits_api_declarations () =
   with_semantic_api (fun path ->

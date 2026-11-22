@@ -211,7 +211,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson22-compound-named-pack.tesl:185
 				if !teslrt.Equal(result, teslrt.FromInt64(5)) {
 //line lesson22-compound-named-pack.tesl:185
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(5)))
 				}
 			}
 		}
@@ -241,7 +241,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson22-compound-named-pack.tesl:194
 			if !teslrt.Equal(result, teslrt.FromInt64(5)) {
 //line lesson22-compound-named-pack.tesl:194
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 		}
 	}
@@ -282,7 +282,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson22-compound-named-pack.tesl:203
 						if !teslrt.Equal(result, teslrt.FromInt64(5)) {
 //line lesson22-compound-named-pack.tesl:203
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(5)))
 						}
 					}
 				}
@@ -318,7 +318,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson22-compound-named-pack.tesl:210
 				if !teslrt.Equal(result, teslrt.FromInt64(42)) {
 //line lesson22-compound-named-pack.tesl:210
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(42)))
 				}
 			}
 		}
@@ -344,7 +344,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson22-compound-named-pack.tesl:215
 		if !teslrt.Equal(result, teslrt.FromInt64(2)) {
 //line lesson22-compound-named-pack.tesl:215
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(2)))
 		}
 	}
 }

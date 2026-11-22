@@ -328,7 +328,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:225
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(3)) {
 //line lesson68-server-endpoints-as-tools.tesl:225
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -358,7 +358,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:232
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(4)) {
 //line lesson68-server-endpoints-as-tools.tesl:232
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(4)))
 			}
 		}
 	}
@@ -404,13 +404,13 @@ func TestTesl2(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:244
 							if teslLeft3 != "Saved your note." {
 //line lesson68-server-endpoints-as-tools.tesl:244
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "Saved your note.")
 							}
 							teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line lesson68-server-endpoints-as-tools.tesl:245
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line lesson68-server-endpoints-as-tools.tesl:245
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -460,13 +460,13 @@ func TestTesl3(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:256
 							if teslLeft5 != "Here is the summary." {
 //line lesson68-server-endpoints-as-tools.tesl:256
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "Here is the summary.")
 							}
 							teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line lesson68-server-endpoints-as-tools.tesl:257
 							if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
 //line lesson68-server-endpoints-as-tools.tesl:257
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -516,13 +516,13 @@ func TestTesl4(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:269
 							if teslLeft7 != "That note is too long." {
 //line lesson68-server-endpoints-as-tools.tesl:269
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "That note is too long.")
 							}
 							teslLeft8 := teslrt.ReplyToolCalls(reply)
 //line lesson68-server-endpoints-as-tools.tesl:270
 							if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
 //line lesson68-server-endpoints-as-tools.tesl:270
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -572,13 +572,13 @@ func TestTesl5(teslT *testing.T) {
 //line lesson68-server-endpoints-as-tools.tesl:281
 							if teslLeft9 != "Wiped." {
 //line lesson68-server-endpoints-as-tools.tesl:281
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "Wiped.")
 							}
 							teslLeft10 := teslrt.ReplyToolCalls(reply)
 //line lesson68-server-endpoints-as-tools.tesl:282
 							if !teslrt.Equal(teslLeft10, teslrt.FromInt64(1)) {
 //line lesson68-server-endpoints-as-tools.tesl:282
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}

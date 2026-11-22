@@ -158,3 +158,51 @@ func TestServer405CarriesAllow(t *testing.T) {
 		t.Errorf("a 404 carries no Allow: %d %q", got.StatusCode, got.Header.Get("Allow"))
 	}
 }
+
+// `get "/runs/:runId"` answered `GET /runs/stream` by capturing "stream", even
+// with `sse "/runs/stream"` declared first. The literal route is the more specific one and now
+// answers, in either declaration order; the capture still answers everything else.
+func TestLiteralSegmentBeatsCaptureInEitherOrder(t *testing.T) {
+	handler := func(answer string) HandlerFunc {
+		return func(scope *RequestScope, request *http.Request) Response {
+			return Response{Status: 200, Body: answer}
+		}
+	}
+	for _, captureFirst := range []bool{true, false} {
+		capture := Route{Method: "GET", Path: "/runs/:runId", Endpoint: "GET /runs/:runId"}
+		literal := Route{Method: "GET", Path: "/runs/latest", Endpoint: "GET /runs/latest"}
+		routes := []Route{literal, capture}
+		if captureFirst {
+			routes = []Route{capture, literal}
+		}
+		server := Server{Routes: routes, Handlers: map[string]HandlerFunc{
+			"GET /runs/:runId": handler("capture"),
+			"GET /runs/latest": handler("literal"),
+		}}
+		if got := JsonAsString(ApiRequest(server, "GET", "/runs/latest", "", nil, nil).Body); got != "literal" {
+			t.Fatalf("captureFirst=%v: /runs/latest answered by %q", captureFirst, got)
+		}
+		if got := JsonAsString(ApiRequest(server, "GET", "/runs/abc", "", nil, nil).Body); got != "capture" {
+			t.Fatalf("captureFirst=%v: /runs/abc answered by %q", captureFirst, got)
+		}
+	}
+}
+
+func TestMoreSpecificComparesTheFirstDifferingSegment(t *testing.T) {
+	cases := []struct {
+		left, right string
+		want        bool
+	}{
+		{"/runs/stream", "/runs/:id", true},
+		{"/runs/:id", "/runs/stream", false},
+		{"/a/:x/c", "/a/:x/:y", true},
+		{"/:a/b", "/a/:b", false}, // the earlier segment decides
+		{"/a/:b", "/:a/b", true},
+		{"/runs/:id", "/runs/:other", false},
+	}
+	for _, c := range cases {
+		if got := moreSpecific(c.left, c.right); got != c.want {
+			t.Errorf("moreSpecific(%q, %q) = %v, want %v", c.left, c.right, got, c.want)
+		}
+	}
+}

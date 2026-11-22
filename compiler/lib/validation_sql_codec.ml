@@ -213,7 +213,7 @@ let rec validate_field_accesses
       | SqlPred { field; value; _ } ->
         field_error entity field
         @ validate_field_accesses query_env funcs fields_by_type ctors value
-      | SqlOr clauses -> List.concat_map (clause_errors query_env entity) clauses
+      | SqlOr clauses | SqlAnd clauses -> List.concat_map (clause_errors query_env entity) clauses
       | SqlIsNull { field } | SqlIsNotNull { field } -> field_error entity field
       | SqlIn { field; values } | SqlNotIn { field; values } ->
         field_error entity field

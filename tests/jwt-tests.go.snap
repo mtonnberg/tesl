@@ -196,7 +196,7 @@ func TestTesl1(teslT *testing.T) {
 //line jwt-tests.tesl:152
 		if teslLeft1 != "header.payload.sig" {
 //line jwt-tests.tesl:152
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "header.payload.sig")
 		}
 	}
 }
@@ -221,7 +221,7 @@ func TestTesl2(teslT *testing.T) {
 //line jwt-tests.tesl:157
 		if teslLeft2 != "abc.def.ghi" {
 //line jwt-tests.tesl:157
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "abc.def.ghi")
 		}
 	}
 }
@@ -338,7 +338,7 @@ func TestTesl6(teslT *testing.T) {
 //line jwt-tests.tesl:181
 		if teslLeft3 != "raw.token.string" {
 //line jwt-tests.tesl:181
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "raw.token.string")
 		}
 	}
 }
@@ -392,7 +392,7 @@ func TestTesl8(teslT *testing.T) {
 //line jwt-tests.tesl:192
 		if teslLeft4 != "x.y.z" {
 //line jwt-tests.tesl:192
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "x.y.z")
 		}
 	}
 }
@@ -422,7 +422,7 @@ func TestTesl9(teslT *testing.T) {
 //line jwt-tests.tesl:198
 			if teslLeft5 != teslRight5 {
 //line jwt-tests.tesl:198
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, teslRight5)
 			}
 		}
 	}
@@ -530,7 +530,7 @@ func TestTesl12(teslT *testing.T) {
 //line jwt-tests.tesl:220
 				if teslLeft6 != teslRight6 {
 //line jwt-tests.tesl:220
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, teslRight6)
 				}
 			}
 		}
@@ -681,7 +681,7 @@ func TestTesl17(teslT *testing.T) {
 //line jwt-tests.tesl:251
 				if teslLeft7 != teslRight7 {
 //line jwt-tests.tesl:251
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft7, teslRight7)
 				}
 			}
 		}
@@ -780,13 +780,13 @@ func TestTesl20(teslT *testing.T) {
 //line jwt-tests.tesl:275
 			if teslLeft8 != "user-with-expiry" {
 //line jwt-tests.tesl:275
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "user-with-expiry")
 			}
 			teslLeft9 := DecodeClaims(token)
 //line jwt-tests.tesl:276
 			if teslLeft9 != "user-with-expiry" {
 //line jwt-tests.tesl:276
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "user-with-expiry")
 			}
 //line jwt-tests.tesl:277
 			if !(teslrt.StringStartsWith(token.Value, JoseHeaderPrefix)) {
@@ -825,7 +825,7 @@ func TestTesl21(teslT *testing.T) {
 //line jwt-tests.tesl:289
 				if teslLeft10 != "carol" {
 //line jwt-tests.tesl:289
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "carol")
 				}
 			}
 		}
@@ -908,7 +908,7 @@ func TestTesl23(teslT *testing.T) {
 //line jwt-tests.tesl:318
 				if h1 != h2 {
 //line jwt-tests.tesl:318
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", h1, h2)
 				}
 			}
 		}
@@ -944,7 +944,7 @@ func TestTesl24(teslT *testing.T) {
 //line jwt-tests.tesl:328
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(16)) {
 //line jwt-tests.tesl:328
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(16)))
 			}
 		}
 	}
