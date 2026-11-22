@@ -46,10 +46,11 @@ let reset_stats memo = memo.hits <- 0; memo.misses <- 0
 
 (* [store] decides whether a computed value may be reused (for example only a
    successful result). [guard] runs only for entries whose key and scope match. *)
-let find ?(store = fun _ -> true) memo ~key ~guard compute =
+(* [any_scope] is for judgments that do not read the active proof scope. *)
+let find ?(store = fun _ -> true) ?(any_scope = false) memo ~key ~guard compute =
   if !depth = 0 || not (enabled ()) then compute ()
   else
-    let matches (k, scope, _) = k = key && Migration_proof_context.same_scope scope in
+    let matches (k, scope, _) = k = key && (any_scope || Migration_proof_context.same_scope scope) in
     match List.find_opt (fun ((_, _, value) as entry) -> matches entry && guard value) memo.entries with
     | Some (_, _, value) -> memo.hits <- memo.hits + 1; value
     | None ->

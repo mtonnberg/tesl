@@ -124,7 +124,8 @@ let edge ~project_root ~compiler ~file ~source =
   if full_history () then None else
   let key = project_root,file,Migration_hash.digest source,compiler in
   let decide () = Source_input.view_token (),edge_uncached ~project_root ~compiler ~file ~source in
-  let _,evidence = Migration_analysis_cache.find edge_memo ~key
+  (* Trust re-hashes recorded bytes only; no proof scope shapes it. *)
+  let _,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
     ~guard:(fun (token,_) -> Source_input.same_view token) decide in
   Option.iter (fun e -> trusted_log := e.root :: !trusted_log) evidence;
   evidence
