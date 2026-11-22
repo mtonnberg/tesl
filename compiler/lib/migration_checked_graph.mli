@@ -36,3 +36,9 @@ val lower_helpers : ?contextual:(Ast.module_form * Ast.const_form) list -> scope
 val lower_transform : scopes:Migration_canonical.scope list ->
   contextual:Ast.module_form * Ast.const_form -> t ->
   (Migration_ir.definition list, Migration_ir.error) result
+
+(** Indexed views of the compiler's builtin export tables, for name lookups
+    that run once per referenced builtin of every history module. *)
+val builtin_homes_of : string -> string list
+val builtin_predicate : string -> bool
+val always_available_builtin : string -> bool

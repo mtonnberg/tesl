@@ -37,10 +37,31 @@ let wants (import : import_decl) (owner : module_form) (ns, name) =
 (** Resolve existing compiler builtins by their owning module and name. There
     is no new per-primitive version registry or retained historical lowering:
     the complete inventory is bound to the caller's compiler ABI above. *)
+(* Every exported name's owning modules, in export-table order. Lowering asks
+   for each referenced builtin of every schema module in the history. *)
+let builtin_homes = lazy (
+  let table = Hashtbl.create 1024 in
+  List.iter (fun (home, members) ->
+    List.iter (fun name ->
+      Hashtbl.replace table name (home :: Option.value ~default:[] (Hashtbl.find_opt table name)))
+      (List.sort_uniq String.compare members)) Type_system.tesl_module_exports;
+  table)
+let builtin_predicates = lazy (
+  let table = Hashtbl.create 64 in
+  List.iter (fun (_, preds) -> List.iter (fun name -> Hashtbl.replace table name ()) preds)
+    Checker.tesl_module_predicate_exports;
+  table)
+let always_available = lazy (
+  let table = Hashtbl.create 256 in
+  List.iter (fun name -> Hashtbl.replace table name ()) Type_system.always_available_stdlib_names;
+  table)
+
+let builtin_homes_of name = List.rev (Option.value ~default:[] (Hashtbl.find_opt (Lazy.force builtin_homes) name))
+let builtin_predicate name = Hashtbl.mem (Lazy.force builtin_predicates) name
+let always_available_builtin name = Hashtbl.mem (Lazy.force always_available) name
+
 let builtin (m : module_form) ns name =
-  let exports = Type_system.tesl_module_exports in
-  let homes = List.filter_map (fun (home, members) ->
-    if List.mem name members then Some home else None) exports in
+  let homes = List.rev (Option.value ~default:[] (Hashtbl.find_opt (Lazy.force builtin_homes) name)) in
   let chosen = List.filter (fun home -> List.exists (fun (i : import_decl) ->
     i.module_name = home && (ns <> Predicate || match i.names with
       | ImportAll -> false | ImportExposing exposed -> List.mem name exposed)) m.imports) homes in
@@ -48,14 +69,13 @@ let builtin (m : module_form) ns name =
   let homes = List.sort_uniq String.compare homes in
   let kind_ok = match ns with
     | Codec -> List.mem_assoc name Validation_common.builtin_codec_type
-    | Predicate -> List.exists (fun (_, preds) -> List.mem name preds)
-        Checker.tesl_module_predicate_exports
+    | Predicate -> Hashtbl.mem (Lazy.force builtin_predicates) name
     | Type -> name <> "" && name.[0] >= 'A' && name.[0] <= 'Z'
     | Value -> Type_system.stdlib_capabilities_of name = [] in
   if not kind_ok then None
   else match homes with
     | [home] -> Some (Primitive (home ^ "." ^ name))
-    | [] when List.mem name Type_system.always_available_stdlib_names ->
+    | [] when Hashtbl.mem (Lazy.force always_available) name ->
       Some (Primitive ("Tesl.Prelude." ^ name))
     | _ -> None
 
