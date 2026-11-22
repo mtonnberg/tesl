@@ -39,7 +39,7 @@ func TeslTestRowQueueBadSource(ctx context.Context, conn *pgx.Conn, database *Da
 	if err != nil {
 		return err
 	}
-	if b.target == nil || b.target.version != 2 || len(b.queues) != 2 {
+	if b.target == nil || b.target.version != 2 || b.queues.len() != 2 {
 		return fmt.Errorf("test requires actual V2 source")
 	}
 	plan := b.target
@@ -70,7 +70,7 @@ func TeslTestRowQueueBadSource(ctx context.Context, conn *pgx.Conn, database *Da
 		}
 		defer func(owned pgx.Tx) { _ = owned.Rollback(ctx) }(tx)
 	}
-	source := b.queues[1].version
+	source := b.queues.must(2).version
 	switch field {
 	case "schema":
 		source.SchemaSnapshotHash = strings.Repeat("a", 64)

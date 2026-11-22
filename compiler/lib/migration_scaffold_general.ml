@@ -64,8 +64,22 @@ let options ?(on_unsupported=fun _->()) ~file ~source ~before ~after ~identity ~
      let function_=V.allocate c.taken("legacy" ^ suffix ^ String.capitalize_ascii f.name)in
      let spec=V.field old_home f in
      rules:= !rules @ ["LegacyWith " ^ f.name ^ " " ^ function_];
-      helpers:= !helpers @ ["fn " ^ function_ ^ "(current: " ^ current.entity_name ^ ") -> " ^ V.result c spec false ^ " =\n  " ^
-        V.todo ("Return Something with the historical value and proof for removed field " ^ identity ^ "." ^ f.name ^ ", or Nothing to refuse writes until retirement") ^ "\n"]
+      (* For a removed optional field the intuitive Nothing compiles but refuses
+         every old-binary write during overlap; Something Nothing (store NULL)
+         is almost always meant, so it is the filled default. *)
+      let optional=f.proof_ann=None && V.application c spec "Maybe"<>None in
+      let comment=if optional then
+          "# Old binaries still write " ^ identity ^ "." ^ f.name ^ " until the old column is retired.\n" ^
+          "# Something Nothing stores NULL in the old column for their writes (the usual choice).\n" ^
+          "# Nothing would instead refuse every write from old binaries during the overlap.\n"
+        else
+          "# Old binaries still write " ^ identity ^ "." ^ f.name ^ " until the old column is retired.\n" ^
+          "# Something value stores that value in the old column for their writes.\n" ^
+          "# Nothing refuses every write from old binaries during the overlap.\n" in
+      let body=if optional then "Something Nothing" else
+        V.todo ("Return Something with the historical value and proof for removed field " ^ identity ^ "." ^ f.name ^ ", or Nothing to refuse writes until retirement") in
+      helpers:= !helpers @ [comment ^ "fn " ^ function_ ^ (if optional then "(_current: " else "(current: ") ^ current.entity_name ^ ") -> " ^ V.result c spec false ^ " =\n  " ^
+        body ^ "\n"]
    end)removed;
    let entries=List.mapi(fun index(f:field_def)->
      let old_name=Option.value(List.find_map(fun(a,b)->if b=f.name then Some a else None)renames)~default:f.name in

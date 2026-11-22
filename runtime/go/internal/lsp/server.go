@@ -1911,7 +1911,7 @@ func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, do
 		// compiler's build refusal, but distinguish this exact producer-owned
 		// byte mismatch from missing/layout failures and frozen-source tampering.
 		if diagnostic.Code == "MIG001" && strings.HasPrefix(diagnostic.Message,
-			"current schema source changed since migration generation (expected while preparing an undeployed migration); refresh this revision before building or running.") &&
+			"current schema source changed since revision V") &&
 			strings.Contains(diagnostic.Message, "\nsnapshot source differs from its recorded bytes:") {
 			severity = 2 // Visible warning squiggle; the compiler still refuses a build.
 		}

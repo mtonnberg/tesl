@@ -22,6 +22,14 @@ let scope contexts run =
   Query_cache.clear (); active := contexts; owner := None;
   Fun.protect ~finally:(fun () -> active := previous; owner := previous_owner; Query_cache.clear ()) run
 let without_context run = scope [] run
+type scope_token = t list * (t * Ast.module_form) option
+let current_scope () = !active,!owner
+let same_scope (contexts,scope_owner) =
+  List.length contexts = List.length !active && List.for_all2 (==) contexts !active &&
+  (match scope_owner,!owner with
+   | None,None -> true
+   | Some (t,m),Some (t',m') -> t == t' && m == m'
+   | _ -> false)
 let with_contexts contexts run =
   List.iter revalidate contexts;
   let result = scope contexts run in

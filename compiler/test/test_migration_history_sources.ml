@@ -36,8 +36,13 @@ let initial write = ignore (schema write "VCurrent")
 let chain write =
   List.iter (fun revision -> ignore (schema write revision)) ["V1"; "V2"; "VCurrent"];
   ignore (migration ~target:"V2" write 2); ignore (migration write 3)
+(* Inside one source view a cached history is verified once; every call here is
+   its own step (a fresh, empty overlay view), as separate commands are. *)
 let discover ?(family="NotesSchema") root =
-  discover ~compiler_abi:"test-compiler-1" ~project_root:root ~family
+  let run () = discover ~compiler_abi:"test-compiler-1" ~project_root:root ~family in
+  match Source_input.with_overlays ~project_root:root [] run with
+  | result -> result
+  | exception (Unix.Unix_error _ | Invalid_argument _ | Sys_error _) -> run ()
 let get = function Ok value -> value | Error error -> fail error.message
 let expect_error kind message result = match result with
   | Ok _ -> fail ("unexpected successful discovery: " ^ message)
@@ -341,6 +346,23 @@ let cached_resolution_inputs () = with_project (fun root write ->
   Sys.remove member; Unix.symlink replacement member;
   expect_error Invalid_layout "canonical regular" (discover root)))
 
+
+(* Repeated hits within one source view reuse the verified history without
+   re-reading it; an edit made meanwhile is caught by the final source guard
+   ([verify_unchanged]) that every command runs before it succeeds. *)
+let same_view_reuse () = with_project (fun root write ->
+ chain write;
+ with_cache (fun () ->
+  let first = Source_input.with_overlays ~project_root:root [] (fun () ->
+   let lookup () = Migration_history_sources.discover ~compiler_abi:"test-compiler-1" ~project_root:root ~family:"NotesSchema" in
+   let first = get (lookup ()) in
+   ignore (write "schema/notes/v1/notes.tesl" (child "NotesSchema.V1.Notes" ^ "# edited during the command\n"));
+   check bool "the same view reuses the verified history" true (first == get (lookup ()));
+   expect_error Changed_source "changed" (verify_unchanged first);
+   first) in
+  (* A later step (another view) re-verifies and rediscovers the edited bytes. *)
+  check bool "a new view re-verifies" false (first == get (discover root))))
+
 let () = run "migration history source discovery" ["history", List.map (fun (name, test) ->
   test_case name `Quick test) [
     "first revision", first_revision;
@@ -361,4 +383,5 @@ let () = run "migration history source discovery" ["history", List.map (fun (nam
     "cached discovery rechecks edits directories and imports", cached_discovery;
     "existing guards under compilation caches", cached_existing_guards;
     "cache observes stdlib and project resolution", cached_resolution_inputs;
+    "same-view hits reuse; the final guard catches edits", same_view_reuse;
   ]]

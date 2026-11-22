@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +26,11 @@ func TestPgRowRetypePhysicalActualApp(t *testing.T) {
 	}
 	valuesSQL := "select " + oldValue + "," + newValue + "," + extraValue + " from notes.notes where id="
 	f, request := pgNewWorkerTest(t)
+	// Lazy reads, writes, rejection and a running Worker pass: give the whole
+	// scenario its own budget rather than the fixture's 30s default.
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	t.Cleanup(cancel)
+	f.ctx = ctx
 	f.namespace = "notes"
 	run := func(version, mode string) { pgForwardNativeRun(t, f, root, version, mode, true) }
 	run("v1", "install")
@@ -215,5 +221,48 @@ func TestPgRowRetypePhysicalActualApp(t *testing.T) {
 	if err := request.QueryRow(f.ctx, "select memo from notes.notes where id='one'").Scan(&title); err != nil || title != "one-edited" {
 		t.Fatal("Reject did not roll back all rows", title, err)
 	}
-	t.Log("actual V1/V2 Main + unchanged HTTP handlers: lazy read, insert, multi-row update, late old write and Reject rollback passed")
+	// The ongoing Worker leaves the rejected stored row unconverted, names it,
+	// and keeps converting the others instead of exiting on the first refusal.
+	call(v1, "PUT", "/one", 200) // An old write demotes a converted row again.
+	worker := pgForwardNativeCommand(f, root, "v2", "worker")
+	var workerOutput pgRowAppOutput
+	worker.Stdout = &workerOutput
+	worker.Stderr = &workerOutput
+	if err := worker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- worker.Wait(); close(workerDone) }()
+	t.Cleanup(func() {
+		_ = worker.Process.Signal(os.Interrupt)
+		select {
+		case <-workerDone:
+		case <-time.After(20 * time.Second):
+			_ = worker.Process.Kill()
+			<-workerDone
+		}
+	})
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		var pending, rejected int
+		if err := request.QueryRow(f.ctx, `select count(*) filter (where id<>'reject' and _tesl_v<(select max(_tesl_v) from notes.notes)),
+ count(*) filter (where id='reject' and _tesl_v<(select max(_tesl_v) from notes.notes)) from notes.notes`).Scan(&pending, &rejected); err != nil {
+			t.Fatal(err)
+		}
+		if pending == 0 && strings.Contains(workerOutput.String(), `primary key "reject" was rejected`) {
+			if rejected != 1 {
+				t.Fatal("the rejected row was converted anyway", rejected)
+			}
+			break
+		}
+		select {
+		case err := <-workerDone:
+			t.Fatalf("the Worker exited on a rejected row: %v\n%s", err, workerOutput.String())
+		case <-time.After(200 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the Worker did not convert the other rows past the rejected one: pending=%d\n%s", pending, workerOutput.String())
+		}
+	}
+	t.Log("actual V1/V2 Main + unchanged HTTP handlers: lazy read, insert, multi-row update, late old write, Reject rollback and Worker skipping a rejected row passed")
 }

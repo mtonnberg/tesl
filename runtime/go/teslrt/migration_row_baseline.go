@@ -24,7 +24,7 @@ type pgRowBaseline struct {
 	history                               PgCompiledMigrationHistory
 	version                               PgRowSourceVersion
 	entities                              []pgRowBaselineEntity
-	queues                                []pgRowQueueSource
+	queues                                *pgRowQueueSourceSet
 	inventory, inventoryHash, catalogHash string
 	physical, target                      *pgRowPhysicalPlan
 }
@@ -66,7 +66,7 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 			return nil, fmt.Errorf("row-baseline cache, email and SSE require Worker migration topology")
 		}
 	}
-	if len(compiled.inventory.Retirements) > 0 {
+	if len(compiled.retirements) > 0 {
 		roles, err := pgMigrationRoles(config, config.User)
 		if err != nil {
 			return nil, err
@@ -79,32 +79,54 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 		return nil, fmt.Errorf("row baseline requires sealed complete App queue inventory and no unsupported facilities")
 	}
 	physical := compiledRowPhysicalHistories[compiled]
-	if history.CurrentVersion < 1 || history.CurrentVersion > 2147483646 || (history.CurrentVersion != 1 && physical == nil) || (physical == nil && (len(compiled.inventory.Versions) != 1 || len(compiled.inventory.Transforms) != 0)) {
+	if history.CurrentVersion < 1 || history.CurrentVersion > 2147483646 || (history.CurrentVersion != 1 && physical == nil) || (physical == nil && (history.CurrentVersion != 1 || len(compiled.transforms) != 0)) {
 		return nil, fmt.Errorf("row baseline currently supports only fresh V1; data-transform execution is unavailable")
 	}
-	v := compiled.inventory.Versions[0]
+	v, err := compiled.version(1)
+	if err != nil {
+		return nil, err
+	}
 	queues, err := pgRowQueueSources(history)
 	if err != nil {
 		return nil, err
 	}
-	if len(queues) == 0 {
+	if queues.len() == 0 {
 		return nil, fmt.Errorf("missing complete original row queue source")
+	}
+	originQueues, err := queues.at(1)
+	if err != nil {
+		return nil, err
 	}
 	r := &pgMigrationWireReader{}
 	result := &pgRowBaseline{database: database, history: history, version: v, queues: queues}
 	if physical != nil {
-		result.physical = physical.versions[0]
-		result.target = physical.versions[history.CurrentVersion-1]
-		if slices.ContainsFunc(physical.versions, func(plan *pgRowPhysicalPlan) bool { return plan.queueRemoval != nil }) {
+		origin, err := physical.plan(1)
+		if err != nil {
+			return nil, err
+		}
+		target, err := physical.plan(history.CurrentVersion)
+		if err != nil {
+			return nil, err
+		}
+		if origin == nil || target == nil {
+			return nil, fmt.Errorf("row baseline lacks its exact compiled physical plans")
+		}
+		result.physical, result.target = origin, target
+		// A process that executes DDL validated the complete history first, so
+		// known() covers every version there; serving processes never execute
+		// RemoveEmpty and need no topology refusal for it.
+		if slices.ContainsFunc(physical.known(), func(plan *pgRowPhysicalPlan) bool { return plan.queueRemoval != nil }) {
 			roles, err := pgMigrationRoles(config, config.User)
 			if err != nil || roles.Request == "" {
 				return nil, fmt.Errorf("RemoveEmpty requires Worker migration topology: %v", err)
 			}
 		}
 		if history.CurrentVersion > 1 {
-			previous := physical.versions[history.CurrentVersion-2]
+			previous, err := physical.plan(history.CurrentVersion - 1)
+			if err != nil {
+				return nil, err
+			}
 			if result.target.requiresContractVersion > 0 {
-				var err error
 				previous, err = pgRowSettledSourceShape(compiled, previous)
 				if err != nil {
 					return nil, err
@@ -160,7 +182,7 @@ func pgCompiledRowBaseline(database *Database) (*pgRowBaseline, error) {
 		inventoryEntries = append(inventoryEntries, pgRowList(pgRowAtom(entity.Entity), typeNode, physicalNode))
 	}
 	_, result.catalogHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-catalog-v1"), pgRowAtom(history.Family), pgRowList(physicalEntries...)))
-	result.inventory, result.inventoryHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-inventory-v1"), pgRowAtom(history.Family), pgRowAtom("1"), pgRowAtom(v.SchemaSnapshotHash), pgRowAtom(v.StorageSnapshotHash), pgRowAtom(history.StoredValueCompatibility), pgRowList(inventoryEntries...), queues[0].queues, queues[0].facilities))
+	result.inventory, result.inventoryHash = pgRowBaselineDocument(pgRowList(pgRowAtom("tesl-row-baseline-inventory-v1"), pgRowAtom(history.Family), pgRowAtom("1"), pgRowAtom(v.SchemaSnapshotHash), pgRowAtom(v.StorageSnapshotHash), pgRowAtom(history.StoredValueCompatibility), pgRowList(inventoryEntries...), originQueues.queues, originQueues.facilities))
 	return result, nil
 }
 func pgRowBoolNode(value bool) pgRowCanonical {
@@ -186,6 +208,9 @@ func pgRowBaselineHex(value string) ([]byte, error) {
 // until that complete physical baseline is published. Existing formats refuse.
 func InstallPgCompiledRowBaseline(ctx context.Context, conn *pgx.Conn, database *Database, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
 	if err := PreflightApplicationDatabases(database); err != nil {
+		return PgMigrationControlState{}, err
+	}
+	if err := pgValidateCompleteHistory(database); err != nil {
 		return PgMigrationControlState{}, err
 	}
 	baseline, err := pgCompiledRowBaseline(database)
@@ -223,6 +248,9 @@ func (p *pgRowBaselinePreparation) verify(ctx context.Context, tx pgx.Tx, state 
 // exact V1 baseline or a compiler-linked, bounded V1-to-V2 physical expansion.
 // Later transitions require a separate protected protocol upgrade.
 func ExecutePgCompiledRowBaseline(ctx context.Context, conn *pgx.Conn, database *Database, roles PgMigrationControlRoles) (PgMigrationControlState, error) {
+	if err := pgValidateCompleteHistory(database); err != nil {
+		return PgMigrationControlState{}, err
+	}
 	baseline, err := pgCompiledRowBaseline(database)
 	if err != nil {
 		return PgMigrationControlState{}, err

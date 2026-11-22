@@ -2,7 +2,6 @@ package teslrt
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -17,7 +16,90 @@ type pgRowContract struct {
 	finalGenerations map[string]int
 }
 
+// compiledRowContracts holds the validated Contracts of the serving window
+// (every Contract of a small history). compiledRowContractHistories validates
+// the rest once, when a caller first needs a Contract outside the window. Both
+// are protected by pgMigrationRegistrations.
 var compiledRowContracts = map[*pgCompiledRowHistory]map[int]*pgRowContract{}
+var compiledRowContractHistories = map[*pgCompiledRowHistory]*pgRowContractHistory{}
+
+type pgRowContractHistory struct {
+	compiled *pgCompiledRowHistory
+	raw      []pgRowContractText
+	full     pgMemo[map[int]*pgRowContract]
+}
+
+type pgRowContractText struct{ contract, hash, settled, settledHash string }
+
+// complete parses and binds every Contract, reusing the window Contracts.
+func (history *pgRowContractHistory) complete(window map[int]*pgRowContract) (map[int]*pgRowContract, error) {
+	return history.full.get(func() (map[int]*pgRowContract, error) {
+		pgHistoryCounters.complete.Add(1)
+		compiled := history.compiled
+		physical := compiledRowPhysicalHistories[compiled]
+		if physical == nil {
+			return nil, fmt.Errorf("row Contract history lacks its physical history")
+		}
+		plans, err := physical.all()
+		if err != nil {
+			return nil, err
+		}
+		contracts := map[int]*pgRowContract{}
+		last := 1
+		for _, text := range history.raw {
+			settled, err := pgParseRowSettledPlan(text.settled, text.settledHash)
+			if err != nil {
+				return nil, err
+			}
+			if settled.version <= last || settled.version > len(plans) {
+				return nil, fmt.Errorf("invalid compiled migration history: Contract version inventory is unordered or unavailable")
+			}
+			last = settled.version
+			if existing := window[settled.version]; existing != nil {
+				contracts[settled.version] = existing
+				continue
+			}
+			contract, err := pgBindRowContractText(compiled, plans[settled.version-1], settled, text)
+			if err != nil {
+				return nil, err
+			}
+			contract.compiled = compiled
+			contract.settled.compiled = compiled
+			contracts[settled.version] = contract
+		}
+		for version := range window {
+			if contracts[version] == nil {
+				return nil, fmt.Errorf("invalid compiled migration history: Contract version inventory is unordered or unavailable")
+			}
+		}
+		return contracts, nil
+	})
+}
+
+func pgBindRowContractText(compiled *pgCompiledRowHistory, window, settled *pgRowPhysicalPlan, text pgRowContractText) (*pgRowContract, error) {
+	if err := pgBindRowSettledPlan(compiled, window, settled); err != nil {
+		return nil, err
+	}
+	return pgParseRowContract(text.contract, text.hash, window, settled)
+}
+
+// pgRowContractAt returns the compiler Contract for one version, or nil when
+// the history has none. The caller holds pgMigrationRegistrations.
+func pgRowContractAt(compiled *pgCompiledRowHistory, version int) (*pgRowContract, error) {
+	window := compiledRowContracts[compiled]
+	if contract := window[version]; contract != nil {
+		return contract, nil
+	}
+	history := compiledRowContractHistories[compiled]
+	if history == nil || compiled == nil || pgServingWindow(compiled.history.CurrentVersion, version) {
+		return nil, nil
+	}
+	contracts, err := history.complete(window)
+	if err != nil {
+		return nil, err
+	}
+	return contracts[version], nil
+}
 
 func pgRowColumnNode(c pgRowPhysicalColumn) pgRowCanonical {
 	d := pgRowList(pgRowAtom("null"))
@@ -248,64 +330,106 @@ func pgParseRowContract(encoded, hash string, window, settled *pgRowPhysicalPlan
 
 // Private compiler emission only. Parsed documents remain descriptions until
 // the complete envelope has been bound to exact local source/physical owners.
+// Registration validates the Contracts of the serving window; see
+// migration_history_lazy.go.
 func registerCompiledRowContractHistory(payload string) {
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
-	r := &pgMigrationWireReader{}
-	root := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "databases")
-	if pgMigrationRead[int](r, root["version"]) != 1 || pgMigrationRead[string](r, root["kind"]) != "compiled-row-contract-history" {
-		r.fail("unsupported compiled Contract envelope")
+	fail := func(message string) { panic(fmt.Errorf("invalid compiled migration history: %s", message)) }
+	must := func(err error) {
+		if err != nil {
+			panic(err)
+		}
 	}
-	abi := pgMigrationRead[string](r, root["compilerAbi"])
+	must(pgJSONIntegrity(payload))
+	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "databases")
+	must(err)
+	format, err := pgJSONValue[int](root["version"])
+	must(err)
+	kind, err := pgJSONValue[string](root["kind"])
+	must(err)
+	if format != 1 || kind != "compiled-row-contract-history" {
+		fail("unsupported compiled Contract envelope")
+	}
+	abi, err := pgJSONValue[string](root["compilerAbi"])
+	must(err)
+	entries, err := pgJSONArray(root["databases"])
+	must(err)
 	pending := map[*pgCompiledRowHistory]map[int]*pgRowContract{}
-	for _, raw := range pgMigrationRead[[]json.RawMessage](r, root["databases"]) {
-		entry := r.object(raw, "database", "family", "namespace", "contracts")
-		family := pgMigrationRead[string](r, entry["family"])
+	histories := map[*pgCompiledRowHistory]*pgRowContractHistory{}
+	for _, raw := range entries {
+		entry, err := pgJSONObject(raw, "database", "family", "namespace", "contracts")
+		must(err)
+		family, err := pgJSONValue[string](entry["family"])
+		must(err)
+		database, err := pgJSONValue[string](entry["database"])
+		must(err)
+		namespace, err := pgJSONValue[string](entry["namespace"])
+		must(err)
 		compiled := compiledRowHistories[family]
-		if compiled == nil || compiled.history.Database != pgMigrationRead[string](r, entry["database"]) || compiled.history.Namespace != pgMigrationRead[string](r, entry["namespace"]) || compiled.history.SourceCompilerABI != abi || compiledRowPhysicalHistories[compiled] == nil || pgMigrationClosedFamilies[family] {
-			r.fail("Contract envelope lacks exact open compiled owner")
-			continue
+		physical := compiledRowPhysicalHistories[compiled]
+		if compiled == nil || physical == nil || compiled.history.Database != database || compiled.history.Namespace != namespace || compiled.history.SourceCompilerABI != abi || pgMigrationClosedFamilies[family] {
+			panic(fmt.Errorf("invalid compiled migration history: Contract envelope lacks exact open compiled owner"))
 		}
 		if pending[compiled] != nil || compiledRowContracts[compiled] != nil {
-			r.fail("duplicate Contract history")
-			continue
+			fail("duplicate Contract history")
 		}
+		raws, err := pgJSONArray(entry["contracts"])
+		must(err)
+		history := &pgRowContractHistory{compiled: compiled}
+		for _, rawContract := range raws {
+			c, err := pgJSONObject(rawContract, "contract", "hash", "settled", "settledHash")
+			must(err)
+			var text pgRowContractText
+			for _, field := range []struct {
+				name   string
+				target *string
+			}{{"contract", &text.contract}, {"hash", &text.hash}, {"settled", &text.settled}, {"settledHash", &text.settledHash}} {
+				value, err := pgJSONValue[string](c[field.name])
+				must(err)
+				*field.target = value
+			}
+			history.raw = append(history.raw, text)
+		}
+		current := compiled.history.CurrentVersion
 		contracts := map[int]*pgRowContract{}
-		last := 1
-		for _, rawContract := range pgMigrationRead[[]json.RawMessage](r, entry["contracts"]) {
-			c := r.object(rawContract, "contract", "hash", "settled", "settledHash")
-			settled, err := pgParseRowSettledPlan(pgMigrationRead[string](r, c["settled"]), pgMigrationRead[string](r, c["settledHash"]))
-			if err != nil {
-				r.fail(err.Error())
-				continue
+		if pgHistoryInWindow(current) || pgLinkedSourceOf(compiled.history) == nil {
+			all, err := history.complete(nil)
+			must(err)
+			contracts = all
+		} else {
+			// Contracts are ordered by version; the window's are at the end.
+			for i := len(history.raw) - 1; i >= 0; i-- {
+				text := history.raw[i]
+				settled, err := pgParseRowSettledPlan(text.settled, text.settledHash)
+				must(err)
+				if settled == nil {
+					panic(fmt.Errorf("invalid compiled migration history: missing settled physical document"))
+				}
+				if settled.version <= 1 || settled.version > current {
+					fail("Contract version inventory is unordered or unavailable")
+				}
+				if !pgServingWindow(current, settled.version) {
+					break
+				}
+				if contracts[settled.version] != nil {
+					fail("Contract version inventory is unordered or unavailable")
+				}
+				pgHistoryCounters.elements.Add(1)
+				window, err := physical.plan(settled.version)
+				must(err)
+				contract, err := pgBindRowContractText(compiled, window, settled, text)
+				must(err)
+				contracts[settled.version] = contract
 			}
-			history := compiledRowPhysicalHistories[compiled]
-			if settled.version <= last || settled.version > len(history.versions) {
-				r.fail("Contract version inventory is unordered or unavailable")
-				continue
-			}
-			window := history.versions[settled.version-1]
-			if err := pgBindRowSettledPlan(compiled, window, settled); err != nil {
-				r.fail(err.Error())
-				continue
-			}
-			contract, err := pgParseRowContract(pgMigrationRead[string](r, c["contract"]), pgMigrationRead[string](r, c["hash"]), window, settled)
-			if err != nil {
-				r.fail(err.Error())
-				continue
-			}
-			contracts[settled.version] = contract
-			last = settled.version
 		}
 		pending[compiled] = contracts
+		histories[compiled] = history
 	}
 	for compiled := range compiledRowPhysicalHistories {
 		if pending[compiled] == nil {
-			r.fail("Contract envelope omits a complete physical owner inventory")
+			fail("Contract envelope omits a complete physical owner inventory")
 		}
-	}
-	if r.err != nil {
-		panic(r.err)
 	}
 	for compiled, contracts := range pending {
 		for _, contract := range contracts {
@@ -313,6 +437,7 @@ func registerCompiledRowContractHistory(payload string) {
 			contract.settled.compiled = compiled
 		}
 		compiledRowContracts[compiled] = contracts
+		compiledRowContractHistories[compiled] = histories[compiled]
 	}
 }
 
@@ -327,46 +452,101 @@ func pgCompiledRowSettledPlan(database *Database, version int) (*pgRowPhysicalPl
 		return nil, fmt.Errorf("missing settled source history")
 	}
 	compiled := compiledRowHistories[history.Family]
+	if compiled == nil {
+		return nil, fmt.Errorf("missing settled compiled source")
+	}
 	if err := pgCheckRowOwner(database, compiled); err != nil {
 		return nil, err
 	}
 	physical := compiledRowPhysicalHistories[compiled]
-	if physical != nil && version > 0 && version <= len(physical.versions) {
-		// A purely additive prefix has no retained conversion state to contract.
-		// Do not extend this judgment across an earlier transforming window:
-		// that requires its exact registered Contract and durable completion.
-		additivePrefix := true
-		for _, plan := range physical.versions[:version] {
-			if len(plan.windows) != 0 || len(plan.retirements) != 0 {
-				additivePrefix = false
-				break
-			}
-		}
-		if additivePrefix {
-			return physical.versions[version-1], nil
-		}
-		current := physical.versions[version-1]
-		if pgRowEpochPreserving(current) || pgRowQueueEdge(current) {
-			// An additive or queue-only tail has a complete row projection. Earlier
-			// transformations still need their exact registered Contracts; durable
-			// completion is independently required by expansion/admission checks.
-			for _, plan := range physical.versions[:version] {
-				if len(plan.windows) == 0 && len(plan.retirements) == 0 {
-					continue
-				}
-				prior := compiledRowContracts[compiled][plan.version]
-				if prior == nil || prior.compiled != compiled || prior.window != plan || prior.settled.compiled != compiled {
-					return nil, fmt.Errorf("additive tail lacks its exact earlier Contract source")
-				}
-			}
-			return current, nil
+	if physical != nil && version > 0 && version <= len(physical.raw) {
+		contracts := compiledRowContractHistories[compiled]
+		_, _, complete := contracts.fullPeek()
+		plan, err := pgRowAdditiveTailPlan(compiled, physical, version, complete)
+		if err != nil || plan != nil {
+			return plan, err
 		}
 	}
-	contract := compiledRowContracts[compiled][version]
+	contract, err := pgRowContractAt(compiled, version)
+	if err != nil {
+		return nil, err
+	}
 	if contract == nil || contract.compiled != compiled || contract.settled.compiled != compiled {
 		return nil, fmt.Errorf("missing exact checked settled Contract plan")
 	}
 	return contract.settled, nil
+}
+
+func (history *pgRowContractHistory) fullPeek() (map[int]*pgRowContract, error, bool) {
+	if history == nil {
+		return nil, nil, false
+	}
+	return history.full.peek()
+}
+
+// pgRowTransforming reports a version that transforms rows, from the decoded
+// transform and retirement lists, without loading its plan.
+func pgRowTransforming(compiled *pgCompiledRowHistory, v int) bool {
+	for _, d := range compiled.transforms {
+		if d.MigrationVersion == v {
+			return true
+		}
+	}
+	for _, d := range compiled.retirements {
+		if d.MigrationVersion == v {
+			return true
+		}
+	}
+	return false
+}
+
+// pgRowAdditiveTailPlan returns version's own plan when it needs no Contract
+// of its own (a purely additive prefix, or an additive or queue-only tail whose
+// earlier transformations have their exact Contracts), and nil otherwise.
+// Earlier transformations outside the serving window are checked only when
+// full is set: serving never reads them, and complete validation checks them
+// with full set. Caller holds pgMigrationRegistrations.
+func pgRowAdditiveTailPlan(compiled *pgCompiledRowHistory, physical *pgCompiledRowPhysicalHistory, version int, full bool) (*pgRowPhysicalPlan, error) {
+	current, err := physical.plan(version)
+	if err != nil {
+		return nil, err
+	}
+	// A purely additive prefix has no retained conversion state to contract.
+	// Do not extend this judgment across an earlier transforming window:
+	// that requires its exact registered Contract and durable completion.
+	additivePrefix := true
+	for v := 1; v <= version; v++ {
+		if pgRowTransforming(compiled, v) {
+			additivePrefix = false
+			break
+		}
+	}
+	if additivePrefix {
+		return current, nil
+	}
+	if !pgRowEpochPreserving(current) && !pgRowQueueEdge(current) {
+		return nil, nil
+	}
+	// An additive or queue-only tail has a complete row projection. Earlier
+	// transformations still need their exact registered Contracts; durable
+	// completion is independently required by expansion/admission checks.
+	for v := 1; v <= version; v++ {
+		if !pgRowTransforming(compiled, v) || !full && !pgServingWindow(compiled.history.CurrentVersion, v) {
+			continue
+		}
+		plan, err := physical.plan(v)
+		if err != nil {
+			return nil, err
+		}
+		prior, err := pgRowContractAt(compiled, v)
+		if err != nil {
+			return nil, err
+		}
+		if prior == nil || prior.compiled != compiled || prior.window != plan || prior.settled.compiled != compiled {
+			return nil, fmt.Errorf("additive tail lacks its exact earlier Contract source")
+		}
+	}
+	return current, nil
 }
 
 func pgCompiledRowPredecessorPlan(database *Database, version int) (*pgRowPhysicalPlan, error) {

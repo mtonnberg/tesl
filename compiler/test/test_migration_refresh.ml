@@ -371,6 +371,25 @@ let later_revision () = with_project (fun root path ->
   let first = path "schema/notes/v1/notes.tesl" in
   edit path "schema/notes/v1/notes.tesl" (read first ^ "# frozen tamper\n");
   refuses (refresh ~version:3 root))
+let changed_current_is_one_actionable_refusal () = with_project (fun _root path ->
+  let file = path "schema/notes/v-current/notes.tesl" in
+  let recorded = Migration_hash.digest (read file) in
+  let app = "module App exposing []\nimport NotesSchema.VCurrent\nimport NotesSchema.Migrate.V2\n" in
+  edit path "app.tesl" app;
+  change path (replace "title: String }" "title: String, archivedAt: Maybe String }" child);
+  let stale = List.filter (fun (d : Compile.diagnostic) -> d.code = "MIG001") (Compile.check_source (path "app.tesl") app) in
+  check int "one diagnostic per changed source" 1 (List.length stale);
+  let message = (List.hd stale).message in
+  check bool "names the revision and what tesl migrate does" true
+    (String.starts_with ~prefix:"current schema source changed since revision V2 was generated." message &&
+     contains message "starts V3 from the recorded V2 source and reapplies them" && contains message "--resume");
+  (match Migration_header.changed_current_sources ~file:(migration path) with
+   | Some ("NotesSchema",2,[("NotesSchema.VCurrent.Notes",changed,digest)]) ->
+     check string "changed path" file changed; check string "recorded digest" recorded digest
+   | _ -> fail "edited current source was not described");
+  let json = Migration_preview.errors_to_json [{loc=Location.make_loc (migration path) 0 0 0 1;message;candidates=[]}] in
+  check bool "preview names the start action" true (contains json {|"action":"start-from-edited-current"|});
+  check bool "preview carries the recorded digest" true (contains json recorded))
 let () = run "Migration refresh previews" ["checked source merge",List.map (fun (name,f) -> test_case name `Quick f)
   ["unchanged preview is deterministic and empty",noop;"optional private field preserves app and helpers",optional;
    "missing value blocks compilation and manual default survives",holes_and_manual_default;
@@ -386,4 +405,5 @@ let () = run "Migration refresh previews" ["checked source merge",List.map (fun 
    "invalid schema and user helper still receive full checks",invalid_source;
    "changed private fact requires stored-value revalidation",changed_fact;
    "proof guidance excludes unsupported carriers and identities",proof_guidance_exclusions;
-   "later revision refresh checks completed history in proposed view",later_revision]]
+   "later revision refresh checks completed history in proposed view",later_revision;
+   "edited current source is one actionable refusal",changed_current_is_one_actionable_refusal]]

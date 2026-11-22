@@ -5,12 +5,36 @@
 # PostgreSQL tools on PATH. Arguments select focused kernel tests only.
 set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+# Race-instrumented Go programs sleep one second before exiting by default
+# (GORACE atexit_sleep_ms=1000) so that other goroutines can still report a
+# race. The gates start thousands of such short-lived programs (schema
+# commands, generated tests); races are still reported when they happen and
+# still fail with exit code 66.
+export GORACE="${GORACE:-atexit_sleep_ms=0}"
 lane="${TESL_MIGRATION_TEST_LANE:-full}"
 if [[ "$lane" != full && $# != 0 ]]; then
   echo 'partitioned migration lanes cannot narrow the test selection' >&2
   exit 1
 fi
 selected_phases="$(python3 "$repo_root/scripts/migration-lanes.py" phases --lane "$lane")"
+# Per-lane runner prerequisites, derived from the lane declarations: a compiler
+# bootstrap when compiler-build runs in another lane, shared-fixture reuse only
+# in lanes declared to consume it, and the latency baseline only where
+# latency-regression runs.
+lane_plan="$(python3 "$repo_root/scripts/migration-lanes.py" plan --lane "$lane")"
+lane_bootstrap='' lane_prebuilt='' lane_latency=''
+while IFS='=' read -r key value; do
+  case "$key" in
+    bootstrap) lane_bootstrap="$value" ;;
+    prebuilt) lane_prebuilt="$value" ;;
+    latency) lane_latency="$value" ;;
+    *) echo "unknown migration lane prerequisite: $key" >&2; exit 1 ;;
+  esac
+done <<<"$lane_plan"
+if [[ -z "$lane_bootstrap" || -z "$lane_prebuilt" || -z "$lane_latency" ]]; then
+  echo 'incomplete migration lane prerequisites' >&2
+  exit 1
+fi
 unset TESL_PREBUILT_ROW_INDEX_PROGRAMS
 python3 "$repo_root/scripts/check-migration-pr.py"
 python3 -m unittest discover -s "$repo_root/scripts" -p 'test_migration_pr.py'
@@ -25,7 +49,7 @@ for tool in "${required_tools[@]}"; do
 done
 # Fail before hours of database/build work when a squash merge or shallow clone
 # omitted the independent comparison input. Focused kernel runs do not need it.
-if (( $# == 0 )) && [[ "$lane" != core ]]; then
+if (( $# == 0 )) && [[ "$lane_latency" == true ]]; then
   python3 "$repo_root/scripts/compare-migration-latency.py" --prepare-baseline
 fi
 migration_tmp="$(mktemp -d "${TESL_MIGRATION_TEST_DATA_TMPDIR:-${TMPDIR:-/tmp}}/tesl-migration.XXXXXXXX")"
@@ -114,6 +138,16 @@ runtime_test() {
 # multi-day cache retention otherwise accumulates gigabytes across these phases.
 export GOCACHE="$migration_tmp/go-build-cache"
 mkdir -p "$GOCACHE"
+# CI may hand over a previously warmed copy of this cache. Go's build cache is
+# keyed by the hash of every compilation input, so a stale entry is never used
+# for changed inputs; test results are expired so none can be replayed. The copy
+# is taken right after warming, before any phase has run a test.
+go_cache_seed="${TESL_MIGRATION_GO_CACHE_SEED:-}"
+if [[ -n "$go_cache_seed" && -d "$go_cache_seed" ]] && [[ -n "$(ls -A -- "$go_cache_seed")" ]]; then
+  cp -R -- "$go_cache_seed/." "$GOCACHE/"
+  rm -f -- "$GOCACHE/.tesl-migration-cache.json"
+fi
+go clean -testcache
 # Warm ordinary and race-instrumented standard-library/third-party dependencies
 # once. This only prepares artifacts; all actual test phases still run below.
 for instrumentation in normal race; do
@@ -121,18 +155,23 @@ for instrumentation in normal race; do
   if [[ "$instrumentation" == race ]]; then warm_flags=(-race); fi
   timeout --kill-after=30s 1800 go -C "$repo_root/runtime/go" list -test -export -deps -tags=tesl_migration_test "${warm_flags[@]}" ./teslrt >"$evidence/go-cache-warm-$instrumentation.log"
 done
+if [[ -n "$go_cache_seed" && ${TESL_MIGRATION_GO_CACHE_UPDATE:-0} == 1 ]]; then
+  rm -rf -- "$go_cache_seed"
+  mkdir -p -- "$go_cache_seed"
+  cp -R -- "$GOCACHE/." "$go_cache_seed/"
+fi
 python3 "$repo_root/scripts/migration-go-cache.py" seed "$GOCACHE" | tee "$evidence/go-cache.log"
-if [[ "$lane" == lifecycle ]]; then
-  # This runner needs compiler executables, but compiler-build belongs to core
-  # in the complete phase union. Bootstrap is measured separately, not credited
-  # as a duplicate successful phase.
+if [[ "$lane_bootstrap" == true ]]; then
+  # This runner needs compiler executables, but compiler-build belongs to
+  # another lane in the complete phase union. Bootstrap is measured separately,
+  # not credited as a duplicate successful phase.
   started=$SECONDS
   timeout --kill-after=30s 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}" >"$evidence/compiler-bootstrap.log" 2>&1
   printf '%s\n' "$((SECONDS - started))" >"$evidence/compiler-bootstrap-seconds.txt"
 fi
 run_phase compiler-build 1800 dune build --root "$repo_root/compiler" -j "${TESL_CI_JOBS:-2}"
 release_args=()
-if [[ -n ${TESL_MIGRATION_PREBUILT:-} && "$lane" != core ]]; then
+if [[ -n ${TESL_MIGRATION_PREBUILT:-} && "$lane_prebuilt" == true ]]; then
   python3 "$repo_root/scripts/migration-ci-artifacts.py" restore \
     --bundle "$TESL_MIGRATION_PREBUILT" --output "$migration_tmp" \
     --evidence "$evidence/prebuilt-fixtures.json"

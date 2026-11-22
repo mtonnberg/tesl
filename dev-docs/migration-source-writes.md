@@ -10,13 +10,29 @@ that the proposal compiles or that a database migration is safe to execute.
 ## Commands and outcomes
 
 `tesl migrate app.tesl [--database App.Main]` is the guided saved-source flow.
-Start it from the checked current revision, before editing the schema. It freezes
+It may start before or after the schema is edited. When the preview refuses
+because the current target no longer matches its seal, the compiler's refusal
+carries `action: start-from-edited-current` and `staleCurrent` (family, revision,
+and each changed file with its recorded SHA-256). That description is read-only.
+The CLI then finds bytes with exactly that digest in git (index, `HEAD`, then
+history), backs the edited files up under `.tesl-stuff/migrate-edits/`, replaces
+each file only while it still holds the observed edited bytes, runs the ordinary
+guarded start, and reapplies the edits only while each file still holds the
+recorded bytes. A failed start puts the edits back. The compiler verifies every
+seal again during the start; nothing found in git is trusted without the digest
+match. `migrate generate --new-revision` uses the same path noninteractively.
+Otherwise it freezes
 that revision with the existing `--new-revision` generator, then lists the current
 schema files to edit separately from the newly prepared history. After the user
 saves and presses Enter, it refreshes the migration. Generated decisions and
 other compiler diagnostics remain visible until the user resolves them. The final
 steps check the saved application and produce the read-only PostgreSQL plan.
-Deployment guidance is printed only after both succeed.
+Deployment guidance is printed only after both succeed. It is derived from the
+plan's current step: required prior Contract, additive-epoch closure (the first
+transforming row step after an additive one, or a non-epoch-preserving index
+step), index window risks, and the Contract this revision needs. When that
+Contract's source is missing, the wizard offers the ordinary guarded
+`migrate contract --version N` publication; EOF or `s` skips it.
 
 `tesl migrate app.tesl --resume` continues an existing **undeployed** revision.
 It can reenter the diagnostic loop when a saved edit does not parse or type-check.

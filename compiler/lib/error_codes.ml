@@ -181,9 +181,11 @@ let registry : entry list = [
       "The migration header records the complete target schema source closure. \
        VCurrent or one of its private dependencies has changed. A byte mismatch \
        is expected while editing an undeployed migration, but builds remain \
-       blocked until its checked preview is refreshed. Refresh the revision if \
-       it has not been deployed, or restore the deployed source and start the \
-       next forward revision. The compiler cannot determine deployment state. \
+       blocked until the edits belong to a revision. The normal path is \
+       `tesl migrate <entry.tesl>`: it saves your edits, starts the next revision \
+       from the recorded source and reapplies them. Use `--resume` only to fold \
+       the edits into an undeployed draft revision. The compiler cannot \
+       determine deployment state. \
        Missing files or invalid paths still require correction; do not dismiss \
        frozen-source or history-metadata changes as draft edits.";
     manual = Some "migration-guide#current-schema-edits-and-recorded-hashes" };
@@ -304,6 +306,19 @@ let registry : entry list = [
        the match to one row. This warning is a suggested cost review, not a \
        compile error or permission to change the predicate.";
     manual = Some "best-practices#database-access" };
+
+  { code = "MIG032"; category = Migration;
+    title = "this table Drop is outside the supported shape";
+    explanation =
+      "A table Drop must be the only change in its revision: remove exactly one \
+       entity, leave every other entity and every queue unchanged, and keep at \
+       least one entity. Make other changes in their own revisions. Two histories \
+       cannot be dropped yet: an entity that an earlier revision transformed, and a \
+       table whose history added an index after the table was created (retiring a \
+       concurrently built index is not implemented). Until then keep the entity and \
+       stop using it from handlers. After a supported Drop, generate and deploy its \
+       Contract before the next transforming revision.";
+    manual = Some "migration-guide#supported-changes-and-your-remaining-inputs" };
 
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
   { code = "VBOOL001"; category = Type;

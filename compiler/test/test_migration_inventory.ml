@@ -260,7 +260,7 @@ let compilation_cache () = with_project (fun root write ->
     (match Migration_inventory.load ~compiler_abi:"test-compiler-1" ~root_file:path with
      | Error _ -> () | Ok _ -> fail "cached result hid malformed source");
     ignore (write "schema/notes/v-current/notes.tesl" notes);
-    for i = 1 to 129 do ignore (load ~abi:(Printf.sprintf "eviction-%d" i) path) done;
+    for i = 1 to 2049 do ignore (load ~abi:(Printf.sprintf "eviction-%d" i) path) done;
     check bool "bounded cache eviction recomputes identical inputs" false (first == load path);
     check string "eviction preserves inventory" (hash first) (hash (load path));
     first) in

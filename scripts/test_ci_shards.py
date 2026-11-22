@@ -3,12 +3,14 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ci_shards', ROOT / 'scripts/ci-shards.py')
@@ -23,7 +25,8 @@ class ShardEvidence(unittest.TestCase):
         cls.base = Path(cls.scratch.name) / 'base'
         cls.base.mkdir()
         for name in ('ci.sh', 'scripts/ci-shards.py', 'scripts/ci-shards.json',
-                     'scripts/run-migration-tests.sh', '.github/workflows/ci.yml'):
+                     'scripts/run-migration-tests.sh', '.github/workflows/ci.yml',
+                     '.github/workflows/migration-protocol.yml', 'scripts/migration-lanes.py'):
             destination = cls.base / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, destination)
@@ -210,6 +213,144 @@ class ShardEvidence(unittest.TestCase):
                 with self.assertRaises(ci.EvidenceError):
                     ci.read_parts(path, 'full')
 
+    LANES = tuple(lane for lane, _ in ci.MIGRATION_LANE_STARTS)
+
+    def use_lanes(self, lanes=None, rows=None):
+        """Replace the complete migration receipt with one receipt per lane."""
+        shutil.rmtree(self.evidence / 'migration')
+        partitions = ci.migration_lanes(self.config)
+        for lane in self.LANES if lanes is None else lanes:
+            self.lane_receipt(lane, partitions[lane] if rows is None else rows[lane])
+
+    def lane_receipt(self, lane, names, directory=None):
+        output = self.evidence / (directory or f'migration-{lane}')
+        ci.start(self.root, 'migration', self.revision, output, lane)
+        (output / 'phases.tsv').write_text('phase\tstatus\tseconds\n' + ''.join(
+            f'{name}\tOK\t1\n' for name in ci.owned(self.config, 'migration')))
+        (output / 'go-parts.tsv').write_text('part\tstatus\nmigration\tOK\n')
+        migration = Path(self.work.name) / f'{output.name}.tsv'
+        migration.write_text('phase\tseconds\texit_code\n' + ''.join(f'{name}\t1\t0\n' for name in names))
+        ci.record(self.root, 'migration', self.revision, output, migration, lane)
+
+    def test_every_migration_lane_joins_into_the_complete_union(self):
+        self.use_lanes()
+        result = self.verify()
+        self.assertEqual(result['migration_lanes'], list(self.LANES))
+        self.assertEqual(result['migration_phases'], len(self.config['migration_phases']))
+
+    def test_lanes_are_contiguous_slices_at_the_declared_boundaries(self):
+        parts = ci.migration_lanes(self.config)
+        self.assertGreaterEqual(len(self.LANES), 4)
+        self.assertEqual(list(parts), ['full', *self.LANES])
+        self.assertTrue(all(parts[lane] for lane in self.LANES))
+        self.assertEqual([name for lane in self.LANES for name in parts[lane]], self.config['migration_phases'])
+        for lane, first in ci.MIGRATION_LANE_STARTS:
+            self.assertEqual(parts[lane][0], first)
+        # The kernel has its own lane (after the compiler build that precedes it).
+        self.assertEqual(parts['kernel'], ['compiler-build', 'kernel'])
+        self.assertEqual(parts[self.LANES[-1]][-1], 'latency-regression')
+
+    def test_phases_sharing_artifacts_stay_in_one_lane(self):
+        parts = ci.migration_lanes(self.config)
+        for cohort in ci.MIGRATION_LANE_COHORTS:
+            self.assertEqual(sum(set(cohort) <= set(parts[lane]) for lane in self.LANES), 1)
+
+    def test_reordered_overlapping_or_split_lane_declarations_refuse(self):
+        starts = list(ci.MIGRATION_LANE_STARTS)
+        broken = {
+            'reordered': [starts[0], starts[2], starts[1], *starts[3:]],
+            'duplicate start': [starts[0], starts[1], starts[1], *starts[3:]],
+            'missing first phase': starts[1:],
+            'undeclared start': [*starts, ('extra', 'no-such-phase')],
+            'split cohort': [*starts[:3], ('releases', 'row-releases'), ('reviews', 'review05'), *starts[4:]],
+        }
+        for name, declaration in broken.items():
+            with self.subTest(name=name), mock.patch.object(ci, 'MIGRATION_LANE_STARTS', tuple(declaration)):
+                with self.assertRaises(ci.EvidenceError):
+                    ci.migration_lanes(self.config)
+
+    def test_lane_prerequisites_follow_their_phases(self):
+        for lane in self.LANES:
+            with self.subTest(lane=lane):
+                plan = ci.lane_plan(self.config, lane)
+                phases = ci.migration_lanes(self.config)[lane]
+                self.assertEqual(plan['bootstrap'], 'compiler-build' not in phases)
+                self.assertEqual(plan['latency'], 'latency-regression' in phases)
+                self.assertEqual(plan['prebuilt'], lane in ci.MIGRATION_PREBUILT_LANES)
+        self.assertEqual(ci.lane_plan(self.config, 'full'), {'bootstrap': False, 'prebuilt': True, 'latency': True})
+        self.assertEqual(sum(ci.lane_plan(self.config, lane)['latency'] for lane in self.LANES), 1)
+        with self.assertRaises(ci.EvidenceError):
+            ci.lane_plan(self.config, 'core')
+
+    def test_any_missing_migration_lane_refuses(self):
+        for missing in self.LANES:
+            with self.subTest(missing=missing):
+                self.setUp()
+                self.use_lanes([lane for lane in self.LANES if lane != missing])
+                with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or every lane'):
+                    self.verify()
+
+    def test_a_single_migration_lane_refuses(self):
+        for lane in self.LANES:
+            with self.subTest(lane=lane):
+                self.setUp()
+                self.use_lanes((lane,))
+                with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or every lane'):
+                    self.verify()
+
+    def test_complete_run_plus_a_lane_refuses(self):
+        self.lane_receipt('kernel', ci.migration_lanes(self.config)['kernel'])
+        with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or every lane'):
+            self.verify()
+
+    def test_complete_run_plus_every_lane_refuses(self):
+        partitions = ci.migration_lanes(self.config)
+        for lane in self.LANES:
+            self.lane_receipt(lane, partitions[lane])
+        with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or every lane'):
+            self.verify()
+
+    def test_duplicate_lane_receipt_refuses(self):
+        self.use_lanes()
+        shutil.copytree(self.evidence / 'migration-kernel', self.evidence / 'again')
+        with self.assertRaisesRegex(ci.EvidenceError, 'duplicate'):
+            self.verify()
+
+    def test_duplicate_lane_in_place_of_a_missing_one_refuses(self):
+        partitions = ci.migration_lanes(self.config)
+        self.use_lanes(self.LANES[:-1])
+        self.lane_receipt(self.LANES[0], partitions[self.LANES[0]], 'again')
+        with self.assertRaisesRegex(ci.EvidenceError, 'duplicate'):
+            self.verify()
+
+    def test_lane_with_another_lanes_phases_refuses(self):
+        parts = ci.migration_lanes(self.config)
+        rows = {lane: parts[lane] for lane in self.LANES}
+        rows['runtime'], rows['schema'] = parts['schema'], parts['runtime']
+        with self.assertRaises(ci.EvidenceError):
+            self.use_lanes(rows=rows)
+
+    def test_lane_receipt_without_its_phase_evidence_refuses(self):
+        self.use_lanes()
+        (self.evidence / 'migration-rollout/migration-phases.tsv').write_text('phase\tseconds\texit_code\n')
+        with self.assertRaises(ci.EvidenceError):
+            self.verify()
+
+    def test_lane_is_only_accepted_for_the_migration_shard(self):
+        with self.assertRaisesRegex(ci.EvidenceError, 'only the migration shard'):
+            ci.start(self.root, 'go-runtime', self.revision, Path(self.work.name) / 'laned', 'kernel')
+
+    def test_receipt_lane_cannot_change_between_start_and_record(self):
+        output = Path(self.work.name) / 'switched'
+        ci.start(self.root, 'migration', self.revision, output, 'kernel')
+        with self.assertRaisesRegex(ci.EvidenceError, 'lane differs'):
+            ci.record(self.root, 'migration', self.revision, output, None, 'runtime')
+
+    def test_retired_two_lane_names_refuse(self):
+        for lane in ('core', 'lifecycle'):
+            with self.subTest(lane=lane), self.assertRaisesRegex(ci.EvidenceError, 'unknown migration lane'):
+                ci.start(self.root, 'migration', self.revision, Path(self.work.name) / lane, lane)
+
     def test_upstream_failure_cancel_or_skip_refuses(self):
         for result in ('failure', 'cancelled', 'skipped', ''):
             with self.subTest(result=result), self.assertRaises(ci.EvidenceError):
@@ -238,10 +379,15 @@ class ShardEvidence(unittest.TestCase):
 
     def test_incomplete_workflow_matrix_refuses(self):
         path = self.root / '.github/workflows/ci.yml'
-        path.write_text(path.read_text().replace('[compiler-integration, go-runtime, migration]',
-                                                 '[compiler-integration, go-runtime]'))
-        with self.assertRaisesRegex(ci.EvidenceError, 'workflow matrix'):
-            ci.inventory(self.root)
+        for matrix in ('[compiler-integration, go-runtime]', '[compiler-integration, go-runtime, migration-kernel]',
+                       '[compiler-integration, go-runtime, migration]',
+                       '[compiler-integration, go-runtime, migration-core, migration-lifecycle]',
+                       '[compiler-integration, go-runtime, migration-kernel, migration-runtime, migration-schema, migration-releases]'):
+            with self.subTest(matrix=matrix):
+                path.write_text((ROOT / '.github/workflows/ci.yml').read_text().replace(
+                    '[' + ', '.join(job for job, _, _ in ci.JOBS) + ']', matrix))
+                with self.assertRaisesRegex(ci.EvidenceError, 'workflow matrix'):
+                    ci.inventory(self.root)
 
     def test_gate_without_always_refuses(self):
         path = self.root / '.github/workflows/ci.yml'
@@ -251,8 +397,50 @@ class ShardEvidence(unittest.TestCase):
 
     def test_gate_without_all_upstream_shards_refuses(self):
         path = self.root / '.github/workflows/ci.yml'
-        path.write_text(path.read_text().replace('    needs: [shards]', '    needs: []'))
-        with self.assertRaisesRegex(ci.EvidenceError, 'every shard'):
+        for needs in ('    needs: []', '    needs: [shards]', '    needs: [content]'):
+            with self.subTest(needs=needs):
+                path.write_text((ROOT / '.github/workflows/ci.yml').read_text().replace('    needs: [shards, content]', needs))
+                with self.assertRaisesRegex(ci.EvidenceError, 'every shard'):
+                    ci.inventory(self.root)
+
+    def test_gate_without_the_content_export_outcome_refuses(self):
+        path = self.root / '.github/workflows/ci.yml'
+        path.write_text(path.read_text().replace('if [ "$CI_CONTENT_RESULT" != success ]; then', 'if false; then'))
+        with self.assertRaisesRegex(ci.EvidenceError, 'content export'):
+            ci.inventory(self.root)
+
+    def test_supported_major_matrix_must_run_exactly_the_declared_lanes(self):
+        path = self.root / '.github/workflows/migration-protocol.yml'
+        original = (ROOT / '.github/workflows/migration-protocol.yml').read_text()
+        early = '[' + ', '.join(lane for lane in self.LANES if lane not in ci.MIGRATION_PREBUILT_LANES) + ']'
+        late = '[' + ', '.join(ci.MIGRATION_PREBUILT_LANES) + ']'
+        self.assertIn('lane: ' + early, original)
+        self.assertIn('lane: ' + late, original)
+        changes = (
+            ('lane: ' + early, 'lane: [kernel, runtime, schema]'),
+            ('lane: ' + early, 'lane: [core]'),
+            ('lane: ' + late, 'lane: [rollout, releases]'),
+            ('lane: ' + early, 'lane: ' + early.replace('kernel, ', '')),
+            ('    needs: [lanes, fixture-lanes]', '    needs: [lanes]'),
+            ('--upstream "$MIGRATION_LANES_RESULT" --upstream "$MIGRATION_FIXTURE_LANES_RESULT"',
+             '--upstream "$MIGRATION_LANES_RESULT"'),
+            ('    needs: [fixtures]\n', '\n'),
+            ('  fixture-lanes:\n', '  late-lanes:\n'),
+        )
+        for old, new in changes:
+            with self.subTest(change=new):
+                self.assertIn(old, original)
+                path.write_text(original.replace(old, new, 1))
+                with self.assertRaises(ci.EvidenceError):
+                    ci.inventory(self.root)
+
+    def test_supported_major_lanes_must_share_the_same_majors(self):
+        path = self.root / '.github/workflows/migration-protocol.yml'
+        original = (ROOT / '.github/workflows/migration-protocol.yml').read_text()
+        majors = "postgres: ${{ fromJSON(github.event_name == 'schedule' && '[14,15,16,17,18]' || '[14,18]') }}"
+        self.assertEqual(original.count(majors), 3)
+        path.write_text(original.replace(majors, 'postgres: [18]', 1))
+        with self.assertRaisesRegex(ci.EvidenceError, 'majors'):
             ci.inventory(self.root)
 
     def test_gate_cannot_borrow_verifier_from_a_later_job(self):
@@ -279,6 +467,20 @@ class ShardEvidence(unittest.TestCase):
             result = subprocess.run(['bash', str(self.root / 'ci.sh'), '--shard', shard, '--list-phases'],
                                     capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout.splitlines(), ci.owned(self.config, shard))
+
+    def test_actual_shell_accepts_only_declared_migration_lanes(self):
+        for lane in ('full', *self.LANES):
+            with self.subTest(lane=lane):
+                result = subprocess.run(['bash', str(self.root / 'ci.sh'), '--shard', 'migration', '--list-phases'],
+                                        capture_output=True, text=True, env={**os.environ, 'TESL_MIGRATION_TEST_LANE': lane})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), ci.owned(self.config, 'migration'))
+        for lane in ('core', 'lifecycle', 'unknown'):
+            with self.subTest(lane=lane):
+                result = subprocess.run(['bash', str(self.root / 'ci.sh'), '--shard', 'migration', '--list-phases'],
+                                        capture_output=True, text=True, env={**os.environ, 'TESL_MIGRATION_TEST_LANE': lane})
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('unknown migration lane', result.stderr)
 
     def test_actual_shell_unknown_shard_refuses_before_execution(self):
         result = subprocess.run(['bash', str(self.root / 'ci.sh'), '--shard', 'unknown'],

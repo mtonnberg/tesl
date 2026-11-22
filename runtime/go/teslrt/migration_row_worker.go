@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -194,13 +196,77 @@ func pgWithRowLeaseRenewal(service context.Context, coordinator *pgx.Conn, plan 
 	return run(ctx)
 }
 
-// Ordinary workers release after one bounded batch; finality keeps the same
-// renewal scope across the complete rescan, including fast consecutive batches.
-func pgRunRowBackfillLease(service context.Context, coordinator, batch *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, lease pgRowLeaseAdmission) error {
-	return pgWithRowLeaseRenewal(service, coordinator, plan, lease, func(ctx context.Context) error {
-		_, err := pgRowBackfillBatch(ctx, batch, b, plan, entity, roles, lease)
-		return err
+// pgRowLeaseSlice bounds how long an ordinary Worker keeps a claimed lease
+// running consecutive batches before releasing it to other Workers and
+// entities. Claiming re-verifies the control catalog, so one claim per batch
+// made that verification and the inter-claim pause a fixed cost of every
+// batch. Each batch still runs its own fenced, verified CAS transaction.
+const pgRowLeaseSlice = 2 * time.Second
+
+// Ordinary workers release after a bounded slice of batches, or when a batch
+// completes the pass; finality keeps the same renewal scope across the
+// complete rescan, including fast consecutive batches.
+func pgRunRowBackfillLease(service context.Context, coordinator, batch *pgx.Conn, b *pgRowBaseline, roles PgMigrationControlRoles, plan *pgRowPhysicalPlan, entity *pgRowPhysicalEntity, lease pgRowLeaseAdmission, pace *pgRowIdlePasses) (outcome pgRowBatchOutcome, err error) {
+	started := time.Now()
+	err = pgWithRowLeaseRenewal(service, coordinator, plan, lease, func(ctx context.Context) error {
+		for {
+			if pace.batch == 0 {
+				pace.batch = pgRowBackfillBatchDefault
+			}
+			batchStarted := time.Now()
+			next, batchErr := pgRowBackfillBatch(ctx, batch, b, plan, entity, roles, lease, true, pace.batch)
+			if batchErr != nil {
+				return batchErr
+			}
+			pace.batch = pgRowNextBatchSize(pace.batch, time.Since(batchStarted))
+			outcome.changed += next.changed
+			outcome.rejected = append(outcome.rejected, next.rejected...)
+			outcome.exhausted = next.exhausted
+			if next.exhausted || time.Since(started) >= pgRowLeaseSlice || ctx.Err() != nil {
+				return nil
+			}
+		}
 	})
+	return outcome, err
+}
+
+// pgRowIdlePasses paces the passes over one entity. Old writers can still
+// demote converted rows during overlap, so the Worker keeps passing over the
+// table, but a pass that converted nothing means the table was settled: the
+// next pass waits, doubling from one second up to pgRowIdlePassMaxWait. Reads
+// convert demoted rows themselves, and Contract runs its own final pass, so
+// this delay costs neither correctness nor retirement.
+type pgRowIdlePasses struct {
+	changed   int
+	idle      int
+	notBefore time.Time
+	batch     int // adaptive batch size; see pgRowNextBatchSize
+}
+
+const pgRowIdlePassMaxWait = 30 * time.Second
+
+// Each pass reports the rows it left unconverted, so a rejection stays
+// visible in the Worker's log until the row is repaired or the migration's
+// policy changes. Contract refuses to retire the old version meanwhile.
+func pgReportRowRejections(out io.Writer, rejected []*pgRowRejectedError) {
+	for _, rejection := range rejected {
+		_, _ = fmt.Fprintf(out, "schema worker: %v; it stays unconverted and Contract cannot retire the old version until it is repaired\n", rejection)
+	}
+}
+
+func (p *pgRowIdlePasses) record(changed int, exhausted bool, now time.Time) {
+	p.changed += changed
+	if !exhausted {
+		return
+	}
+	if p.changed > 0 {
+		p.idle = 0
+		p.notBefore = time.Time{}
+	} else {
+		p.idle++
+		p.notBefore = now.Add(min(time.Second<<min(p.idle-1, 5), pgRowIdlePassMaxWait))
+	}
+	p.changed = 0
 }
 
 func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBaseline, roles PgMigrationControlRoles) (resultErr error) {
@@ -219,6 +285,7 @@ func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBas
 	if b.target == nil {
 		return fmt.Errorf("row worker lacks compiled physical target")
 	}
+	paces := map[string]*pgRowIdlePasses{}
 	for service.Err() == nil {
 		tag := "tesl-exec:" + UUIDv7()
 		settings := config.Copy()
@@ -261,6 +328,14 @@ func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBas
 				for _, window := range b.target.windows {
 					entity := b.target.entity(window.entity)
 					name := pgRowLeaseName(window.entity, window.targetGeneration, 0)
+					pace := paces[name]
+					if pace == nil {
+						pace = &pgRowIdlePasses{}
+						paces[name] = pace
+					}
+					if time.Now().Before(pace.notBefore) {
+						continue
+					}
 					query, stop := context.WithTimeout(service, 10*time.Second)
 					token, err := pgClaimRowLease(query, coordinator, b, roles, name, tag)
 					stop()
@@ -271,7 +346,11 @@ func pgRunRowWorker(service context.Context, config *pgx.ConnConfig, b *pgRowBas
 						continue
 					}
 					lease := pgRowLeaseAdmission{leaseName: name, leaseToken: token, holder: tag}
-					err = pgRunRowBackfillLease(service, coordinator, batch, b, roles, b.target, entity, lease)
+					outcome, err := pgRunRowBackfillLease(service, coordinator, batch, b, roles, b.target, entity, lease, pace)
+					if err == nil {
+						pace.record(outcome.changed, outcome.exhausted, time.Now())
+						pgReportRowRejections(os.Stderr, outcome.rejected)
+					}
 					cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					_, releaseErr := coordinator.Exec(cleanup, "select "+pgx.Identifier{b.history.Namespace, "tesl_release_row_shard"}.Sanitize()+"($1,$2,$3)", name, token, tag)
 					cancel()

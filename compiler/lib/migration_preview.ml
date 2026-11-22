@@ -180,6 +180,14 @@ let errors_to_json errors =
   let error (e : error) = Printf.sprintf {|{"file":%s,"line":%d,"col":%d,"message":%s,"candidates":[%s]%s}|}
     (quote e.loc.file) e.loc.start.line e.loc.start.col (quote e.message)
     (String.concat "," (List.map candidate e.candidates))
-    (if String.starts_with ~prefix:"Prepare the cleanup source for V" e.message then {|,"action":"review-cleanup"|}else "") in
+    (if String.starts_with ~prefix:"Prepare the cleanup source for V" e.message then {|,"action":"review-cleanup"|}
+     else if String.starts_with ~prefix:Migration_header.changed_current_prefix e.message then
+       match Migration_header.changed_current_sources ~file:e.loc.file with
+       | None -> ""
+       | Some (family,revision,sources) -> Printf.sprintf
+           {|,"action":"start-from-edited-current","staleCurrent":{"family":%s,"revision":%d,"sources":[%s]}|}
+           (quote family) revision (String.concat "," (List.map (fun (m,file,digest) ->
+             Printf.sprintf {|{"module":%s,"file":%s,"recordedSha256":%s}|} (quote m) (quote file) (quote digest)) sources))
+     else "") in
   {|{"version":1,"kind":"migration-source-preview","ok":false,"errors":[|} ^
     String.concat "," (List.map error errors) ^ {|],"manifest":null}|}

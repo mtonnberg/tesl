@@ -80,7 +80,58 @@ func (app *App) migrate(ctx context.Context, args []string) error {
 	if (rest[0] != "generate" && rest[0] != "contract") || slices.Contains(rest, "--manifest-json") {
 		return app.compiler(ctx, args...)
 	}
+	if rest[0] == "generate" && slices.Contains(rest, "--new-revision") {
+		return app.migrationGenerateNewRevision(ctx, args)
+	}
 	return app.migrationGenerate(ctx, args, nil)
+}
+
+// Starting a revision after the current schema was already edited keeps the
+// edits: the recorded source is put back, the revision starts as usual and the
+// edits are reapplied. Progress goes to stderr so stdout remains one JSON value.
+func (app *App) migrationGenerateNewRevision(ctx context.Context, args []string) error {
+	attempt := func() ([]byte, error) {
+		var output compilerOutput
+		child := *app
+		child.Stdout = &output
+		err := child.migrationGenerate(ctx, args, nil)
+		return output.Bytes(), err
+	}
+	output, err := attempt()
+	var refusal migrationWizardReport
+	if err == nil || json.Unmarshal(output, &refusal) != nil || refusal.Kind != "migration-source-preview" || refusal.OK {
+		if _, writeErr := app.Stdout.Write(output); writeErr != nil {
+			return writeErr
+		}
+		return err
+	}
+	edited := migrationEditedCurrent(refusal.Errors)
+	if edited == nil {
+		if _, writeErr := app.Stdout.Write(output); writeErr != nil {
+			return writeErr
+		}
+		return err
+	}
+	output = nil
+	reapplied, err := app.migrationStartFromEditedCurrent(ctx, edited, app.Stderr, func() error {
+		var startErr error
+		output, startErr = attempt()
+		return startErr
+	})
+	if err != nil {
+		if len(output) > 0 {
+			if _, writeErr := app.Stdout.Write(output); writeErr != nil {
+				return writeErr
+			}
+		}
+		return err
+	}
+	result := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(output, &result); err != nil {
+		return err
+	}
+	result["editsReapplied"], _ = json.Marshal(reapplied)
+	return json.NewEncoder(app.Stdout).Encode(result)
 }
 
 // A host may add selection preconditions before publication. The compiler still

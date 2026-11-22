@@ -139,7 +139,7 @@ func pgRunRowSchemaCommandOn(serviceContext context.Context, command pgSchemaCom
 		return pgWriteSchemaInstallation(out, command.json, b.history, state, roles)
 	case "worker":
 		if b.target != nil && len(b.target.queueConversions) > 0 {
-			if b.target.version < 2 || len(b.queues) != b.target.version {
+			if b.target.version < 2 || b.queues.len() != b.target.version {
 				return fmt.Errorf("queue worker requires a complete consecutive queue-only history")
 			}
 			var state PgMigrationControlState
@@ -164,7 +164,7 @@ func pgRunRowSchemaCommandOn(serviceContext context.Context, command pgSchemaCom
 				return err
 			}
 			if state.Current != b.target.version {
-				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues[b.target.version-1].version, b.target.contract, b.target.hash); err != nil {
+				if err := pgPublishRowQueueTarget(ctx, conn, b.history.Namespace, roles, b.queues.must(b.target.version).version, b.target.contract, b.target.hash); err != nil {
 					return err
 				}
 			}

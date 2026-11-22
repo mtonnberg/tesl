@@ -18,18 +18,30 @@ func pgRowContractFor(database *Database, version int) (*pgRowContract, error) {
 	}
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
-	c := compiledRowContracts[plan.compiled][version]
+	c, err := pgRowContractAt(plan.compiled, version)
+	if err != nil {
+		return nil, err
+	}
 	if c == nil || c.compiled != plan.compiled || c.window != plan || c.settled.compiled != plan.compiled {
 		return nil, fmt.Errorf("row Contract requires exact compiler-bound window and settled plan")
 	}
 	return c, nil
 }
 
-// A try-lock never queues an exclusive waiter ahead of new short requests.
+// Every admitted request transaction holds its version's key in shared mode,
+// so the drain needs an instant with no request of that version in flight.
+// It first only tries the lock, which never queues an exclusive waiter ahead
+// of new short requests. Under steady concurrency such an instant may never
+// come, so after pgCompatibilityTryAttempts misses each round also waits in
+// the lock queue, bounded by pgCompatibilityQueuedWait: PostgreSQL then holds
+// back new requests of that version (for at most that long) until the
+// in-flight ones finish. A timed-out wait releases everything and retries.
 // Arbitrary application transaction bodies are never replayed by contraction.
 func pgRowCompatibilityDrain(ctx context.Context, conn *pgx.Conn, fence, from, to int, boundary string, run func() error) (result error) {
 	migrationBoundary(boundary + "-before-compatibility-barrier")
+	misses := 0
 	for {
+		queued := misses >= pgCompatibilityTryAttempts
 		acquired := []int{}
 		release := func() error {
 			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -48,8 +60,8 @@ func pgRowCompatibilityDrain(ctx context.Context, conn *pgx.Conn, fence, from, t
 		}
 		busy := false
 		for version := from; version <= to; version++ {
-			var ok bool
-			if err := conn.QueryRow(ctx, "select pg_catalog.pg_try_advisory_lock($1::integer,$2::integer)", -fence, version).Scan(&ok); err != nil {
+			ok, err := pgCompatibilityAcquire(ctx, conn, fence, version, queued)
+			if err != nil {
 				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = conn.Close(cleanup)
@@ -70,11 +82,47 @@ func pgRowCompatibilityDrain(ctx context.Context, conn *pgx.Conn, fence, from, t
 		if err := release(); err != nil {
 			return err
 		}
+		misses++
 		migrationBoundary(boundary + "-compatibility-busy")
 		if err := pgIndexWait(ctx, 25*time.Millisecond); err != nil {
 			return err
 		}
 	}
+}
+
+const (
+	pgCompatibilityTryAttempts = 20
+	pgCompatibilityQueuedWait  = 150 * time.Millisecond
+)
+
+// pgCompatibilityAcquire takes the exclusive compatibility key. Without
+// queued it only tries. With queued it waits in the lock queue for at most
+// pgCompatibilityQueuedWait; a lock_timeout expiry reports busy and leaves the
+// session usable, since the wait happens outside any transaction.
+func pgCompatibilityAcquire(ctx context.Context, conn *pgx.Conn, fence, version int, queued bool) (bool, error) {
+	if !queued {
+		var ok bool
+		err := conn.QueryRow(ctx, "select pg_catalog.pg_try_advisory_lock($1::integer,$2::integer)", -fence, version).Scan(&ok)
+		return ok, err
+	}
+	var previous string
+	if err := conn.QueryRow(ctx, "select pg_catalog.current_setting('lock_timeout')").Scan(&previous); err != nil {
+		return false, err
+	}
+	if _, err := conn.Exec(ctx, "select pg_catalog.set_config('lock_timeout',$1,false)", fmt.Sprintf("%dms", pgCompatibilityQueuedWait.Milliseconds())); err != nil {
+		return false, err
+	}
+	_, lockErr := conn.Exec(ctx, "select pg_catalog.pg_advisory_lock($1::integer,$2::integer)", -fence, version)
+	if _, err := conn.Exec(ctx, "select pg_catalog.set_config('lock_timeout',$1,false)", previous); err != nil {
+		return false, errors.Join(lockErr, err)
+	}
+	// A lock timeout or a detected deadlock ends the wait without the key: the
+	// caller releases every key it holds and retries, which breaks any cycle.
+	var server *pgconn.PgError
+	if errors.As(lockErr, &server) && (server.Code == "55P03" || server.Code == "40P01") {
+		return false, nil
+	}
+	return lockErr == nil, lockErr
 }
 func pgRowRetiringFences(ctx context.Context, conn *pgx.Conn, fence, from, to int, run func() error) error {
 	if from >= to {
@@ -411,7 +459,7 @@ func pgRowFinalPass(ctx context.Context, coordinator *pgx.Conn, settings *pgx.Co
 				return err
 			}
 			for {
-				if _, err := pgRowBackfillBatch(ctx, batch, b, c.window, c.window.entity(window.entity), roles, lease); err != nil {
+				if _, err := pgRowBackfillBatch(ctx, batch, b, c.window, c.window.entity(window.entity), roles, lease, false, 0); err != nil {
 					return err
 				}
 				migrationBoundary("row-finality-after-batch")

@@ -224,3 +224,97 @@ func TestPostgresPoolerAdmissionTransactions(t *testing.T) {
 		})
 	}
 }
+
+// INV-READ, TR-ADMIT under pooling for the pipelined request read: {BEGIN,
+// shared compatibility key, admission}, the query, {admission, COMMIT}. The
+// pooler must keep one backend from BEGIN through COMMIT, and a refusal in the
+// opening pipeline must leave the pooled backend reusable.
+func TestPostgresPoolerPipelinedReadTransactions(t *testing.T) {
+	for _, mode := range []string{"session", "transaction"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newDatabaseFixture(t)
+			config := startPooler(t, f, mode)
+			f.expanded(t, 8)
+			f.exec(t, "create table "+f.schema+".notes (id int primary key)")
+			f.exec(t, "insert into "+f.schema+".notes values (1)")
+			conn, err := pgx.ConnectConfig(f.ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = conn.Close(ctx)
+			})
+			admit := "select " + f.schema + ".tesl_admit($1::integer)"
+			open := func(version int) (int, error) {
+				batch := &pgx.Batch{}
+				batch.Queue("begin isolation level read committed")
+				batch.Queue("select pg_catalog.pg_advisory_xact_lock_shared($1::integer,$2::integer)", -f.fence, version)
+				batch.Queue(admit, version)
+				batch.Queue("select pg_backend_pid()")
+				results := conn.SendBatch(f.ctx, batch)
+				defer func() { _ = results.Close() }()
+				for range 2 {
+					if _, err := results.Exec(); err != nil {
+						return 0, err
+					}
+				}
+				var floor, pid int
+				if err := results.QueryRow().Scan(&floor); err != nil {
+					return 0, err
+				}
+				err := results.QueryRow().Scan(&pid)
+				return pid, err
+			}
+			pid, err := open(7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var queryPID, rows int
+			if err := conn.QueryRow(f.ctx, "select pg_backend_pid(),count(*) from "+f.schema+".notes").Scan(&queryPID, &rows); err != nil || rows != 1 {
+				t.Fatalf("pipelined read query: rows=%d, %v", rows, err)
+			}
+			if queryPID != pid {
+				t.Fatalf("pooler moved the read transaction between backends: %d then %d", pid, queryPID)
+			}
+			closing := &pgx.Batch{}
+			closing.Queue(admit, 7)
+			closing.Queue("commit")
+			results := conn.SendBatch(f.ctx, closing)
+			var floor int
+			if err := results.QueryRow().Scan(&floor); err != nil {
+				t.Fatal(err)
+			}
+			if tag, err := results.Exec(); err != nil || tag.String() != "COMMIT" {
+				t.Fatalf("pipelined commit: %q, %v", tag.String(), err)
+			}
+			if err := results.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if status := conn.PgConn().TxStatus(); status != 'I' {
+				t.Fatalf("pipelined read left transaction state %q", status)
+			}
+			f.exec(t, fmt.Sprintf("begin; select pg_advisory_xact_lock(%d,7); select %s.tesl_advance_floor(7,8,'retire',1,'tesl-1','fixture'); commit", f.fence, f.schema))
+			if _, err := open(7); err == nil || !strings.Contains(err.Error(), "is retired") {
+				t.Fatalf("pooled pipelined read admitted a retired version or wrong error: %v", err)
+			}
+			if status := conn.PgConn().TxStatus(); status != 'E' {
+				t.Fatalf("refused pipeline did not leave an aborted transaction: %q", status)
+			}
+			if _, err := conn.Exec(f.ctx, "rollback"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := open(8); err != nil {
+				t.Fatalf("refused pipeline leaked failure into the next pooled request: %v", err)
+			}
+			if _, err := conn.Exec(f.ctx, "rollback"); err != nil {
+				t.Fatal(err)
+			}
+			var held int
+			if err := f.conn.QueryRow(f.ctx, "select count(*) from pg_locks where locktype='advisory' and pid<>pg_backend_pid() and database=(select oid from pg_catalog.pg_database where datname=current_database())").Scan(&held); err != nil || held != 0 {
+				t.Fatalf("pipelined read leaked an advisory key into a pooled backend: locks=%d, %v", held, err)
+			}
+		})
+	}
+}

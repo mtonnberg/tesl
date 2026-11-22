@@ -168,8 +168,9 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
     let removed=List.filter_map (function S.Removed entity -> Some entity | _ -> None) mapping in
     if removed<>[] then begin
       if List.length removed<>1 || List.exists (fun (_,kind) -> kind<>S.Drop) (S.entries (D.coverage edge)) then
-        reject loc "table Drop requires exactly one removed entity and unchanged surviving entities";
-      if I.stored_entities schema=[] then reject loc "table Drop cannot remove the last entity";
+        reject ~code:"MIG032" loc "table Drop requires exactly one removed entity and unchanged surviving entities: \
+          make other schema changes in their own revision before or after this one";
+      if I.stored_entities schema=[] then reject ~code:"MIG032" loc "table Drop cannot remove the last entity";
       (* Compare full payload closures, not just job names or SQL carriers. Keep
          every historical descriptor: Contract restamps these unchanged jobs. *)
       let queues inventory = I.queue_contracts inventory |> List.map (fun q ->
@@ -177,17 +178,24 @@ let check_internal ~queue_expansion ~schemas ~edges = protect (fun () ->
         List.map (fun p -> relative inventory p.I.payload_name,p.payload_contract)
           q.payloads |> List.sort compare) |> List.sort compare in
       if List.exists (fun inventory -> queues inventory<>queues first) schemas then
-        reject loc "table Drop requires unchanged historical queue membership and full payload/proof/codec contracts";
+        reject ~code:"MIG032" loc "table Drop requires unchanged historical queue membership and full payload/proof/codec contracts: \
+          change queues in a separate revision";
       List.iter (fun (entity:I.stored_entity) ->
         let identity=relative (!previous).schema entity.entity_name in
         let old=List.find (fun (e:entity) -> e.identity=identity) (!previous).entities in
         if List.exists (fun (b:binding) -> b.current.identity=identity) !bindings then
-          reject entity.entity_loc "table Drop of a previously transformed entity is not supported";
+          reject ~code:"MIG032" entity.entity_loc (Printf.sprintf "table Drop of a previously transformed entity is not supported yet: \
+            %s was transformed by an earlier revision. Keep the entity and stop using it from handlers" identity);
         let born=List.find (fun (v:version) -> List.exists (fun (e:entity) -> e.identity=identity) v.entities) (List.rev !versions) in
         let initial=List.find (fun (e:entity) -> e.identity=identity) born.entities in
-        if List.exists (fun (v:version) -> List.exists (fun (e:entity) -> e.identity=identity &&
-          List.exists (fun index -> not (List.mem index initial.table.indexes)) e.table.indexes) v.entities) !versions then
-          reject entity.entity_loc "table Drop with retained concurrent index jobs requires a checked terminal index lifecycle";
+        let added_index = List.find_map (fun (v:version) -> List.find_map (fun (e:entity) ->
+          if e.identity<>identity then None else
+          List.find_opt (fun index -> not (List.mem index initial.table.indexes)) e.table.indexes
+          |> Option.map (fun (index:Migration_storage.index) -> index.name, v.version)) v.entities) (List.rev !versions) in
+        Option.iter (fun (index,version) ->
+          reject ~code:"MIG032" entity.entity_loc (Printf.sprintf "table Drop is not supported yet for %s: index %s was added \
+            in V%d after the table was created, and retiring a concurrent index build is not implemented. \
+            Keep the entity and stop using it from handlers" identity index version)) added_index;
         retirements:={version=D.version edge;previous=old}::!retirements) removed
     end;
     List.iter (function

@@ -421,12 +421,13 @@ let same_candidates ~(before : t) ~(after : t) =
    resolved lifted-stdlib inputs are keys, never mtimes or caller-provided ABI
    labels alone. Source guards remain responsible for whole-build consistency. *)
 type inventory_cache_key = string * string option * string * (string * string) list * (string * string) list
-type inventory_cache = { entries : (inventory_cache_key, t) Hashtbl.t; mutable bytes : int }
+type inventory_cache = { entries : (inventory_cache_key, t) Hashtbl.t; mutable bytes : int;
+  derived : (string * (string * string) list * (string * string) list, definition list) Hashtbl.t }
 let active_cache : inventory_cache option ref = ref None
 let with_cache f = match !active_cache with
  | Some _ -> f ()
  | None ->
-   active_cache := Some {entries=Hashtbl.create 32;bytes=0};
+   active_cache := Some {entries=Hashtbl.create 32;bytes=0;derived=Hashtbl.create 32};
    Fun.protect ~finally:(fun () -> active_cache := None) f
 let stdlib_inputs () =
  try Some (List.map (fun (name,_) ->
@@ -492,10 +493,15 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
       if stdlib_inputs () <> Some stdlib then
         reject loc "stdlib source changed during semantic inventory" in
     let compute () =
+    (* The checked graph, lowering and closure judgment depend only on the
+       source bytes and stdlib, not on the ABI label or stored-value contract
+       that the rest of the inventory records. One compilation scope commonly
+       loads every schema under several labels; derive these once per scope. *)
+    let scopes = [{ Migration_canonical.family; revision; role=Snapshot_role }] in
+    let derive () =
     let graph = match Migration_checked_graph.check
         (List.map (fun m -> m, Hashtbl.find sources m.source_file) modules) with
       | Ok graph -> graph | Error error -> raise (Invalid error) in
-    let scopes = [{ Migration_canonical.family; revision; role=Snapshot_role }] in
     List.iter (fun m ->
       let resolve = Migration_checked_graph.resolve graph ~owner:m.module_name in
       List.iter (function
@@ -521,6 +527,17 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
         ~roots:(List.map (fun d -> d.key) definitions) with
      | Error error -> raise (Invalid error)
      | Ok _ -> ());
+    definitions in
+    let definitions = match !active_cache, cache_key with
+      | Some cache, Some (_,_,root_file,sources,stdlib) ->
+        let key = root_file,sources,stdlib in
+        (match Hashtbl.find_opt cache.derived key with
+         | Some definitions -> verify_sources (); definitions
+         | None ->
+           let definitions = derive () in
+           if Hashtbl.length cache.derived >= 1024 then Hashtbl.reset cache.derived;
+           Hashtbl.replace cache.derived key definitions; definitions)
+      | _ -> derive () in
     let source_inputs = Hashtbl.to_seq sources |> List.of_seq
       |> List.map (fun (path, source) -> path, Migration_hash.digest source)
       |> List.sort compare in
@@ -585,8 +602,8 @@ let load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file
            (* Serialized size bounds retained keys and immutable IR without
               retaining a second serialized copy. No deserialization occurs. *)
            let size = String.length (Marshal.to_string (key,inventory) []) in
-           if size <= 32 * 1024 * 1024 then begin
-             if Hashtbl.length cache.entries >= 128 || cache.bytes + size > 32 * 1024 * 1024 then begin
+           if size <= 256 * 1024 * 1024 then begin
+             if Hashtbl.length cache.entries >= 2048 || cache.bytes + size > 256 * 1024 * 1024 then begin
                Hashtbl.clear cache.entries; cache.bytes <- 0
              end;
              Hashtbl.replace cache.entries key inventory; cache.bytes <- cache.bytes + size

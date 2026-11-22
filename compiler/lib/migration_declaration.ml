@@ -11,7 +11,8 @@ module T = Migration_transform
 type t = { coverage : S.t; additive : A.t; transforms : T.t option; queue_transforms : Migration_queue_transform.t list; queue_removal : string option; version : int; source_seals : Migration_header.checked option }
 type prepared = { pcoverage : S.t; padditive : A.t; ptransforms : T.prepared option;
    pversion : int; pseals : Migration_header.checked option; pgraph : T.captured;
-   pqueue_transforms : Migration_queue_transform.t list; pqueue_removal : string option; pproject_root : string }
+   pqueue_transforms : Migration_queue_transform.t list; pqueue_removal : string option; pproject_root : string;
+   ptrust : Migration_trust.evidence option }
 let coverage t = t.coverage
 let additive t = t.additive
 let transforms t = t.transforms
@@ -295,16 +296,45 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
         | None -> None
         | Some header -> Some (checked (Migration_header.verify ~project_root ~migration_module:m.module_name
             ~previous:previous_root ~current:current_root header)) in
+      (* A completed step sealed by this exact compiler over these exact bytes
+         is trusted (Migration_trust): its seals are not re-derived and its row
+         functions are not re-checked. Ordinary diagnostics pass a comparison
+         ABI that no seal records, so they never trust. *)
+      let trust = match source_seals with
+        | None -> None
+        | Some _ ->
+          let closure = match Migration_closure.read ~file:m.source_file source with
+            | Ok (Some located) when Migration_closure.verify ~project_root
+                ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located = Ok () -> Some located
+            | _ -> None in
+          Migration_trust.of_verified ~compiler_abi ~stored_value_compatibility ~root:m.module_name
+            ~header:source_seals ~closure in
       (* Ordinary diagnostics compare current source only. Production generation
          and builds supply their actual compatibility context and additionally
          verify persisted source metadata without borrowing its creator ABI. *)
-      Option.iter (fun contract -> Option.iter (fun header ->
+      if trust = None then Option.iter (fun contract -> Option.iter (fun header ->
         let before,after = Migration_header.seals header in
         List.iter (fun seal ->
           let result = Result.bind (Migration_seal.verify_sources ~project_root seal)
             (Migration_seal.verify_semantics ~stored_value_compatibility:contract ~compiler_abi) in
           match result with Ok _ -> () | Error error ->
             reject "MIG013" error.loc error.message) [before;after]) source_seals) stored_value_compatibility;
+      (* Ordinary diagnostics do not re-derive the recorded semantics, but they
+         must not report a history as fine that the production build refuses
+         outright: a seal recorded under a different stored-value compatibility
+         contract (another compiler or stdlib) fails that build. *)
+      if stored_value_compatibility = None then
+        Option.iter (fun header -> match Migration_abi.current () with
+          | Error _ -> ()
+          | Ok abi ->
+            let current = Migration_abi.stored_value_compatibility abi in
+            let before,after = Migration_header.seals header in
+            if List.exists (fun seal -> match Migration_seal.stored_value_compatibility seal with
+                | Some recorded -> recorded <> current | None -> false) [before;after] then
+                reject "MIG013" declaration.loc
+                  "this migration history was sealed under a different stored-value compatibility \
+                   contract (another compiler or stdlib version); the production build refuses \
+                   it. Build with the compiler and stdlib that sealed it") source_seals;
       let closure = checked (Migration_closure.read ~file:m.source_file source) in
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
@@ -391,7 +421,7 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       Option.iter (fun header -> ignore (checked (Migration_header.verify_unchanged header))) source_seals;
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
-      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph;pqueue_transforms=queue_transforms;pqueue_removal=queue_removal;pproject_root=project_root})))
+      Ok (Some {pcoverage=coverage;padditive=additive;ptransforms=transforms;pversion=target;pseals=source_seals;pgraph=source_graph;pqueue_transforms=queue_transforms;pqueue_removal=queue_removal;pproject_root=project_root;ptrust=trust})))
   with Invalid errors -> Error errors
 
 let rec with_queue_conversions conversions run = match conversions with
@@ -415,7 +445,9 @@ let check_prepared prepared =
   Result.join (with_prepared prepared (fun () ->
   let transforms=match prepared.ptransforms with
     | None -> Ok None
-    | Some transforms -> Result.map Option.some (T.check_prepared transforms) in
+    | Some transforms -> (match prepared.ptrust with
+      | Some evidence -> Ok (Some (T.trusted evidence transforms))
+      | None -> Result.map Option.some (T.check_prepared transforms)) in
   Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
     transforms;queue_transforms=prepared.pqueue_transforms;queue_removal=prepared.pqueue_removal;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
 let with_prepared_list prepared run =

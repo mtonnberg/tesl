@@ -33,3 +33,7 @@ val with_pinned_files : (string * string) list -> (unit -> 'a) -> 'a
 (** Observe the underlying source view when verifying mutable resource guards.
     Both operations restore on exceptions and invalidate semantic caches. *)
 val without_pinned_files : (unit -> 'a) -> 'a
+(** Identity of the active overlay and pinned resources (not of disk bytes). *)
+type view_token
+val view_token : unit -> view_token
+val same_view : view_token -> bool

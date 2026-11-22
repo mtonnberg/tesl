@@ -79,6 +79,12 @@ set -uo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 export TESL_REPO_ROOT="$SCRIPT_DIR"
+# Race-instrumented Go programs sleep one second before exiting by default
+# (GORACE atexit_sleep_ms=1000) so that other goroutines can still report a
+# race. The gates start thousands of such short-lived programs (schema
+# commands, generated tests); races are still reported when they happen and
+# still fail with exit code 66.
+export GORACE="${GORACE:-atexit_sleep_ms=0}"
 COMPILER_DIR="$SCRIPT_DIR/compiler"
 
 # The default remains the complete, serial local gate. Hosted runners partition
@@ -105,6 +111,19 @@ case "$CI_SHARD" in
     full|compiler-integration|go-runtime|migration) ;;
     *) printf 'unknown CI shard: %s\n' "$CI_SHARD" >&2; exit 2 ;;
 esac
+# A hosted migration shard may run one of the parallel lanes declared in
+# scripts/ci-shards.py; the required gate accepts either one complete migration
+# run or every lane.
+CI_LANE_ARGUMENTS=()
+if [ "$CI_SHARD" == migration ]; then
+    export TESL_MIGRATION_TEST_LANE="${TESL_MIGRATION_TEST_LANE:-full}"
+    if ! python3 "$SCRIPT_DIR/scripts/migration-lanes.py" phases --lane "$TESL_MIGRATION_TEST_LANE" >/dev/null 2>&1; then
+        printf 'unknown migration lane: %s\n' "$TESL_MIGRATION_TEST_LANE" >&2; exit 2
+    fi
+    CI_LANE_ARGUMENTS=(--lane "$TESL_MIGRATION_TEST_LANE")
+else
+    unset TESL_MIGRATION_TEST_LANE
+fi
 CI_SHARD_ARGUMENTS=()
 if [ "$CI_SHARD" != full ]; then CI_SHARD_ARGUMENTS=(--shard "$CI_SHARD"); fi
 CI_PHASE_PLAN="$(python3 "$SCRIPT_DIR/scripts/ci-shards.py" list "${CI_SHARD_ARGUMENTS[@]}")" || exit 1
@@ -129,7 +148,7 @@ ci_complete_phase_coverage() {
 if [ "$CI_SHARD" != full ]; then
     if [ -z "$CI_EXPECTED_REVISION" ]; then CI_EXPECTED_REVISION="$(git rev-parse HEAD)" || exit 1; fi
     if [ -z "$CI_EVIDENCE_DIR" ]; then CI_EVIDENCE_DIR="$(mktemp -d)/evidence"; fi
-    python3 "$SCRIPT_DIR/scripts/ci-shards.py" start --shard "$CI_SHARD" \
+    python3 "$SCRIPT_DIR/scripts/ci-shards.py" start --shard "$CI_SHARD" "${CI_LANE_ARGUMENTS[@]}" \
         --expected-revision "$CI_EXPECTED_REVISION" --output "$CI_EVIDENCE_DIR" || exit 1
     printf 'CI shard: %s; evidence: %s\n' "$CI_SHARD" "$CI_EVIDENCE_DIR"
     # Every shard owns its test cluster. Never borrow application credentials or
@@ -278,7 +297,7 @@ print_summary_and_exit() {
         if [ "$CI_SHARD" == migration ]; then
             migration_arguments=(--migration-phases "${TESL_MIGRATION_TEST_OUTPUT:-$CI_EVIDENCE_DIR/migration}/phases.tsv")
         fi
-        if ! python3 "$SCRIPT_DIR/scripts/ci-shards.py" record --shard "$CI_SHARD" \
+        if ! python3 "$SCRIPT_DIR/scripts/ci-shards.py" record --shard "$CI_SHARD" "${CI_LANE_ARGUMENTS[@]}" \
             --expected-revision "$CI_EXPECTED_REVISION" --output "$CI_EVIDENCE_DIR" "${migration_arguments[@]}"; then
             total_failures=$((total_failures + 1))
         fi
@@ -605,8 +624,12 @@ ci_migration_part() {
         else
             export TESL_MIGRATION_TEST_OUTPUT="${TESL_MIGRATION_TEST_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/tesl-migration-evidence.XXXXXXXX")}"
         fi
+        if [ "${TESL_MIGRATION_TEST_LANE:-full}" != full ] && [ -z "${TESL_MIGRATION_TEST_POSTGRES_MAJOR:-}" ]; then
+            TESL_MIGRATION_TEST_POSTGRES_MAJOR="$(postgres --version | sed -E 's/.* ([0-9]+)(\.[0-9]+)*.*/\1/')"
+            export TESL_MIGRATION_TEST_POSTGRES_MAJOR
+        fi
         if bash "$SCRIPT_DIR/scripts/run-migration-tests.sh" && \
-           python3 "$SCRIPT_DIR/scripts/ci-shards.py" check-migration --evidence "$TESL_MIGRATION_TEST_OUTPUT/phases.tsv"; then
+           python3 "$SCRIPT_DIR/scripts/ci-shards.py" check-migration "${CI_LANE_ARGUMENTS[@]}" --evidence "$TESL_MIGRATION_TEST_OUTPUT/phases.tsv"; then
             printf 'migration\tOK\n' >>"$CI_GO_PARTS_FILE"
         else
             return 1

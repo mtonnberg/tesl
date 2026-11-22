@@ -113,6 +113,17 @@ fn g(n: Int) -> Int =
   let diags = lint_src src in
   assert_has diags "W060"
 
+(* A placeholder body has no code to use its parameters yet. *)
+let test_w061_placeholder_body_not_flagged () =
+  let src = preamble ^ {|
+fn convert(value: Int) -> Int =
+  todo "Convert the value"
+fn ignored(value: Int) -> Int =
+  7
+|} in
+  let unused = List.filter (fun (d:Compile.diagnostic) -> d.code="W061") (lint_src src) in
+  Alcotest.(check int) "only the written body is flagged" 1 (List.length unused)
+
 let test_w060_bulk_insert_uses_its_input () =
   let src = {|
 module App exposing []
@@ -368,6 +379,8 @@ let () =
         test_w050_genuinely_unused_import_still_flagged;
     ];
     "W060-proof-decompose", [
+      Alcotest.test_case "placeholder body parameters are not unused" `Quick
+        test_w061_placeholder_body_not_flagged;
       Alcotest.test_case "bulk insertion uses its input binding and parameter" `Quick
         test_w060_bulk_insert_uses_its_input;
       Alcotest.test_case "proof half not flagged as unused" `Quick

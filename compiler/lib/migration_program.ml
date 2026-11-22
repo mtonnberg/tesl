@@ -128,7 +128,8 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
 let with_compilation_cache f = Parser.with_module_cache (fun () ->
- Migration_history_sources.with_cache (fun () -> Migration_inventory.with_cache f))
+ Migration_history_sources.with_cache (fun () -> Migration_inventory.with_cache (fun () ->
+  Migration_analysis_cache.with_scope f)))
 
 let capture_history ~source_only ~entry ~source f = with_compilation_cache (fun () -> protect entry.source_file (fun () ->
  let entry_file = Source_input.canonical_path entry.source_file in
@@ -239,11 +240,12 @@ let capture_history ~source_only ~entry ~source f = with_compilation_cache (fun 
         reject ~code:"MIG030" loc "unique reliance requires the exact reviewed prior PromoteStage Contract source") (Migration_retained_storage.versions plan)
      end
     end;
-    let first = E.generate ~initial_version:1 ~schemas:inventories ~edges in
+    let generated = match E.generate_origins ~schemas:inventories ~edges with
+     | [] -> [E.generate ~initial_version:1 ~schemas:inventories ~edges]
+     | generated -> generated in
+    let first = List.hd generated in
     if not source_only then ignore (checked first);
-    let origins = {initial_version=1;steps=first} :: List.init (List.length schemas-1) (fun index ->
-     let initial_version=index+2 in
-     {initial_version;steps=E.generate ~initial_version ~schemas:inventories ~edges}) in
+    let origins = List.mapi (fun index steps -> {initial_version=index+1;steps}) generated in
     history (H.verify_unchanged h);
     {identity;family;namespace;current_version=(T.selection selected).current_version;origins;queue_versions}) targets in
    let inventories= !inventories in

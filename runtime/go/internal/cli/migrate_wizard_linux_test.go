@@ -97,7 +97,7 @@ func migrationWizardFullApplication(t *testing.T, qualified bool) {
 		t.Fatal("wizard changed full application handlers/connection config")
 	}
 	output := app.Stdout.(*bytes.Buffer).String()
-	for _, want := range []string{"Prepared Lesson84WorkerMigrations.NoteDatabase revision V2", "Current schema files to edit:", schemaPath, "Application checks passed", "add-column", "category", "schema-worker-ready"} {
+	for _, want := range []string{"Prepared Lesson84WorkerMigrations.NoteDatabase revision V2", "Current schema files to edit:", schemaPath, "Application checks passed", "add column", "category", "schema-worker-ready"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("missing %q in %s", want, output)
 		}

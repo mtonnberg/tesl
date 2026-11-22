@@ -1,6 +1,12 @@
-# The same complete ci.sh gate runs locally in serial and on three isolated
-# hosted runners. The required gate accepts only the complete, successful union
-# for the checked revision; no shard alone means the repository is green.
+# The same complete ci.sh gate runs locally in serial and on isolated hosted
+# runners (the migration shard runs as the parallel lanes declared in
+# scripts/ci-shards.py). The required gate accepts only the complete, successful
+# union for the checked revision; no shard alone means the repository is green.
+#
+# Caches restore only content-addressed inputs (the Nix store, Go module and
+# build caches, Dune's compilation cache). They are saved only by pushes to
+# main, by one job per key; dev-docs/migration-ci-performance.md explains why
+# none of them can change a check's result.
 name: CI
 
 on:
@@ -13,21 +19,27 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # Reuse outputs of Dune's own compilation rules only; user rules (generators
+  # and any rule that runs a program) always execute.
+  DUNE_CACHE: enabled-except-user-rules
+
 jobs:
   shards:
-    name: CI (${{ matrix.shard }})
+    name: CI (${{ matrix.job }})
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [compiler-integration, go-runtime, migration]
+        job: [compiler-integration, go-runtime, migration-kernel, migration-runtime, migration-schema, migration-releases, migration-rollout]
     env:
       CI: 'true'
       TESL_CI_JOBS: '2'
       GOMAXPROCS: '2'
       GOFLAGS: '-p=2'
-      CI_SHARD: ${{ matrix.shard }}
+      CI_JOB: ${{ matrix.job }}
+      CACHE_SAVE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,8 +47,19 @@ jobs:
           # The migration latency comparison builds its pinned historical base.
           fetch-depth: 0
 
+      - name: Select the shard and migration lane
+        id: lane
+        run: |
+          case "$CI_JOB" in
+            migration-*)
+              lane="${CI_JOB#migration-}"
+              { echo "CI_SHARD=migration"; echo "TESL_MIGRATION_TEST_LANE=$lane"; } >> "$GITHUB_ENV"
+              python3 scripts/migration-lanes.py plan --lane "$lane" >> "$GITHUB_OUTPUT" ;;
+            *) echo "CI_SHARD=$CI_JOB" >> "$GITHUB_ENV" ;;
+          esac
+
       - name: Fetch the exact migration latency baseline
-        if: matrix.shard == 'migration'
+        if: steps.lane.outputs.latency == 'true'
         run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
 
       - name: Install Nix (flakes enabled)
@@ -45,26 +68,110 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes
 
+      - name: Restore the Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          save: ${{ env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' }}
+          # Before saving, collect paths that the dev-shell profile root (created
+          # by the gate step below) does not reach, down to this size.
+          gc-max-store-size-linux: 5G
+
+      - name: Restore Go modules
+        id: go-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('runtime/go/go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+
+      - name: Restore the Go build cache
+        id: go-build
+        # The migration runner always uses its own private build cache.
+        if: env.CI_SHARD != 'migration'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: gobuild-${{ runner.os }}-
+
+      - name: Restore the migration runner's warmed Go cache
+        id: migration-go-cache
+        if: env.CI_SHARD == 'migration'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/migration-go-seed
+          key: migration-go-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: migration-go-${{ runner.os }}-
+
+      - name: Restore the Dune compilation cache
+        id: dune-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-${{ hashFiles('compiler/**/*.ml', 'compiler/**/*.mli', 'compiler/**/dune', 'compiler/dune-project') }}
+          restore-keys: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-
+
       - name: Run the declared gate shard
         env:
           TESL_MIGRATION_TEST_OUTPUT: ${{ runner.temp }}/migration-evidence
+          TESL_MIGRATION_GO_CACHE_SEED: ${{ runner.temp }}/migration-go-seed
+          TESL_MIGRATION_GO_CACHE_UPDATE: ${{ env.CACHE_SAVE == 'true' && matrix.job == 'migration-kernel' && steps.migration-go-cache.outputs.cache-hit != 'true' && '1' || '0' }}
         run: |
+          # The dev-shell profile is a garbage-collection root for the Nix cache.
           # Each shard gets a private cluster. Migration latency runs sequentially
-          # in its own runner, after its correctness workloads have stopped.
-          nix develop --command bash -lc '
+          # in its own runner, after that runner's correctness workloads stopped.
+          # Variables in the quoted script expand inside the Nix shell.
+          # shellcheck disable=SC2016
+          nix develop --profile "$RUNNER_TEMP/nix-dev-shell" --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
             unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
             unset TESL_TEST_POSTGRES_SHARED_HOST TESL_TEST_POSTGRES_SHARED_PORT TESL_TEST_POSTGRES_SHARED_USER TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE
+            # A restored build cache must never supply a test result.
+            go clean -testcache
             ./ci.sh --shard "$CI_SHARD" --expected-revision "$GITHUB_SHA" \
               --evidence-dir "$RUNNER_TEMP/ci-evidence" 2>&1 | tee "$RUNNER_TEMP/ci-shard.log"
           '
+
+      - name: Save Go modules
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' && steps.go-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ steps.go-modules.outputs.cache-primary-key }}
+
+      - name: Save the Go build cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'go-runtime' && steps.go-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build.outputs.cache-primary-key }}
+
+      - name: Save the migration runner's warmed Go cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'migration-kernel' && steps.migration-go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/migration-go-seed
+          key: ${{ steps.migration-go-cache.outputs.cache-primary-key }}
+
+      - name: Trim the Dune compilation cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'compiler-integration' && steps.dune-cache.outputs.cache-hit != 'true'
+        run: nix develop --command dune cache trim --size=1GB
+
+      - name: Save the Dune compilation cache
+        if: env.CACHE_SAVE == 'true' && matrix.job == 'compiler-integration' && steps.dune-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: ${{ steps.dune-cache.outputs.cache-primary-key }}
 
       - name: Retain source-bound shard receipts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-shard-${{ matrix.shard }}-${{ github.sha }}
+          name: ci-shard-${{ matrix.job }}-${{ github.sha }}
           path: ${{ runner.temp }}/ci-evidence
           if-no-files-found: error
 
@@ -72,16 +179,81 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-${{ matrix.shard }}-${{ github.sha }}
+          name: ci-diagnostics-${{ matrix.job }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/ci-shard.log
             ${{ runner.temp }}/migration-evidence
           if-no-files-found: warn
 
+  # The verified-content export runs beside the shards. The gate publishes it
+  # only after the complete phase union has verified.
+  content:
+    name: Verified content export
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout the same revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix for verified content export
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Restore the Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          save: false
+
+      - name: Restore Go modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('runtime/go/go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+
+      - name: Restore the Go build cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**', 'runtime/go/go.sum') }}
+          restore-keys: gobuild-${{ runner.os }}-
+
+      - name: Restore the Dune compilation cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-${{ hashFiles('compiler/**/*.ml', 'compiler/**/*.mli', 'compiler/**/dune', 'compiler/dune-project') }}
+          restore-keys: dune-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}-
+
+      # Preserve the original export's executed proof/repair/example checks.
+      # It rebuilds only the compiler binary, not the full OCaml test suite.
+      - name: Export verified content from the checked revision
+        run: |
+          # Variables expand inside the Nix shell.
+          # shellcheck disable=SC2016
+          nix develop --command bash -c '
+            set -euo pipefail
+            go clean -testcache
+            python3 scripts/content.py export --out "$RUNNER_TEMP/tesl-content.json"
+          '
+
+      - name: Retain the unpublished content export
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesl-content-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/tesl-content.json
+          if-no-files-found: error
+
   gate:
     name: Authoritative gate (./ci.sh)
     if: always()
-    needs: [shards]
+    needs: [shards, content]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -104,22 +276,26 @@ jobs:
             --evidence "$RUNNER_TEMP/ci-evidence" --upstream-result "$CI_UPSTREAM_RESULT" \
             --output "$RUNNER_TEMP/ci-verified.json"
 
-      - name: Install Nix for verified content export
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+      - name: Require the verified content export
+        env:
+          CI_CONTENT_RESULT: ${{ needs.content.result }}
+        run: |
+          if [ "$CI_CONTENT_RESULT" != success ]; then
+            echo "::error::Verified content export did not succeed ($CI_CONTENT_RESULT)."
+            exit 1
+          fi
 
-      # Preserve the original export's executed proof/repair/example checks.
-      # It rebuilds only the compiler binary, not the full OCaml test suite.
-      - name: Export verified content from the checked revision
-        run: nix develop --command python3 scripts/content.py export --out "${{ runner.temp }}/tesl-content.json"
+      - name: Read the content export of the checked revision
+        uses: actions/download-artifact@v4
+        with:
+          name: tesl-content-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/content
 
       - name: Upload official content evidence
         uses: actions/upload-artifact@v4
         with:
           name: tesl-content-${{ github.sha }}
-          path: ${{ runner.temp }}/tesl-content.json
+          path: ${{ runner.temp }}/content/tesl-content.json
           if-no-files-found: error
 
       - name: Retain the verified phase-union receipt

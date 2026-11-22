@@ -353,6 +353,10 @@ let check_returns modules root binding mapping =
     | ELetProof e -> shadow e.value_name e.loc; shadow e.proof_name e.loc; returns e.body
     | EIf e -> returns e.then_; returns e.else_
     | ECase e -> List.iter (fun (arm:case_arm) -> pattern arm.loc arm.pattern; returns arm.body) e.arms
+    | EApp {fn=EVar {name="todo";_};arg=ELit {lit=LString message;_};loc} ->
+      (* A generated placeholder is an unmade decision, not a malformed result. *)
+      reject "MIG003" loc ("Fill this placeholder: " ^ message ^
+        ". Return Reject \"reason\" to refuse rows that cannot be converted (they stay in the old storage until repaired), or Row with a reviewed value")
     | value -> (match Migration_form.application value with
       | "Row",[value] when resolver modules binding.owner IR.Value "Row"=Some (IR.Primitive "Tesl.Migration.Row") -> row value
        | "Reject",[_] when resolver modules binding.owner IR.Value "Reject"=Some (IR.Primitive "Tesl.Migration.Reject") -> ()
@@ -606,6 +610,12 @@ let check_prepared prepared =
   | Error errors -> Error errors
   | Ok [] -> Ok (Checked prepared)
   | Ok errors -> Error errors
+
+(* A completed step whose trust seal verified was fully checked when it was
+   frozen by this same compiler over these exact bytes. Its row-function closure
+   is not frontend-checked again; preparation (bindings, purity, proof sites and
+   source capture) above still ran in this compilation. *)
+let trusted (_ : Migration_trust.evidence) prepared = Checked prepared
 
 let check ~project_root ~source root rules ~functions ~fixtures =
   Result.bind (prepare ~project_root ~source root rules ~functions ~fixtures) check_prepared

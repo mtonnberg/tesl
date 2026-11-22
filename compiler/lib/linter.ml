@@ -1100,6 +1100,13 @@ let lint_unused_locals_and_dead_code filename (source : string) (out : lint_diag
         in
         let names_in_return_spec = collect_return_spec_names [] fd.return_spec in
         let all_used_names = names_in_body @ names_in_param_proofs @ names_in_return_spec in
+        (* A body that is only a `todo "..."` placeholder is an unwritten
+           function; its parameters are there for the code that replaces it, and
+           the placeholder itself is already a compile error. *)
+        let placeholder = match fd.body with
+          | Ast.EApp { fn = Ast.EVar { name = "todo"; _ }; arg = Ast.ELit { lit = Ast.LString _; _ }; _ } -> true
+          | _ -> false in
+        if not placeholder then
         List.iter (fun (param : Ast.binding) ->
           (* DO NOT exempt proof-carrying parameters here. That was tried on
              2026-07-29 and reverted; the investigation is worth keeping so it is

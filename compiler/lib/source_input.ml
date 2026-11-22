@@ -160,3 +160,10 @@ let without_pinned_files f =
     Query_cache.clear (); pinned_files := Paths.empty;
     Fun.protect ~finally:(fun () -> pinned_files := previous; Query_cache.clear ()) f
   end
+
+(* The identity of the active source view: the overlay and the pinned resources.
+   Views are immutable, so physical equality means "nothing a view supplies has
+   changed since the token was taken". It says nothing about unpinned disk bytes. *)
+type view_token = view option * string Paths.t
+let view_token () : view_token = (!active, !pinned_files)
+let same_view ((view, pinned) : view_token) = view == !active && pinned == !pinned_files

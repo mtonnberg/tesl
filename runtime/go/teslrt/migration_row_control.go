@@ -59,7 +59,7 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if err := pgCreateRowQueueBaseline(ctx, tx, b, p.roles); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_baseline values(1,1,'fresh-install','complete',$1,$2,'complete',$3,'complete',$3)", []byte(b.inventory), b.inventoryHash, len(b.queues[0].version.Contracts)); err != nil {
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_baseline values(1,1,'fresh-install','complete',$1,$2,'complete',$3,'complete',$3)", []byte(b.inventory), b.inventoryHash, len(b.queues.must(1).version.Contracts)); err != nil {
 		return err
 	}
 	schema, err := pgRowBaselineHex(b.version.SchemaContract)
@@ -70,7 +70,7 @@ func (p *pgRowBaselinePreparation) prepareFresh(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_versions values(1,$1,$2,$3,$4,$5,$6,$7,$8,$11,$11,$9,$10)", b.history.Family, schema, b.version.SchemaSnapshotHash, storage, b.version.StorageSnapshotHash, b.inventoryHash, b.catalogHash, len(b.entities), b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(b.queues[0].version.Contracts)); err != nil {
+	if _, err := tx.Exec(ctx, "insert into "+ns+"tesl_row_versions values(1,$1,$2,$3,$4,$5,$6,$7,$8,$11,$11,$9,$10)", b.history.Family, schema, b.version.SchemaSnapshotHash, storage, b.version.StorageSnapshotHash, b.inventoryHash, b.catalogHash, len(b.entities), b.history.SourceCompilerABI, b.history.StoredValueCompatibility, len(b.queues.must(1).version.Contracts)); err != nil {
 		return err
 	}
 	if b.physical != nil {
@@ -148,7 +148,7 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 	if err := tx.QueryRow(ctx, "select initial_version,established_by,inventory_authority,inventory,inventory_hash,queue_authority,queue_count,facility_authority,facility_count from "+ns+"tesl_row_baseline where id=1").Scan(&initial, &established, &authority, &inventory, &hash, &queueAuthority, &queueCount, &facilityAuthority, &facilityCount); err != nil {
 		return err
 	}
-	if initial != 1 || established != "fresh-install" || authority != "complete" || queueAuthority != "complete" || queueCount != len(b.queues[0].version.Contracts) || facilityAuthority != "complete" || facilityCount != len(b.queues[0].version.Contracts) || hash != b.inventoryHash || !bytes.Equal(inventory, []byte(b.inventory)) {
+	if initial != 1 || established != "fresh-install" || authority != "complete" || queueAuthority != "complete" || queueCount != len(b.queues.must(1).version.Contracts) || facilityAuthority != "complete" || facilityCount != len(b.queues.must(1).version.Contracts) || hash != b.inventoryHash || !bytes.Equal(inventory, []byte(b.inventory)) {
 		return fmt.Errorf("persisted complete row/facility baseline differs from source")
 	}
 	var version, entityCount int
@@ -165,7 +165,7 @@ func pgVerifyRowBaseline(ctx context.Context, tx pgx.Tx, b *pgRowBaseline, state
 	if err != nil {
 		return err
 	}
-	if version != 1 || family != b.history.Family || schemaHash != b.version.SchemaSnapshotHash || storageHash != b.version.StorageSnapshotHash || !bytes.Equal(schema, expectedSchema) || !bytes.Equal(storage, expectedStorage) || inventoryHash != b.inventoryHash || catalogHash != b.catalogHash || entityCount != len(b.entities) || queueCount != len(b.queues[0].version.Contracts) || facilityCount != len(b.queues[0].version.Contracts) || !strings.HasPrefix(sourceABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(sourceABI, "tesl-source-abi-v1:")) || compatibility != b.history.StoredValueCompatibility {
+	if version != 1 || family != b.history.Family || schemaHash != b.version.SchemaSnapshotHash || storageHash != b.version.StorageSnapshotHash || !bytes.Equal(schema, expectedSchema) || !bytes.Equal(storage, expectedStorage) || inventoryHash != b.inventoryHash || catalogHash != b.catalogHash || entityCount != len(b.entities) || queueCount != len(b.queues.must(1).version.Contracts) || facilityCount != len(b.queues.must(1).version.Contracts) || !strings.HasPrefix(sourceABI, "tesl-source-abi-v1:") || !pgMigrationDigest(strings.TrimPrefix(sourceABI, "tesl-source-abi-v1:")) || compatibility != b.history.StoredValueCompatibility {
 		return fmt.Errorf("persisted row source version differs")
 	}
 	var versions, entities int

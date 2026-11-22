@@ -37,9 +37,80 @@ type PgQueueSourcePayload struct{ Job, Contract, ContractHash string }
 type pgQueueHistoryRegistration struct {
 	history PgCompiledMigrationHistory
 	json    string
-	// Complete V1 projection, validated before atomic registry publication. Never
-	// exposed directly: callers may mutate their independent returned slices.
-	inventory *PgQueueSourceInventory
+	// Shared by every copy of this registration. Never exposed directly:
+	// callers may mutate their independent returned slices.
+	lazy *pgQueueHistoryLazy
+}
+
+// pgQueueHistoryLazy holds one database's linked queue inventory. Registration
+// validates the serving window (or the complete companion when the history is
+// small or uses the legacy source format); the complete V1 projection is
+// validated once, when a caller first needs a version outside the window.
+type pgQueueHistoryLazy struct {
+	history PgCompiledMigrationHistory
+	payload string
+	full    pgMemo[*PgQueueSourceInventory]
+	// Validated window versions (version -> inventory); nil when the
+	// registration validated the complete companion instead.
+	window map[int]PgQueueSourceVersion
+	// Raw version texts for identity comparisons of recorded versions.
+	raw []string
+}
+
+func (lazy *pgQueueHistoryLazy) complete() (*PgQueueSourceInventory, error) {
+	return lazy.full.get(func() (*PgQueueSourceInventory, error) {
+		pgHistoryCounters.complete.Add(1)
+		inventory, err := pgReadQueueHistory(lazy.history, lazy.payload, 1)
+		if err != nil {
+			return nil, err
+		}
+		return &inventory, nil
+	})
+}
+
+// version returns one validated queue inventory version.
+func (lazy *pgQueueHistoryLazy) version(k int) (PgQueueSourceVersion, error) {
+	if v, ok := lazy.window[k]; ok {
+		return v, nil
+	}
+	inventory, err := lazy.complete()
+	if err != nil {
+		return PgQueueSourceVersion{}, err
+	}
+	if k < 1 || k > len(inventory.Versions) {
+		return PgQueueSourceVersion{}, fmt.Errorf("queue inventory version is outside linked history")
+	}
+	return inventory.Versions[k-1], nil
+}
+
+// identityHash returns the canonical inventory hash of version k computed from
+// its linked bytes. Startup compares it with the hash a schema command recorded
+// when it published that version; the version's contents are not revalidated.
+func (lazy *pgQueueHistoryLazy) identityHash(k int) (string, error) {
+	if v, ok := lazy.window[k]; ok || lazy.window == nil {
+		if !ok {
+			var err error
+			if v, err = lazy.version(k); err != nil {
+				return "", err
+			}
+		}
+		return pgQueueCandidateInventoryHash(lazy.history, v)
+	}
+	if k < 1 || k > len(lazy.raw) {
+		return "", fmt.Errorf("queue inventory version is outside linked history")
+	}
+	if err := pgMigrationCheckJSON(lazy.raw[k-1]); err != nil {
+		return "", err
+	}
+	r := &pgMigrationWireReader{}
+	v := pgReadQueueSourceVersion(r, json.RawMessage(lazy.raw[k-1]))
+	if r.err != nil {
+		return "", r.err
+	}
+	if v.Version != k {
+		return "", fmt.Errorf("queue inventory versions must be consecutive")
+	}
+	return pgQueueCandidateInventoryHash(lazy.history, v)
 }
 
 var queueSchemaOwners = struct {
@@ -52,43 +123,56 @@ var compiledQueueHistories = struct {
 	families map[string]pgQueueHistoryRegistration
 }{families: map[string]pgQueueHistoryRegistration{}}
 
-// Generated runtime initialization publishes the entire validated companion in
-// one critical section. Failed validation or any conflicting family leaves the
-// registry untouched; there is never a partially linked database set.
+// Generated runtime initialization publishes the entire companion in one
+// critical section after checking its integrity, its identity against every
+// linked database and its serving window. Failed validation or any conflicting
+// family leaves the registry untouched; there is never a partially linked
+// database set. Versions outside the window are validated on first use.
 func registerCompiledQueueHistory(payload string) {
 	pgMigrationRegistrations.Lock()
 	defer pgMigrationRegistrations.Unlock()
-	if err := pgMigrationCheckJSON(payload); err != nil {
+	if err := pgJSONIntegrity(payload); err != nil {
 		panic(err)
 	}
-	r := &pgMigrationWireReader{}
-	root := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
-	entries := pgMigrationRead[[]json.RawMessage](r, root["databases"])
+	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	if err != nil {
+		panic(err)
+	}
+	format, err := pgJSONValue[int](root["version"])
+	if err != nil {
+		panic(err)
+	}
+	entries, err := pgJSONArray(root["databases"])
+	if err != nil {
+		panic(err)
+	}
 	pending := map[string]pgQueueHistoryRegistration{}
 	for _, raw := range entries {
 		keys := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
-		if pgMigrationRead[int](r, root["version"]) == 2 {
+		if format == 2 {
 			keys = append(keys, "transitions")
 		}
-		d := r.object(raw, keys...)
-		family := pgMigrationRead[string](r, d["family"])
+		fields, err := pgJSONObject(raw, keys...)
+		if err != nil {
+			panic(err)
+		}
+		family, err := pgJSONValue[string](fields["family"])
+		if err != nil {
+			panic(err)
+		}
 		linked, ok := compiledMigrationHistories.Load(family)
 		if !ok {
-			r.fail("queue companion has no linked migration history")
-			break
+			panic("invalid compiled migration history: queue companion has no linked migration history")
 		}
-		history := linked.(PgCompiledMigrationHistory)
-		inventory, err := pgReadQueueHistory(history, payload, 1)
+		history := linked.(PgCompiledMigrationHistory) //nolint:forcetypeassert // private registry
+		lazy, err := pgQueueRegistrationWindow(history, payload, root, fields, len(entries))
 		if err != nil {
 			panic(err)
 		}
 		if _, exists := pending[family]; exists {
-			r.fail("duplicate queue companion family")
+			panic("invalid compiled migration history: duplicate queue companion family")
 		}
-		pending[family] = pgQueueHistoryRegistration{history: history, json: payload, inventory: &inventory}
-	}
-	if r.err != nil {
-		panic(r.err)
+		pending[family] = pgQueueHistoryRegistration{history: history, json: payload, lazy: lazy}
 	}
 	if len(pending) == 0 {
 		panic("queue companion requires at least one database")
@@ -104,35 +188,183 @@ func registerCompiledQueueHistory(payload string) {
 		}
 	}
 	for family, registration := range pending {
+		if _, exists := compiledQueueHistories.families[family]; exists {
+			continue // An identical registration keeps its already validated state.
+		}
 		compiledQueueHistories.families[family] = registration
 	}
+}
+
+// pgQueueRegistrationWindow validates what serving needs from one database's
+// queue inventory. The legacy v3 source format and histories inside the window
+// are validated completely, as before.
+func pgQueueRegistrationWindow(history PgCompiledMigrationHistory, payload string, root, fields map[string]string, databases int) (*pgQueueHistoryLazy, error) {
+	lazy := &pgQueueHistoryLazy{history: history, payload: payload}
+	source := pgLinkedSourceOf(history)
+	complete := source == nil || pgHistoryInWindow(history.CurrentVersion)
+	if !complete {
+		if _, err := source.readHeader(); err != nil {
+			complete = true // the complete reader reports legacy or invalid formats
+		}
+	}
+	if complete {
+		if _, err := lazy.complete(); err != nil {
+			return nil, err
+		}
+		return lazy, nil
+	}
+	if err := source.window(history.Family); err != nil {
+		return nil, err
+	}
+	if header, err := source.readHeader(); err != nil || header == nil || len(header.databases) != databases {
+		return nil, fmt.Errorf("invalid compiled migration history: queue companion omits or adds a linked database")
+	}
+	format, err := pgJSONValue[int](root["version"])
+	if err != nil {
+		return nil, err
+	}
+	kind, err := pgJSONValue[string](root["kind"])
+	if err != nil {
+		return nil, err
+	}
+	abi, err := pgJSONValue[string](root["compilerAbi"])
+	if err != nil {
+		return nil, err
+	}
+	compatibility, err := pgJSONValue[string](root["storedValueCompatibility"])
+	if err != nil {
+		return nil, err
+	}
+	if (format != 1 && format != 2) || kind != "compiled-queue-history" {
+		return nil, fmt.Errorf("invalid compiled migration history: unsupported queue companion format")
+	}
+	if abi != history.SourceCompilerABI || compatibility != history.StoredValueCompatibility {
+		return nil, fmt.Errorf("invalid compiled migration history: queue companion compiler provenance disagrees with linked history")
+	}
+	identity, err := pgJSONValue[string](fields["database"])
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := pgJSONValue[string](fields["namespace"])
+	if err != nil {
+		return nil, err
+	}
+	current, err := pgJSONValue[int](fields["currentVersion"])
+	if err != nil {
+		return nil, err
+	}
+	if identity != history.Database || namespace != history.Namespace || current != history.CurrentVersion {
+		return nil, fmt.Errorf("invalid compiled migration history: queue companion connection identity, order or version disagrees with linked history")
+	}
+	if lazy.raw, err = pgJSONArray(fields["versions"]); err != nil {
+		return nil, err
+	}
+	if len(lazy.raw) != current {
+		return nil, fmt.Errorf("invalid compiled migration history: queue companion must describe every source version including empty inventories")
+	}
+	lazy.window = map[int]PgQueueSourceVersion{}
+	sourceDatabase, err := source.database(history.Family)
+	if err != nil {
+		return nil, err
+	}
+	for k := 1; k <= current; k++ {
+		if !pgServingWindow(current, k) {
+			continue
+		}
+		pgHistoryCounters.elements.Add(1)
+		if err := pgMigrationCheckJSON(lazy.raw[k-1]); err != nil {
+			return nil, err
+		}
+		r := &pgMigrationWireReader{}
+		v := pgReadQueueSourceVersion(r, json.RawMessage(lazy.raw[k-1]))
+		if r.err == nil && v.Version != k {
+			r.fail("queue inventory versions must be consecutive")
+		}
+		snapshot, err := pgQueueSourceSnapshotOf(source, history, k)
+		if err != nil {
+			return nil, err
+		}
+		pgQueueCheckSourceVersion(r, history, history.Family, snapshot, v)
+		if len(sourceDatabase.retirements) > 0 && k > 1 {
+			first, ok := lazy.window[1]
+			if ok && !slices.EqualFunc(first.Contracts, v.Contracts, func(a, b PgQueueSourceContract) bool {
+				return a.Queue == b.Queue && slices.Equal(a.Payloads, b.Payloads)
+			}) {
+				r.fail("table retirement requires unchanged historical queue payload/proof/codec contracts")
+			}
+		}
+		if r.err != nil {
+			return nil, r.err
+		}
+		lazy.window[k] = v
+	}
+	return lazy, nil
+}
+
+// pgQueueSourceSnapshotOf derives one version's source snapshot (storage and
+// schema identities plus closure definitions) from the validated source version.
+func pgQueueSourceSnapshotOf(source *pgLinkedSource, history PgCompiledMigrationHistory, k int) (pgQueueSourceSnapshot, error) {
+	version, err := source.version(history.Family, k)
+	if err != nil {
+		return pgQueueSourceSnapshot{}, err
+	}
+	r := &pgMigrationWireReader{}
+	schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
+	_, definitions := pgRowClosure(r, schema, history.SourceCompilerABI, history.StoredValueCompatibility)
+	return pgQueueSourceSnapshot{storage: version.StorageSnapshotHash, schema: version.SchemaSnapshotHash, definitions: definitions}, r.err
+}
+
+// pgQueueRegistrationOf returns the exact registration of a linked history.
+func pgQueueRegistrationOf(history PgCompiledMigrationHistory) (pgQueueHistoryRegistration, error) {
+	compiledQueueHistories.RLock()
+	registration, ok := compiledQueueHistories.families[history.Family]
+	compiledQueueHistories.RUnlock()
+	if !ok {
+		return registration, fmt.Errorf("compiled queue inventory metadata is missing; baseline completeness is unknown")
+	}
+	if registration.history != history {
+		return registration, fmt.Errorf("compiled queue inventory belongs to another linked database history")
+	}
+	if registration.lazy == nil {
+		return registration, fmt.Errorf("compiled queue inventory has no validated projection")
+	}
+	return registration, nil
 }
 
 // QueueSourceInventory refuses missing companion metadata explicitly. In
 // particular, old binaries and unrecorded V1 must not imply an empty installed
 // queue inventory. Only a future protected installation may persist that fact.
 func (history PgCompiledMigrationHistory) QueueSourceInventory(initialVersion int) (PgQueueSourceInventory, error) {
-	compiledQueueHistories.RLock()
-	registration, ok := compiledQueueHistories.families[history.Family]
-	compiledQueueHistories.RUnlock()
-	if !ok {
-		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory metadata is missing; baseline completeness is unknown")
-	}
-	if registration.history != history {
-		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory belongs to another linked database history")
+	registration, err := pgQueueRegistrationOf(history)
+	if err != nil {
+		return PgQueueSourceInventory{}, err
 	}
 	if initialVersion < 1 || initialVersion > history.CurrentVersion {
 		return PgQueueSourceInventory{}, fmt.Errorf("queue installation origin is outside linked history")
 	}
-	if registration.inventory == nil {
-		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue inventory has no validated projection")
+	var result PgQueueSourceInventory
+	inWindow := registration.lazy.window != nil
+	for k := initialVersion; k <= history.CurrentVersion && inWindow; k++ {
+		_, inWindow = registration.lazy.window[k]
 	}
-	result := *registration.inventory
-	if len(result.Versions) == 0 || len(result.Versions) != history.CurrentVersion {
-		return PgQueueSourceInventory{}, fmt.Errorf("compiled queue projection has an incomplete version inventory")
+	if inWindow {
+		result = PgQueueSourceInventory{Database: history.Database, Family: history.Family, Namespace: history.Namespace, CurrentVersion: history.CurrentVersion}
+		for k := initialVersion; k <= history.CurrentVersion; k++ {
+			result.Versions = append(result.Versions, registration.lazy.window[k])
+		}
+	} else {
+		inventory, err := registration.lazy.complete()
+		if err != nil {
+			return PgQueueSourceInventory{}, err
+		}
+		result = *inventory
+		if len(result.Versions) == 0 || len(result.Versions) != history.CurrentVersion {
+			return PgQueueSourceInventory{}, fmt.Errorf("compiled queue projection has an incomplete version inventory")
+		}
+		result.Versions = result.Versions[initialVersion-1:]
 	}
 	result.InitialVersion = initialVersion
-	result.Versions = slices.Clone(result.Versions[initialVersion-1:])
+	result.Versions = slices.Clone(result.Versions)
 	for i := range result.Versions {
 		version := &result.Versions[i]
 		version.Contracts = slices.Clone(version.Contracts)
@@ -175,7 +407,16 @@ type pgQueueSourceSnapshot struct {
 	definitions     map[string]pgRowCanonical // nil for the legacy v3 projection
 }
 
+// The projection of a linked history is computed once per process. Its slices
+// and canonical trees are shared and must not be modified by callers.
 func pgQueueSourceProjection(history PgCompiledMigrationHistory) ([]pgQueueSourceDatabase, error) {
+	if source := pgLinkedSourceOf(history); source != nil {
+		return source.queue.get(func() ([]pgQueueSourceDatabase, error) { return pgQueueSourceProjectionDecode(history) })
+	}
+	return pgQueueSourceProjectionDecode(history)
+}
+
+func pgQueueSourceProjectionDecode(history PgCompiledMigrationHistory) ([]pgQueueSourceDatabase, error) {
 	if err := pgMigrationCheckJSON(history.HistoryJSON); err != nil {
 		return nil, err
 	}
@@ -335,46 +576,7 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 			r.fail("queue companion connection identity, order or version disagrees with linked history")
 		}
 		lastIdentity = identity
-		versions := pgMigrationReadArray(r, d["versions"], func(raw json.RawMessage) PgQueueSourceVersion {
-			v := r.object(raw, "version", "storageSnapshotHash", "schemaSnapshotHash", "checkedInventory", "sourceSealInventory", "contracts")
-			result := PgQueueSourceVersion{Version: pgMigrationRead[int](r, v["version"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), SourceSealInventory: pgMigrationRead[string](r, v["sourceSealInventory"])}
-			if pgMigrationRead[string](r, v["checkedInventory"]) != "complete" || !pgMigrationDigest(result.StorageSnapshotHash) || !pgMigrationDigest(result.SchemaSnapshotHash) || !slices.Contains([]string{"complete", "unknown", "unrecorded"}, result.SourceSealInventory) {
-				r.fail("queue inventory requires explicit checked completeness, source provenance and snapshot identities")
-			}
-			lastQueue := ""
-			jobs := map[string]bool{}
-			result.Contracts = pgMigrationReadArray(r, v["contracts"], func(raw json.RawMessage) PgQueueSourceContract {
-				c := r.object(raw, "queue", "payloads")
-				contract := PgQueueSourceContract{Queue: pgMigrationRead[string](r, c["queue"])}
-				if !pgQueueIdentity(contract.Queue) || contract.Queue <= lastQueue {
-					r.fail("queue contracts must have unique sorted family-relative identities")
-				}
-				lastQueue = contract.Queue
-				lastJob := ""
-				contract.Payloads = pgMigrationReadArray(r, c["payloads"], func(raw json.RawMessage) PgQueueSourcePayload {
-					p := r.object(raw, "job", "contractFormat", "contract", "contractHash")
-					job := PgQueueSourcePayload{Job: pgMigrationRead[string](r, p["job"]), Contract: pgMigrationRead[string](r, p["contract"]), ContractHash: pgMigrationRead[string](r, p["contractHash"])}
-					if !pgQueueIdentity(job.Job) || job.Job <= lastJob || jobs[job.Job] {
-						r.fail("queue payload identities must be sorted and owned exactly once")
-					}
-					lastJob = job.Job
-					jobs[job.Job] = true
-					bytes, err := hex.DecodeString(job.Contract)
-					if err != nil || len(bytes) == 0 || hex.EncodeToString(bytes) != job.Contract || pgMigrationRead[string](r, p["contractFormat"]) != "tesl-queue-payload-v1" || !pgMigrationDigest(job.ContractHash) || fmt.Sprintf("%x", sha256.Sum256(bytes)) != job.ContractHash {
-						r.fail("queue payload contract bytes disagree with their canonical identity")
-					}
-					if err := pgQueueCanonicalContract(bytes); err != nil {
-						r.fail(err.Error())
-					}
-					return job
-				})
-				if len(contract.Payloads) == 0 {
-					r.fail("queue contract has no payloads")
-				}
-				return contract
-			})
-			return result
-		})
+		versions := pgMigrationReadArray(r, d["versions"], func(raw json.RawMessage) PgQueueSourceVersion { return pgReadQueueSourceVersion(r, raw) })
 		if len(versions) != current {
 			r.fail("queue companion must describe every source version including empty inventories")
 		}
@@ -471,6 +673,49 @@ func pgReadQueueHistory(history PgCompiledMigrationHistory, payload string, init
 		return empty, fmt.Errorf("queue companion is missing its linked database")
 	}
 	return selected, nil
+}
+
+// pgReadQueueSourceVersion reads one queue inventory version with every check
+// that needs only that version's own bytes.
+func pgReadQueueSourceVersion(r *pgMigrationWireReader, raw json.RawMessage) PgQueueSourceVersion {
+	v := r.object(raw, "version", "storageSnapshotHash", "schemaSnapshotHash", "checkedInventory", "sourceSealInventory", "contracts")
+	result := PgQueueSourceVersion{Version: pgMigrationRead[int](r, v["version"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), SourceSealInventory: pgMigrationRead[string](r, v["sourceSealInventory"])}
+	if pgMigrationRead[string](r, v["checkedInventory"]) != "complete" || !pgMigrationDigest(result.StorageSnapshotHash) || !pgMigrationDigest(result.SchemaSnapshotHash) || !slices.Contains([]string{"complete", "unknown", "unrecorded"}, result.SourceSealInventory) {
+		r.fail("queue inventory requires explicit checked completeness, source provenance and snapshot identities")
+	}
+	lastQueue := ""
+	jobs := map[string]bool{}
+	result.Contracts = pgMigrationReadArray(r, v["contracts"], func(raw json.RawMessage) PgQueueSourceContract {
+		c := r.object(raw, "queue", "payloads")
+		contract := PgQueueSourceContract{Queue: pgMigrationRead[string](r, c["queue"])}
+		if !pgQueueIdentity(contract.Queue) || contract.Queue <= lastQueue {
+			r.fail("queue contracts must have unique sorted family-relative identities")
+		}
+		lastQueue = contract.Queue
+		lastJob := ""
+		contract.Payloads = pgMigrationReadArray(r, c["payloads"], func(raw json.RawMessage) PgQueueSourcePayload {
+			p := r.object(raw, "job", "contractFormat", "contract", "contractHash")
+			job := PgQueueSourcePayload{Job: pgMigrationRead[string](r, p["job"]), Contract: pgMigrationRead[string](r, p["contract"]), ContractHash: pgMigrationRead[string](r, p["contractHash"])}
+			if !pgQueueIdentity(job.Job) || job.Job <= lastJob || jobs[job.Job] {
+				r.fail("queue payload identities must be sorted and owned exactly once")
+			}
+			lastJob = job.Job
+			jobs[job.Job] = true
+			bytes, err := hex.DecodeString(job.Contract)
+			if err != nil || len(bytes) == 0 || hex.EncodeToString(bytes) != job.Contract || pgMigrationRead[string](r, p["contractFormat"]) != "tesl-queue-payload-v1" || !pgMigrationDigest(job.ContractHash) || fmt.Sprintf("%x", sha256.Sum256(bytes)) != job.ContractHash {
+				r.fail("queue payload contract bytes disagree with their canonical identity")
+			}
+			if err := pgQueueCanonicalContract(bytes); err != nil {
+				r.fail(err.Error())
+			}
+			return job
+		})
+		if len(contract.Payloads) == 0 {
+			r.fail("queue contract has no payloads")
+		}
+		return contract
+	})
+	return result
 }
 
 // The reader needs exact canonical bytes, not an interpreter for schema IR.

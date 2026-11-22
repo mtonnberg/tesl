@@ -370,7 +370,7 @@ entity Note table "notes" primaryKey id {
 		t.Fatal(err)
 	}
 	output := filepath.Join(t.TempDir(), "generated")
-	if err := app.Run(context.Background(), []string{"compile", "app.tesl", "--out", output}); err == nil || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "MIG016") {
+	if err := app.Run(context.Background(), []string{"compile", "app.tesl", "--out", output}); err == nil || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "MIG032") {
 		t.Fatalf("unsupported composition emitted: %v\n%s\n%s", err, app.Stdout, app.Stderr)
 	}
 	if got, err := os.ReadFile(filepath.Join(app.Directory, "app.tesl")); err != nil || string(got) != migrationPostgresApp {

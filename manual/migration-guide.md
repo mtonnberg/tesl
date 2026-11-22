@@ -4,10 +4,65 @@
 application database or convert stored data. Deployment runs the resulting
 application binary with separate Installer, Worker and Request database roles.
 
+## Quickstart: a first migration
+
+If you have written migrations in Rails, Django, Prisma or Flyway, the loop is
+familiar: change the model, generate the migration, fill in what the tool cannot
+guess, deploy. Tesl differs in three ways: the generator is a checked wizard, every
+deploy keeps old and new application versions working side by side, and dropped
+columns and tables are cleaned up by a separate, later step (the Contract).
+
+**Project layout** (see `example/db-migration-example`):
+
+| Path | What it is | Who edits it |
+|---|---|---|
+| `schema/<family>/v-current.tesl` | The current schema, module `Schema.<Family>.VCurrent` | You |
+| `schema/<family>/vN.tesl` | Frozen copy of the schema at revision N | Generated, never edited |
+| `migrations/<family>/vN.tesl` | How rows move from revision N-1 to N | Generated, you fill the `todo` holes |
+| `migrations/<family>/vN-contract.tesl` | Cleanup of retired columns/tables after N | Generated, you review it |
+
+The application imports entities from `Schema.<Family>.VCurrent`; its `database`
+declaration names `schema: Schema.<Family>.VCurrent` and
+`migrations: Schema.<Family>.Migrate`.
+
+**The loop:** edit `v-current.tesl`, save, run `tesl migrate app.tesl` (the
+installed `tesl` command; the compiler binary only offers JSON previews), answer
+the wizard, fill each `todo "..."`, run `tesl agent-context app.tesl` until clean,
+then follow the "Next steps" the wizard prints.
+
+| You want to | Edit `v-current.tesl` | Wizard choice / what you fill in |
+|---|---|---|
+| Add an optional column | Add `field: Maybe T` | Nothing to fill; existing rows get `Nothing` |
+| Add a required column | Add `field: T` | Pick the default option and give the value (or a row expression) |
+| Rename a column | Rename the field | Pick "Rename old to new"; a Contract follows |
+| Change a column's type | Change the type | A converter, a write-back for old writers and a reject policy |
+| Add validation (a proof) | Add `::: Fact field` | Pick "Revalidate using tryX"; choose what happens to failing rows |
+| Remove a column | Delete the field | A value old writers store while they still run (`Something Nothing` for a `Maybe` field); a Contract follows |
+| Add an index | Add `index [col]` to the entity | Nothing; the index builds concurrently while the app runs |
+| Add a unique index | Add `unique index [col]` | Older versions must be retired first (`close-epoch`); duplicates block the build. For zero refusals use staged uniqueness ([contracts guide](migration-contracts.md#promoting-staged-uniqueness)) |
+| Add a table | Add an `entity` | Nothing; the wizard records it as `New` |
+| Remove a table | Delete the `entity` | Only change in its revision; a Contract follows. Tables that were transformed or gained an index later cannot be dropped yet (MIG032) |
+| Split or compute a column | Change fields | One row mapping computed from the old row |
+
+To deploy, run the new binary once as a job before starting the new
+application services: `app --schema deploy --json` installs, converts and
+finishes in one go. For a rolling update with old and new versions serving
+together, start `app --schema worker --install` first, roll the application, and
+run `app --schema contract Vn` once the old version has stopped. The wizard's
+"Next steps" names the commands your revision needs. See
+[operations](migration-operations.md) for the database roles.
+
 ## Work through one revision
 
-1. Run `tesl migrate app.tesl` in an interactive terminal. It freezes the previous
-   current schema before asking you to edit the new `v-current.tesl`. Use
+1. Edit `schema/<family>/v-current.tesl` (add, rename or change fields) and save,
+   then run `tesl migrate app.tesl` in an interactive terminal. When your saved
+   edits are newer than the latest revision, the wizard asks once: press Enter to
+   start the next revision with them. It backs your edited files up under
+   `.tesl-stuff/migrate-edits/`, restores the exact source the latest revision
+   recorded (taken from git and checked against the recorded SHA-256), freezes it
+   as before, starts the new revision and puts your edits back. Press `r` instead
+   only when the latest revision is an undeployed draft you meant to change. You
+   can also run the wizard first and edit when it asks. Use
    `tesl migrate app.tesl --resume` to continue an existing undeployed revision.
 2. Save the current schema changes. Refresh produces the compiler's proposed
    migration, preserving user-owned conversion code. Read the overview and work
@@ -16,6 +71,10 @@ application binary with separate Installer, Worker and Request database roles.
    advances, and Enter refreshes and rechecks saved changes. Save editor buffers
    before using the CLI: its choices update saved files.
 3. Fill the typed holes with the business decisions the compiler cannot infer.
+   Each hole is a `todo "..."` that names what to choose; a rejected-row policy is
+   generated as `Reject (todo "Reason to reject ...")`, so replacing the text gives
+   a reason and replacing the whole `Reject` chooses another policy. Generated
+   files keep one import per module and pass `tesl fmt --check` and `--lint`.
    A rename can copy the exact old field; a new default needs a value you choose;
    a changed representation needs a converter; a changed proof may also need a
    reverse converter so old code can keep writing during overlap. Suggested
@@ -25,7 +84,12 @@ application binary with separate Installer, Worker and Request database roles.
    `tesl migrate plan app.tesl`, add application and conversion fixtures covering
    real historical values, and run their tests. Generate the required cleanup
    proposal with `tesl migrate contract app.tesl --version N` and review it before
-   building the deployment artifact.
+   building the deployment artifact. The wizard's final summary lists the table,
+   column and index changes and the exact next steps derived from the plan: a
+   prior Contract that must have run, `--schema close-epoch` before the first
+   transforming revision or a unique index that older versions could violate, the
+   Worker-first deploy order, and the Contract to run after old processes stop.
+   When a Contract is required and its source is missing, it offers to write it.
 5. Choose the deployment route below. Source generation, compilation, a passing
    fixture and runtime readiness are separate checks. None substitutes for the
    others.
@@ -38,6 +102,14 @@ tesl migrate generate app.tesl
 tesl agent-context app.tesl
 tesl migrate plan app.tesl
 ```
+
+`tesl migrate generate app.tesl --new-revision` handles already-saved schema edits
+the same way without asking: it starts the next revision, reapplies the edits,
+lists them in `editsReapplied` and reports progress on stderr. Run
+`tesl migrate generate app.tesl` afterwards to refresh the new revision with them.
+Both paths refuse without changing files when the recorded source cannot be found
+in git; then copy your edited schema aside, restore the recorded file, start the
+revision and reapply the edits by hand.
 
 `--manifest-json` is a non-mutating guarded source preview. The guided writer
 requires an interactive terminal and its supported filesystem protections;
@@ -92,10 +164,11 @@ completed with an older extension can still have this marker: continue once and
 choose **Finish and close**, or use **Start a new migration instead** on the welcome
 page. Closing unfinished work retains its draft marker. A draft
 prepared elsewhere can be selected through **Already have a draft?**. If schema
-edits were made before Start, preparation refuses rather than silently changing
-the old revision: keep your intended edits separately, restore the old source,
-then Start and reapply them. Continue the old revision only if that was explicitly
-your intended undeployed draft.
+edits were made before Start, the editor preparation refuses rather than silently
+changing the old revision. Run `tesl migrate app.tesl` in a terminal to keep those
+edits as the next revision automatically (see above), or keep them separately,
+restore the old source, then Start and reapply them. Continue the old revision only
+if that was explicitly your intended undeployed draft.
 
 Application discovery uses `[project].entrypoint` in the nearest `tesl.toml`.
 Opening the whole repository and starting from
@@ -158,7 +231,7 @@ structure. These are the main authoring routes:
 | New required primitive columns | Literal defaults, or a row-dependent mapping | Default values or expressions |
 | Add columns while changing existing fields | One composed row mapping | Added values, conversions and any rejection policy |
 | Rename one or several columns with unchanged contracts | Explicit rename candidates; a pure rename uses `Derived` | Select which old field corresponds to which new field |
-| Remove columns | Retain old storage and generate `LegacyWith` helpers for old writers | Values satisfying the removed fields' historical contracts |
+| Remove columns | Retain old storage and generate `LegacyWith` helpers for old writers | Values satisfying the removed fields' historical contracts. A removed `Maybe` field is filled with `Something Nothing` (old binaries store NULL); `Nothing` would refuse their writes |
 | Optional → required | Preserve present values and handle missing ones | Missing-value policy |
 | Required → optional | Wrap existing values; generate historical write-back | What old writers receive when a new value is missing |
 | Add field-local proofs | Checked revalidation where supported, including multiple primitive fields | Valid fixture values and failure policy |
@@ -321,6 +394,14 @@ conversions retain their `Row`/`Reject` result unchanged.
 - `DeleteRow reason` explicitly selects the entire source row for deletion.
 - `RejectRow reason` retains unresolved data and prevents successful completion.
 
+A rejected stored row stays in its old representation. The ongoing Worker leaves
+it unconverted, keeps converting the other rows, and reports the entity and
+primary key on its standard error after each pass; the reason text is not
+repeated there. Contract refuses to retire the old version while the row remains
+and names the same key. Repair the row through the admitted old version, or
+change the migration's policy in a new undeployed revision, then let the Worker
+pass again.
+
 The Worker physically deletes only the exact source tuple it decoded, using the
 same generation, xmin, transaction-age and lease checks as backfill updates.
 Deletion, processing-ABI latching and progress commit together; crashes roll back
@@ -358,9 +439,10 @@ contextual fields and constructors with their requirements for manual authoring.
 
 `Same Old.Valid New.Valid` means the compiler verified the complete reached
 semantic closure, including the relevant checks, proof-producing functions,
-helpers and codecs. A matching name or carrier type is insufficient. Renaming a
-fact is not permission to change its meaning, and manually adding `Same` cannot
-bypass the closure check.
+helpers and codecs. A matching name or carrier type is insufficient, and manually
+adding `Same` cannot bypass the closure check. The closure includes the fact's
+name, so `Same` cannot express renaming a fact either: a renamed fact goes through
+the same `Retype` conversion as a changed one.
 
 | Your change | Supported decision |
 |---|---|
@@ -388,11 +470,32 @@ Worked examples: [adding a proof](../example/learn/lesson89-proof-revalidation.m
 [changing an existing proof](../example/learn/lesson90-changing-field-proofs.md),
 and [retaining old proofs while strengthening a field](../example/learn/lesson94-same-column-proof-strengthening.md).
 
+### What is checked at runtime, and what is trusted
+
+Proofs are checked where values are produced. A migration re-establishes them
+when it converts a row: every old-generation row a request or the Worker reads
+goes through the checked converter, including rows written by old application
+versions or by plain SQL that changed a column the old version can see. Rows
+already in the current representation are decoded without re-running checks on
+primitive proof fields. A field carried over with `Same` keeps its stored value,
+so data that never satisfied the old check is not re-validated by `Same` either.
+Proof-bearing record fields are different: their codec's `via` checks run on
+every decode.
+
+The database is therefore part of the trusted boundary. Writes made outside
+Tesl to current-representation columns, at any time, and to any column after
+Contract has dropped the old-write trigger, are served as already proven. Use
+`Revalidate` or a converter that calls the validator when existing data must
+be checked, and keep other writers away from Tesl-owned tables.
+
 ## Current schema edits and recorded hashes
 
-After editing `v-current.tesl`, `MIG001` can mean the pending migration has not yet
-been refreshed to describe those saved changes. That is an expected incomplete
-authoring state: save, refresh the migration, resolve its decisions and recheck.
+After editing `v-current.tesl`, `MIG001` means the latest migration does not yet
+describe those saved changes. It is reported once per changed file. That is an
+expected incomplete authoring state. Run `tesl migrate app.tesl`: it starts the
+next revision with your edits. If the latest revision is an undeployed draft you
+meant to change, run `tesl migrate app.tesl --resume` to refresh it instead. Then
+resolve its decisions and recheck.
 The editor's draft guidance does not make the program deployable; the compiler
 still rejects an inconsistent current schema or unresolved migration.
 
@@ -402,6 +505,44 @@ Do not dismiss it as an in-progress migration, change a stored digest to match,
 or reseal an already-deployed revision. If source publication was interrupted, use
 the guarded recovery command named by the tool rather than manually completing a
 partial multi-file write.
+
+### How later builds check frozen revisions
+
+A frozen revision gets the complete compiler check once, when `tesl migrate`
+freezes it. Its migration file then records SHA-256 hashes of everything that
+check read: the two schema snapshots (`# tesl:snapshot-source` lines), the
+migration file itself, its private helpers and its Contract
+(`# tesl:frozen-source` lines). Each `# tesl:snapshot-seal` line also records the
+compiler ABI (an identity of the compiler build, its embedded Go runtime and the
+stdlib) that ran the check.
+
+Later commands (`agent-context`, `--check-json`, Go emission, `tesl migrate`)
+re-hash those files instead of re-checking the revision. A frozen revision is
+**trusted** only when:
+
+| Condition | If it fails |
+|---|---|
+| every recorded file still has its recorded hash | full check; it reports `MIG013` for the changed file |
+| both snapshot seals name the running compiler's ABI | full check under the running compiler (accepted when the stored-value contract matches) |
+| both seals name the running stored-value contract | `MIG013`, as before: build with the compiler that sealed it |
+
+The current revision (the migration to `VCurrent`) is always checked completely,
+and so is any file you query directly. The history-wide checks (row generations,
+retained storage, Contracts, the expansion plan) and the older schema inventories
+the current revision needs are recomputed from the hash-verified files in every
+command. Trust removes only the repeated per-revision type and proof checks.
+
+Upgrading the compiler changes its ABI. Revisions frozen by the older compiler are
+then checked completely by every build, as they were before seals were trusted;
+only revisions frozen by the new compiler are trusted. There is no command yet
+that re-seals old revisions under a new compiler.
+
+The trade-off: someone who edits a frozen file *and* recomputes its recorded hashes
+is not caught by a normal build. To check every revision completely, set
+`TESL_FULL_HISTORY=1` or pass `--full-history` (for example
+`tesl --full-history --backend go app.tesl --out build`). Run that in CI on a
+schedule or before a release; when the history is intact its output is
+byte-for-byte the same as a normal build.
 
 ## Choose the deployment route
 

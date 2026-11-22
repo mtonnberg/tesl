@@ -98,7 +98,7 @@ let revalidation_choice () = with_project ~old:(replace "PROOF" "" proof_source)
   let chosen=get (choose root p "revalidate:NotesSchema.VCurrent.accept") in
   let actual=source chosen (path "migrations/notes/v2.tesl") in
   check bool "checked Revalidate rule is inserted" true (Compile.string_contains actual "Revalidate title NotesSchema.VCurrent.accept");
-  finish root path chosen (fun reason -> if String.starts_with ~prefix:"Choose " reason then "Reject \"invalid historical title\"" else "\"fixture\"") ())
+  finish root path chosen (fun reason -> if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid historical title\"" else "\"fixture\"") ())
 let primitive_choice_with_imports imports () = with_project (fun root path ->
   let file=path "migrations/notes/v2.tesl" in
   if imports<>"" then write file(replace "\nimport Tesl.Migration" ("\n" ^ imports ^ "import Tesl.Migration") (read file));
@@ -106,7 +106,7 @@ let primitive_choice_with_imports imports () = with_project (fun root path ->
   let p=get (preview root) in
   let chosen=get (choose root p "migrate-retype") in
   finish root path chosen (fun reason ->
-    if String.starts_with ~prefix:"Choose " reason then "Reject \"rejected historical amount\""
+    if String.starts_with ~prefix:"Reason to reject" reason then "\"rejected historical amount\""
     else if String.starts_with ~prefix:"Convert " reason then "Something \"converted\""
     else if String.starts_with ~prefix:"Return " reason then "Something 7"
     else if Compile.string_contains reason "Note.amount" then "7"
@@ -123,7 +123,7 @@ let changed_proof_choice () = with_project ~old:(replace "PROOF" " ::: Good titl
   check bool "changed historical proof is never Revalidate" false (List.exists (String.starts_with ~prefix:"revalidate:") (options p));
   let chosen=get (choose root p "migrate-retype") in
    finish root path chosen (fun reason ->
-    if String.starts_with ~prefix:"Choose " reason then "Reject \"invalid input\""
+    if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid input\""
     else if String.starts_with ~prefix:"Convert " reason then "NotesSchema.VCurrent.accept value"
     else if String.starts_with ~prefix:"Return " reason then
       "NotesSchema.V1.accept current.title"
@@ -136,7 +136,7 @@ let validator_choice () = with_project ~old:(replace "PROOF" " ::: Good title" p
   List.iter(fun expected->check bool ("generated " ^ expected) true (Compile.string_contains actual expected))
     ["NotesSchema.VCurrent.accept value";"NotesSchema.V1.accept current.title";"Maybe (previousValue:";"Retype title";"WriteBack title title"];
   finish root path chosen (fun reason->
-    if String.starts_with ~prefix:"Choose an explicit Reject" reason then "Reject \"invalid historical title\""
+    if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid historical title\""
     else "\"fixture\"") ())
 let ambiguous_validator () = with_project ~old:(replace "PROOF" " ::: Good title" proof_source) (fun root path ->
   let fresh=proof_source |> replace "PROOF" " ::: Good title" |> replace "value != \"\"" "value != \"blocked\"" in
@@ -154,8 +154,8 @@ let multiple_validator_fields () =
     let actual=source chosen(path "migrations/notes/v2.tesl")in
     check bool "both fields receive storage rules" true
       (Compile.string_contains actual "Retype title" && Compile.string_contains actual "Retype memo");
-    finish root path chosen (fun reason->if String.starts_with ~prefix:"Choose an explicit Reject" reason then
-      "Reject \"invalid historical value\"" else if String.starts_with ~prefix:"Historical example" reason then
+    finish root path chosen (fun reason->if String.starts_with ~prefix:"Reason to reject" reason then
+      "\"invalid historical value\"" else if String.starts_with ~prefix:"Historical example" reason then
       "\"fixture\"" else fail("unnecessary domain hole: " ^ reason)) ())
 let optional_required () =
  let old=simple |> replace "import Tesl.Prelude" "import Tesl.Maybe exposing [Maybe(..)]\nimport Tesl.Prelude" |>
@@ -238,18 +238,48 @@ let strict_command_flags () = with_project (fun _root path ->
      ["--decision";"entity:Note";"--option";"additive-default";"--expected-input-digest";String.make 64 'A']];
   List.iter (fun verb -> let response=Migration_command.run ([verb;path "app.tesl";"--manifest-json"] @ flags) in
      check int "other verbs cannot consume a choice" 1 response.exit_code) ["contract";"plan"])
+(* Generated source must pass the formatter and linter unchanged and must not
+   split one module's imports over several lines. *)
+let generated_source_is_clean label file =
+  let source=read file in
+  check string (label ^ ": formatter-clean") (Formatter.format_source source) source;
+  let warnings=Linter.lint_file ~logical_path:file file |> List.map (fun (d:Compile.diagnostic) -> d.code ^ " " ^ d.message) in
+  check (list string) (label ^ ": lint-clean") [] warnings;
+  let imports=String.split_on_char '\n' source |> List.filter_map (fun line ->
+    match String.split_on_char ' ' line with "import"::m::_ -> Some m | _ -> None) in
+  check (list string) (label ^ ": one import per module") (List.sort_uniq compare imports) (List.sort compare imports)
 let column_rename () = with_project(fun root path->
  write(path "schema/notes/v-current.tesl")(replace "amount: Int" "count: Int" simple);
  let chosen=get(choose root(get(preview root))"rename:amount:count")in
  check bool "pure rename has no invented policy holes" true(P.compilable chosen);
  check bool "complete Derived rule" true(Compile.string_contains(source chosen(path "migrations/notes/v2.tesl"))"Derived [Rename amount count]");
  materialize chosen;check_app root;
+ generated_source_is_clean "rename" (path "migrations/notes/v2.tesl");
  check int "rename refresh is stable" 0(List.length(M.edits(P.manifest(get(preview root))))))
 let removed_column () = with_project(fun root path->
  write(path "schema/notes/v-current.tesl")(replace ", amount: Int" "" simple);
  let chosen=get(choose root(get(preview root))"map-fields")in
  check bool "old writers get an explicit projection" true(Compile.string_contains(source chosen(path "migrations/notes/v2.tesl"))"LegacyWith amount");
  finish root path chosen(fun reason->if String.starts_with ~prefix:"Return Something" reason then "Something 7" else if Compile.string_contains reason "amount"then "7"else "\"fixture\"") ())
+let removed_optional_column () =
+ let old={|module NotesSchema.VCurrent exposing [Note]
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Note table "notes" primaryKey id { id: String, amount: Int, memo: Maybe String }
+|} in
+ with_project ~old (fun root path->
+ write(path "schema/notes/v-current.tesl")(replace ", memo: Maybe String" "" old);
+ let chosen=get(choose root(get(preview root))"map-fields")in
+ let actual=source chosen(path "migrations/notes/v2.tesl")in
+ check bool "old writers store NULL by default" true
+   (Compile.string_contains actual "-> Maybe (Maybe (String)) =\n  Something Nothing\n");
+ check bool "comment states storing NULL" true (Compile.string_contains actual "# Something Nothing stores NULL in the old column");
+ check bool "comment states refusing writes" true (Compile.string_contains actual "# Nothing would instead refuse every write from old binaries");
+ check bool "no placeholder for the removed optional field" false (Compile.string_contains actual "removed field Note.memo");
+ check bool "fixture field on its own line" true (Compile.string_contains actual "Migration {\n  fixtures: [fixtureNote]\n");
+ finish root path chosen(fun reason->if Compile.string_contains reason ".amount" then "7"
+   else if Compile.string_contains reason ".memo" then "Nothing" else "\"fixture\"") ();
+ generated_source_is_clean "removed optional" (path "migrations/notes/v2.tesl"))
 let compound_columns () = with_project(fun root path->
  write(path "schema/notes/v-current.tesl")(replace "amount: Int" "amount: String, memo: String" simple);
  let chosen=get(choose root(get(preview root))"map-fields")in
@@ -403,7 +433,7 @@ let multiple_revalidation () =
  with_project ~old(fun root path->
   write(path "schema/notes/v-current.tesl")(old |>replace "title: String, memo: String" "title: String ::: Good title, memo: String ::: Good memo");
   let chosen=get(choose root(get(preview root))"revalidate-fields")in
-  finish root path chosen(fun reason->if String.starts_with ~prefix:"Choose a Reject" reason then "Reject \"invalid old value\"" else "\"historical\"") ())
+  finish root path chosen(fun reason->if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid old value\"" else "\"historical\"") ())
 let removed_proof () =
   let old=proof_source |>replace "PROOF" " ::: Good title" |>replace "Good, accept]" "Good, accept, newNote]"in
  let old=old ^ {|
@@ -412,7 +442,7 @@ fn newNote(id: String, title: String ::: Good title) -> Note = Note { id: id, ti
  with_project ~old(fun root path->
   write(path "schema/notes/v-current.tesl")(replace "title: String ::: Good title }" "title: String }" old);
   let chosen=get(choose root(get(preview root))"migrate-validators")in
-  check bool "forward proof erasure needs no rejected-row policy" false(Compile.string_contains(source chosen(path "migrations/notes/v2.tesl"))"Choose an explicit Reject");
+  check bool "forward proof erasure needs no rejected-row policy" false(Compile.string_contains(source chosen(path "migrations/notes/v2.tesl"))"Reason to reject rows");
    finish root path chosen(fun _->"\"historical\"") ())
 let nested_list_record () =
  let old=stored_record |>replace "[Note, Meta]" "[Note, Meta, Inner]" |>replace "[String, Int]" "[String, Int, List]" |>
@@ -451,7 +481,7 @@ let cleanup_authoring () =
  with_project ~program(fun root path->
   write(path "schema/notes/v-current.tesl")(replace "amount: Int" "amount: String" simple);
   finish root path(get(choose root(get(preview root))"migrate-retype"))(fun reason->
-    if String.starts_with ~prefix:"Choose " reason then "Reject \"invalid\""
+    if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid\""
     else if String.starts_with ~prefix:"Convert " reason then "Something \"converted\""
     else if String.starts_with ~prefix:"Return " reason then "Something 7"
     else if Compile.string_contains reason "Note.amount" then "7"
@@ -480,7 +510,7 @@ let fallible_reverse () = with_project ~old:(replace "PROOF" " ::: Good title" p
  let frozen=read(path "schema/notes/v1.tesl")in
  write(path "schema/notes/v-current.tesl")(proof_source |> replace "PROOF" " ::: Good title" |> replace "value != \"\"" "value != \"blocked\"");
  let chosen=get(choose root(get(preview root))"migrate-validators")in
- finish root path chosen(fun reason->if String.starts_with ~prefix:"Choose an explicit Reject" reason then "Reject \"invalid\""else "\"fixture\"") ();
+ finish root path chosen(fun reason->if String.starts_with ~prefix:"Reason to reject" reason then "\"invalid\""else "\"fixture\"") ();
  let file=path "migrations/notes/v2.tesl"in
  let valid=read file |> replace "exposing [String]" "exposing [String, Bool(..)]"in
  write file(valid ^ {|
@@ -573,6 +603,7 @@ let () = run "Compiler-owned migration choices" ["complete source workflows",Lis
      "ambiguous validators are not guessed",ambiguous_validator;
      "column rename preserves data without holes",column_rename;
      "removed columns generate old-writer projections",removed_column;
+     "removed optional column stores NULL for old writers",removed_optional_column;
      "new and retyped fields compose",compound_columns;
      "codec-only changes rebuild exact nominal values",codec_choice;
      "stored record shape changes scaffold fields",record_shape_choice;

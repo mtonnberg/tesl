@@ -56,7 +56,7 @@ func ForDecision(decision Decision) Guide {
 		return guide
 	}
 	guide.Title = "Choose how to migrate " + decision.Entity
-	if strings.Contains(decision.Reason, "stored proof contract changed") {
+	if strings.Contains(decision.Reason, "stored proof contract changed") || strings.Contains(decision.Reason, "a first proof was added to") || strings.Contains(decision.Reason, " was removed; choose what old binaries receive") {
 		guide.Summary = decision.Reason + "\n\n" + guide.Summary
 	} else {
 		guide.Summary = decision.Reason
@@ -110,11 +110,11 @@ func ForDiagnostic(code, message string) Guide {
 	}
 	switch code {
 	case "MIG001":
-		guide.Title = "Refresh an undeployed current revision"
-		guide.Summary = "Editing VCurrent changes its recorded hash. Refresh only if this revision has not been deployed."
+		guide.Title = "Keep these schema edits as a revision"
+		guide.Summary = "Editing VCurrent changes its recorded hash. Run tesl migrate to start the next revision with these edits; fold them into the latest revision only if it has not been deployed."
 		guide.Options = []Option{
-			{ID: "refresh-current", Title: "Continue the undeployed revision", When: "You are intentionally editing this still-undeployed revision; save your schema and refresh its generated source."},
-			{ID: "restore-deployed", Title: "Restore deployed source, then start a forward revision", When: "This revision was already deployed, or you cannot establish that it is undeployed."},
+			{ID: "start-next", Title: "Start the next revision with these edits", When: "The normal path: tesl migrate keeps your edits, restores the recorded source, starts the next revision and reapplies them."},
+			{ID: "refresh-current", Title: "Continue the undeployed revision", When: "You are intentionally editing this still-undeployed revision; save your schema and refresh its generated source (tesl migrate --resume)."},
 		}
 		guide.Help = append(guide.Help, "The compiler cannot determine deployment state. A changed hash is not permission to reseal deployed history; frozen schema and completed migration errors remain blocking.")
 	case "MIG013":
@@ -132,7 +132,11 @@ func ForDiagnostic(code, message string) Guide {
 	case "MIG003":
 		guide.Title = "Choose how to populate existing rows"
 		guide.Summary = "A generated todo marks an unresolved decision; generation does not fabricate a value or a proof."
-		if strings.HasPrefix(message, "Migration needs a value: ") {
+		if strings.HasPrefix(message, "Fill this placeholder: ") {
+			guide.Title = "Fill this placeholder: choose a policy"
+			guide.Summary = strings.TrimPrefix(message, "Fill this placeholder: ")
+			guide.Help = []string{"The scaffold is written; only this decision remains. Replace the todo with Reject \"reason\" (the row is refused and kept in the old storage) or with a reviewed Row value, then recheck."}
+		} else if strings.HasPrefix(message, "Migration needs a value: ") {
 			guide.Title = "Fill this migration value"
 			guide.Summary = strings.TrimPrefix(message, "Migration needs a value: ")
 			guide.Help = []string{"Replace the selected placeholder with a value or expression of the requested type, then recheck. Historical examples exercise the migration using the previous schema's constructor and validation."}
@@ -140,6 +144,15 @@ func ForDiagnostic(code, message string) Guide {
 			guide.Title = "Complete the selected literal default"
 			guide.Summary = "The scaffold is written. Replace this todo with a literal of the compiler's named type, then save and recheck."
 			guide.Help = append(guide.Help, "This is the custom value for the default route you already selected. Keep its generated Default rule and replace only the value hole. Choose the value for existing rows deliberately; Same or Revalidate cannot supply that missing value.")
+		} else if strings.Contains(message, "a first proof was added to") {
+			guide.Title = "Check existing rows against the new proof"
+			guide.Summary = "Existing rows were stored without this check. Revalidate runs the validator on each stored value: rows that pass gain the proof, rows that fail are rejected and stay in the old storage until you repair them. Old versions keep writing unchecked values during the overlap, so the same validator also guards those writes."
+			guide.Options = []Option{{ID: "revalidate", Title: "Revalidate with the exported validator", When: "Choose the compiler's revalidate plan when it is offered; it reuses the establish function for this proof.", Example: "Migrate convert [Revalidate field CurrentSchema.tryField]", RequiresCustomCode: true}}
+			guide.Help = append(guide.Help, proofHelp()...)
+		} else if strings.Contains(message, " was removed; choose what old binaries receive") {
+			guide.Title = "Old versions still require the removed proof"
+			guide.Summary = "New values may no longer satisfy the proof that old versions expect. While old versions run, the historical write-back must return a value that passes the old proof, or Nothing to refuse that write."
+			guide.Help = append(guide.Help, proofHelp()...)
 		} else if strings.Contains(message, "stored proof contract changed") {
 			guide.Title = "Migrate a changed historical proof"
 			guide.Summary = "Changing an existing proof requires preserving an old-valid representation while old versions may write. This also applies when the new check is more permissive and every old value passes: newly allowed values may fail the old check in the reverse direction.\n\nChoose the validator-reuse plan if offered, or the custom conversion plan. Supply an old-valid fallback policy, or keep new writes within the old rule until old writers are retired. Neither Same nor same-column Revalidate replaces this changed proof."

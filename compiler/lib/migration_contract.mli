@@ -36,3 +36,6 @@ val diagnostics : string -> Ast.module_form -> Frontend_check.diagnostic list
     This checks current source, not persisted-value compatibility or execution
     authority, just like [diagnostics]. *)
 val diagnostics_batch : (string * string) list -> Frontend_check.diagnostic list
+
+(** Hit/miss counters of the compilation-scoped checked-plan memo (tests). *)
+val plan_cache_stats : unit -> Migration_analysis_cache.stats

@@ -89,6 +89,8 @@ let branches () = project (fun _ _ path ->
   accepts path (replace ("  " ^ row) ("  if old.title == \"\" then\n    Reject \"empty\"\n  else\n    " ^ row) source);
   refuses "MIG017" path (replace ("  " ^ row) ("  if old.title == \"\" then\n    " ^ replace "old.author" "old.title" row ^ "\n  else\n    " ^ row) source);
   refuses "MIG018" path (replace ("  " ^ row) ("  case old.title of\n    old -> " ^ row) source);
+  (* A generated placeholder names the decision instead of the row-result rule. *)
+  refuses "MIG003" path (replace ("  " ^ row) ("  if old.title == \"\" then\n    todo \"Choose a reject policy\"\n  else\n    " ^ row) source);
   refuses "MIG018" path (replace ("  " ^ row) "  converted old" source ^
     "\nfn converted(old: Schema.Notes.V1.Note) -> Migrated Schema.Notes.VCurrent.Note =\n  " ^ row ^ "\n"))
 let fixtures () = project (fun _ _ path ->

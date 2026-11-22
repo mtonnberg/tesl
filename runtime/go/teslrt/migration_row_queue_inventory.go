@@ -14,42 +14,166 @@ type pgRowQueueSource struct {
 	queues, facilities   pgRowCanonical
 }
 
-func pgRowQueueSources(history PgCompiledMigrationHistory) ([]pgRowQueueSource, error) {
-	if _, err := pgReadRowBase(history); err != nil {
-		return nil, err
+// pgRowQueueSourceSet is the row-owned queue source binding of every version.
+// Window versions are bound from the validated window; any other version first
+// validates the complete queue and physical history. Shared and immutable.
+type pgRowQueueSourceSet struct {
+	history  PgCompiledMigrationHistory
+	lazy     *pgQueueHistoryLazy
+	physical *pgCompiledRowPhysicalHistory
+	window   map[int]pgRowQueueSource
+	full     pgMemo[[]pgRowQueueSource]
+}
+
+// Protected by pgMigrationRegistrations.
+var compiledRowQueueSources = map[string]*pgRowQueueSourceSet{}
+
+func (q *pgRowQueueSourceSet) len() int { return q.history.CurrentVersion }
+
+func (q *pgRowQueueSourceSet) at(k int) (pgRowQueueSource, error) {
+	if source, ok := q.window[k]; ok {
+		return source, nil
 	}
-	inventory, err := history.QueueSourceInventory(1)
+	if k < 1 || k > q.history.CurrentVersion {
+		return pgRowQueueSource{}, fmt.Errorf("row queue source version is outside linked history")
+	}
+	all, err := q.complete()
 	if err != nil {
-		return nil, err
+		return pgRowQueueSource{}, err
 	}
-	// QueueSourceInventory replays the complete row source, including queue roots
-	// and payload closure containment. Never manufacture an empty companion here.
-	if inventory.Database != history.Database || inventory.Family != history.Family || inventory.Namespace != history.Namespace || inventory.InitialVersion != 1 || inventory.CurrentVersion != history.CurrentVersion || len(inventory.Versions) != history.CurrentVersion {
-		return nil, fmt.Errorf("row queue inventory owner or complete version range differs")
+	return all[k-1], nil
+}
+
+func (q *pgRowQueueSourceSet) must(k int) pgRowQueueSource {
+	source, err := q.at(k)
+	if err != nil {
+		panic(err)
 	}
-	if physical := compiledRowPhysicalHistories[compiledRowHistories[history.Family]]; physical != nil {
-		if err := pgCheckQueueRemovalHistory(physical.versions, inventory.Versions); err != nil {
+	return source
+}
+
+// identityHash is version k's canonical inventory hash from its linked bytes,
+// for comparison with a recorded version (see pgQueueHistoryLazy.identityHash).
+func (q *pgRowQueueSourceSet) identityHash(k int) (string, error) {
+	if source, ok := q.window[k]; ok {
+		return source.inventoryHash, nil
+	}
+	if all, err, done := q.full.peek(); done && err == nil && k >= 1 && k <= len(all) {
+		return all[k-1].inventoryHash, nil
+	}
+	return q.lazy.identityHash(k)
+}
+
+func (q *pgRowQueueSourceSet) complete() ([]pgRowQueueSource, error) {
+	return q.full.get(func() ([]pgRowQueueSource, error) {
+		pgHistoryCounters.complete.Add(1)
+		history := q.history
+		if _, err := pgReadRowBase(history); err != nil {
 			return nil, err
 		}
-	}
-	result := make([]pgRowQueueSource, 0, len(inventory.Versions))
-	for i, version := range inventory.Versions {
-		if version.Version != i+1 {
-			return nil, fmt.Errorf("row queue source version order differs")
-		}
-		if i > 0 && !pgQueueInventoryPreserves(inventory.Versions[i-1], version) {
-			physical := compiledRowPhysicalHistories[compiledRowHistories[history.Family]]
-			if physical == nil || i >= len(physical.versions) || !pgQueuePhysicalTransitionMatches(inventory.Versions[i-1], version, physical.versions[i]) {
-				return nil, fmt.Errorf("row queue transformation lacks its exact compiler-linked queue-only physical history")
-			}
-		}
-		value, err := pgRowQueueSourceBinding(history, version)
+		inventory, err := q.lazy.complete()
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, value)
+		versions := inventory.Versions
+		// The complete reader replays the complete row source, including queue
+		// roots and payload closure containment. Never manufacture an empty
+		// companion here.
+		if inventory.Database != history.Database || inventory.Family != history.Family || inventory.Namespace != history.Namespace || inventory.InitialVersion != 1 || inventory.CurrentVersion != history.CurrentVersion || len(versions) != history.CurrentVersion {
+			return nil, fmt.Errorf("row queue inventory owner or complete version range differs")
+		}
+		var plans []*pgRowPhysicalPlan
+		if q.physical != nil {
+			if plans, err = q.physical.all(); err != nil {
+				return nil, err
+			}
+			if err := pgCheckQueueRemovalHistory(plans, versions); err != nil {
+				return nil, err
+			}
+		}
+		result := make([]pgRowQueueSource, 0, len(versions))
+		for i, version := range versions {
+			if version.Version != i+1 {
+				return nil, fmt.Errorf("row queue source version order differs")
+			}
+			if i > 0 && !pgQueueInventoryPreserves(versions[i-1], version) {
+				if plans == nil || i >= len(plans) || !pgQueuePhysicalTransitionMatches(versions[i-1], version, plans[i]) {
+					return nil, fmt.Errorf("row queue transformation lacks its exact compiler-linked queue-only physical history")
+				}
+			}
+			if source, ok := q.window[i+1]; ok {
+				result = append(result, source)
+				continue
+			}
+			value, err := pgRowQueueSourceBinding(history, version)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, value)
+		}
+		return result, nil
+	})
+}
+
+// pgRowQueueSources binds the complete compiler-owned source inventory. It
+// does not grant queue dispatch, establish a legacy origin, or identify row
+// expansion receipts as source storage hashes. Callers hold
+// pgMigrationRegistrations.
+func pgRowQueueSources(history PgCompiledMigrationHistory) (*pgRowQueueSourceSet, error) {
+	registration, err := pgQueueRegistrationOf(history)
+	if err != nil {
+		return nil, err
 	}
-	return result, nil
+	var physical *pgCompiledRowPhysicalHistory
+	if compiled := compiledRowHistories[history.Family]; compiled != nil {
+		physical = compiledRowPhysicalHistories[compiled]
+	}
+	if existing := compiledRowQueueSources[history.Family]; existing != nil && existing.history == history && existing.lazy == registration.lazy && existing.physical == physical {
+		return existing, nil
+	}
+	set := &pgRowQueueSourceSet{history: history, lazy: registration.lazy, physical: physical, window: map[int]pgRowQueueSource{}}
+	if registration.lazy.window == nil || pgHistoryInWindow(history.CurrentVersion) || physical == nil && history.CurrentVersion > 1 {
+		all, err := set.complete()
+		if err != nil {
+			return nil, err
+		}
+		for i, source := range all {
+			set.window[i+1] = source
+		}
+	} else {
+		current := history.CurrentVersion
+		for k := 1; k <= current; k++ {
+			if !pgServingWindow(current, k) {
+				continue
+			}
+			version, err := registration.lazy.version(k)
+			if err != nil {
+				return nil, err
+			}
+			if version.Version != k {
+				return nil, fmt.Errorf("row queue source version order differs")
+			}
+			value, err := pgRowQueueSourceBinding(history, version)
+			if err != nil {
+				return nil, err
+			}
+			set.window[k] = value
+		}
+		// The current transition is checked here; earlier ones by complete
+		// validation, together with the RemoveEmpty history.
+		before, after := set.window[current-1].version, set.window[current].version
+		if !pgQueueInventoryPreserves(before, after) {
+			plan, err := physical.plan(current)
+			if err != nil {
+				return nil, err
+			}
+			if !pgQueuePhysicalTransitionMatches(before, after, plan) {
+				return nil, fmt.Errorf("row queue transformation lacks its exact compiler-linked queue-only physical history")
+			}
+		}
+	}
+	compiledRowQueueSources[history.Family] = set
+	return set, nil
 }
 
 func pgQueuePhysicalTransitionMatches(before, after PgQueueSourceVersion, plan *pgRowPhysicalPlan) bool {

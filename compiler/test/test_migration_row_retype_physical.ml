@@ -214,8 +214,8 @@ import (
 func TestCompilerSettledAndReverseBindings(t *testing.T) {
  compiled:=compiledRowHistories["Schema.Notes"]
  history:=compiledRowPhysicalHistories[compiled]
- if history==nil||len(history.versions)!=2{t.Fatal("missing actual physical compiler output")}
- window:=history.versions[1]
+ if history==nil||len(history.known())!=2{t.Fatal("missing actual physical compiler output")}
+ window:=history.known()[1]
  encoded,digest:=%S,%S
  settled,err:=pgParseRowSettledPlan(encoded,digest)
  if err!=nil||settled==nil||settled.compiled!=nil {t.Fatal("settled observation",err)}
@@ -260,7 +260,7 @@ func TestCompilerSettledAndReverseBindings(t *testing.T) {
   document,_,err:=pgReadRowCanonical(window.contract);if err!=nil{t.Fatal(err)}
   mutate(&document.children[3]);raw,hash:=pgRowBaselineDocument(document.children[3])
   changed,err:=pgParseRowPhysicalPlan(hex.EncodeToString([]byte(raw)),hash)
-  if err==nil {err=pgBindRowPhysicalPlan(compiled,history.versions[0],changed)}
+  if err==nil {err=pgBindRowPhysicalPlan(compiled,history.known()[0],changed)}
   if err==nil {t.Fatal("mutated WriteBack physical owner accepted")}
  })}
 }
