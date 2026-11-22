@@ -249,6 +249,21 @@ let resealed_bad_step () = with_history (fun root path entry ->
   check bool "a direct query of the edited file checks it completely" true
     (with_full_history false (fun () -> check_errors file) <> []))
 
+
+(* Within one command the history cache trusts its first verification; a frozen
+   byte edited while the command runs is refused by the capture's final source
+   guard before the command emits or succeeds. *)
+let edit_during_command () = with_history (fun _ path entry ->
+  let source = read entry in
+  let m = match Parser.parse_module entry source with Parser.Ok m -> m | Parser.Err e -> fail e.msg in
+  let file = path "schema/scale/v2.tesl" in
+  let result = Migration_program.with_compilation_cache (fun () ->
+    Migration_program.with_source_history ~entry:m ~source (fun _ -> write file (edit_string (read file)))) in
+  match result with
+  | Ok () -> fail "an edit during the command was not caught"
+  | Error errors -> check bool "the final guard refuses with MIG013" true
+      (List.exists (fun (e:Migration_sparse.error) -> e.code = "MIG013") errors))
+
 let () = run "Migration seal trust" [
   "identity", [
     test_case "trusted output equals full-history output" `Slow trusted_equals_full;
@@ -259,6 +274,7 @@ let () = run "Migration seal trust" [
     test_case "frozen migration byte" `Slow (tamper "migrations/scale/v3.tesl" edit_body);
     test_case "frozen Contract byte" `Slow (tamper "migrations/scale/v3-contract.tesl" (fun s -> s ^ "\n# edited\n"));
   ];
+  "command guard", [ test_case "a frozen edit during one command is refused" `Slow edit_during_command ];
   "abi", [ test_case "another compiler's seal is re-checked" `Slow other_abi_is_rechecked ];
   "trade-off", [ test_case "resealed bad step: trusted normally, rejected in full mode" `Slow resealed_bad_step ];
 ]
