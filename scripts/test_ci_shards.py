@@ -210,6 +210,81 @@ class ShardEvidence(unittest.TestCase):
                 with self.assertRaises(ci.EvidenceError):
                     ci.read_parts(path, 'full')
 
+    def use_lanes(self, lanes=('core', 'lifecycle'), rows=None):
+        """Replace the complete migration receipt with one receipt per lane."""
+        shutil.rmtree(self.evidence / 'migration')
+        partitions = ci.migration_lanes(self.config)
+        for lane in lanes:
+            output = self.evidence / f'migration-{lane}'
+            ci.start(self.root, 'migration', self.revision, output, lane)
+            (output / 'phases.tsv').write_text('phase\tstatus\tseconds\n' + ''.join(
+                f'{name}\tOK\t1\n' for name in ci.owned(self.config, 'migration')))
+            (output / 'go-parts.tsv').write_text('part\tstatus\nmigration\tOK\n')
+            migration = Path(self.work.name) / f'migration-{lane}.tsv'
+            names = partitions[lane] if rows is None else rows[lane]
+            migration.write_text('phase\tseconds\texit_code\n' + ''.join(f'{name}\t1\t0\n' for name in names))
+            ci.record(self.root, 'migration', self.revision, output, migration, lane)
+
+    def test_both_migration_lanes_join_into_the_complete_union(self):
+        self.use_lanes()
+        result = self.verify()
+        self.assertEqual(result['migration_lanes'], ['core', 'lifecycle'])
+        self.assertEqual(result['migration_phases'], len(self.config['migration_phases']))
+
+    def test_lanes_partition_the_inventory_at_the_declared_boundary(self):
+        parts = ci.migration_lanes(self.config)
+        self.assertTrue(parts['core'] and parts['lifecycle'])
+        self.assertEqual(parts['core'] + parts['lifecycle'], self.config['migration_phases'])
+        self.assertEqual(parts['lifecycle'][0], ci.MIGRATION_LANE_BOUNDARY)
+
+    def test_a_single_migration_lane_refuses(self):
+        for lane in ('core', 'lifecycle'):
+            with self.subTest(lane=lane):
+                self.setUp()
+                self.use_lanes((lane,))
+                with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or both lanes'):
+                    self.verify()
+
+    def test_complete_run_plus_a_lane_refuses(self):
+        output = self.evidence / 'migration-core'
+        ci.start(self.root, 'migration', self.revision, output, 'core')
+        (output / 'phases.tsv').write_text('phase\tstatus\tseconds\n' + ''.join(
+            f'{name}\tOK\t1\n' for name in ci.owned(self.config, 'migration')))
+        (output / 'go-parts.tsv').write_text('part\tstatus\nmigration\tOK\n')
+        migration = Path(self.work.name) / 'core.tsv'
+        migration.write_text('phase\tseconds\texit_code\n' + ''.join(
+            f'{name}\t1\t0\n' for name in ci.migration_lanes(self.config)['core']))
+        ci.record(self.root, 'migration', self.revision, output, migration, 'core')
+        with self.assertRaisesRegex(ci.EvidenceError, 'one complete run or both lanes'):
+            self.verify()
+
+    def test_duplicate_lane_receipt_refuses(self):
+        self.use_lanes()
+        shutil.copytree(self.evidence / 'migration-core', self.evidence / 'again')
+        with self.assertRaisesRegex(ci.EvidenceError, 'duplicate'):
+            self.verify()
+
+    def test_lane_with_the_other_lanes_phases_refuses(self):
+        parts = ci.migration_lanes(self.config)
+        with self.assertRaises(ci.EvidenceError):
+            self.use_lanes(rows={'core': parts['lifecycle'], 'lifecycle': parts['core']})
+
+    def test_lane_receipt_without_its_phase_evidence_refuses(self):
+        self.use_lanes()
+        (self.evidence / 'migration-lifecycle/migration-phases.tsv').write_text('phase\tseconds\texit_code\n')
+        with self.assertRaises(ci.EvidenceError):
+            self.verify()
+
+    def test_lane_is_only_accepted_for_the_migration_shard(self):
+        with self.assertRaisesRegex(ci.EvidenceError, 'only the migration shard'):
+            ci.start(self.root, 'go-runtime', self.revision, Path(self.work.name) / 'laned', 'core')
+
+    def test_receipt_lane_cannot_change_between_start_and_record(self):
+        output = Path(self.work.name) / 'switched'
+        ci.start(self.root, 'migration', self.revision, output, 'core')
+        with self.assertRaisesRegex(ci.EvidenceError, 'lane differs'):
+            ci.record(self.root, 'migration', self.revision, output, None, 'lifecycle')
+
     def test_upstream_failure_cancel_or_skip_refuses(self):
         for result in ('failure', 'cancelled', 'skipped', ''):
             with self.subTest(result=result), self.assertRaises(ci.EvidenceError):
@@ -238,10 +313,13 @@ class ShardEvidence(unittest.TestCase):
 
     def test_incomplete_workflow_matrix_refuses(self):
         path = self.root / '.github/workflows/ci.yml'
-        path.write_text(path.read_text().replace('[compiler-integration, go-runtime, migration]',
-                                                 '[compiler-integration, go-runtime]'))
-        with self.assertRaisesRegex(ci.EvidenceError, 'workflow matrix'):
-            ci.inventory(self.root)
+        for matrix in ('[compiler-integration, go-runtime]', '[compiler-integration, go-runtime, migration-core]',
+                       '[compiler-integration, go-runtime, migration]'):
+            with self.subTest(matrix=matrix):
+                path.write_text((ROOT / '.github/workflows/ci.yml').read_text().replace(
+                    '[compiler-integration, go-runtime, migration-core, migration-lifecycle]', matrix))
+                with self.assertRaisesRegex(ci.EvidenceError, 'workflow matrix'):
+                    ci.inventory(self.root)
 
     def test_gate_without_always_refuses(self):
         path = self.root / '.github/workflows/ci.yml'

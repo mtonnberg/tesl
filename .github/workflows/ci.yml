@@ -1,5 +1,5 @@
-# The same complete ci.sh gate runs locally in serial and on three isolated
-# hosted runners. The required gate accepts only the complete, successful union
+# The same complete ci.sh gate runs locally in serial and on four isolated
+# hosted runners (the migration shard runs as two parallel lanes). The required gate accepts only the complete, successful union
 # for the checked revision; no shard alone means the repository is green.
 name: CI
 
@@ -15,19 +15,20 @@ concurrency:
 
 jobs:
   shards:
-    name: CI (${{ matrix.shard }})
+    name: CI (${{ matrix.job }})
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [compiler-integration, go-runtime, migration]
+        job: [compiler-integration, go-runtime, migration-core, migration-lifecycle]
     env:
       CI: 'true'
       TESL_CI_JOBS: '2'
       GOMAXPROCS: '2'
       GOFLAGS: '-p=2'
-      CI_SHARD: ${{ matrix.shard }}
+      CI_SHARD: ${{ startsWith(matrix.job, 'migration-') && 'migration' || matrix.job }}
+      TESL_MIGRATION_TEST_LANE: ${{ matrix.job == 'migration-core' && 'core' || matrix.job == 'migration-lifecycle' && 'lifecycle' || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch the exact migration latency baseline
-        if: matrix.shard == 'migration'
+        if: matrix.job == 'migration-lifecycle'
         run: python3 scripts/compare-migration-latency.py --prepare-baseline --fetch-baseline
 
       - name: Install Nix (flakes enabled)
@@ -64,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-shard-${{ matrix.shard }}-${{ github.sha }}
+          name: ci-shard-${{ matrix.job }}-${{ github.sha }}
           path: ${{ runner.temp }}/ci-evidence
           if-no-files-found: error
 
@@ -72,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-${{ matrix.shard }}-${{ github.sha }}
+          name: ci-diagnostics-${{ matrix.job }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/ci-shard.log
             ${{ runner.temp }}/migration-evidence

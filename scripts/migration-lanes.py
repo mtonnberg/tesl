@@ -14,9 +14,7 @@ LANES = ('core', 'lifecycle')
 
 
 def partitions(root=ROOT):
-    phases = CI['inventory'](root)['migration_phases']
-    boundary = phases.index('test_migration_row_indexes')
-    return {'full': phases, 'core': phases[:boundary], 'lifecycle': phases[boundary:]}
+    return CI['migration_lanes'](CI['inventory'](root))
 
 
 def read_rows(path):

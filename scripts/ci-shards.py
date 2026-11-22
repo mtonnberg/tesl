@@ -16,6 +16,13 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SHARDS = ('compiler-integration', 'go-runtime', 'migration')
 GO_PHASE = 'Go runtime + emitted-code gates'
+# The migration shard may run as one job ('full') or as two parallel jobs whose
+# contiguous phase lists join, in order, into the complete inventory.
+MIGRATION_LANES = ('full', 'core', 'lifecycle')
+MIGRATION_LANE_BOUNDARY = 'test_migration_row_indexes'
+# Hosted jobs: (matrix job name, shard, migration lane).
+JOBS = (('compiler-integration', 'compiler-integration', None), ('go-runtime', 'go-runtime', None),
+        ('migration-core', 'migration', 'core'), ('migration-lifecycle', 'migration', 'lifecycle'))
 
 
 class EvidenceError(ValueError):
@@ -41,6 +48,22 @@ def identity(root, expected):
     require(revision == expected, 'checked revision differs from expected revision')
     require(not git(root, 'status', '--porcelain', '--untracked-files=no'), 'tracked source is dirty')
     return {'revision': revision, 'tree': git(root, 'rev-parse', 'HEAD^{tree}'), 'tracked_clean': True}
+
+
+def migration_lanes(config):
+    phases = config['migration_phases']
+    require(MIGRATION_LANE_BOUNDARY in phases, 'migration lane boundary is not a declared phase')
+    boundary = phases.index(MIGRATION_LANE_BOUNDARY)
+    return {'full': phases, 'core': phases[:boundary], 'lifecycle': phases[boundary:]}
+
+
+def lane_of(shard, lane):
+    if shard != 'migration':
+        require(lane is None, 'only the migration shard runs in lanes')
+        return None
+    lane = lane or 'full'
+    require(lane in MIGRATION_LANES, 'unknown migration lane')
+    return lane
 
 
 def migration_declarations(source):
@@ -80,8 +103,8 @@ def inventory(root):
             'Go gate requires both runtime and complete migration parts')
     require(all(set(item['owners']) <= set(SHARDS) for item in phases), 'unknown phase owner')
     workflow = (root / '.github/workflows/ci.yml').read_text()
-    matrix = re.findall(r'^        shard: \[([^\]]+)\]\s*$', workflow, re.M)
-    require(len(matrix) == 1 and [name.strip(" \"'") for name in matrix[0].split(',')] == list(SHARDS),
+    matrix = re.findall(r'^        job: \[([^\]]+)\]\s*$', workflow, re.M)
+    require(len(matrix) == 1 and [name.strip(" \"'") for name in matrix[0].split(',')] == [job for job, _, _ in JOBS],
             'workflow matrix differs from the complete shard set')
     require(re.search(r'^      fail-fast: false\s*$', workflow, re.M), 'all shards must retain independent results')
     gate = re.search(r'^  gate:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)', workflow, re.M | re.S)
@@ -115,12 +138,12 @@ def read_phases(path):
     return rows
 
 
-def read_migration(path, config):
+def read_migration(path, config, lane='full'):
     with path.open(newline='') as stream:
         reader = csv.DictReader(stream, delimiter='\t')
         require(reader.fieldnames == ['phase', 'seconds', 'exit_code'], 'invalid migration phase evidence header')
         rows = list(reader)
-    require([row.get('phase') for row in rows] == config['migration_phases'],
+    require([row.get('phase') for row in rows] == migration_lanes(config)[lane],
             'migration evidence is missing, duplicated, reordered, or unknown')
     for row in rows:
         require(set(row) == {'phase', 'seconds', 'exit_code'}, 'malformed migration phase row')
@@ -143,23 +166,27 @@ def read_parts(path, shard):
     return rows
 
 
-def start(root, shard, expected, output):
+def start(root, shard, expected, output, lane=None):
     config = inventory(root)
     owned(config, shard)
+    lane = lane_of(shard, lane)
     current = identity(root, expected)
     output.mkdir(parents=True, exist_ok=False)
     state = {'version': 1, 'shard': shard, 'source': current,
              'inventory_sha256': digest(root / 'scripts/ci-shards.json')}
+    if lane is not None:
+        state['lane'] = lane
     (output / 'source.json').write_text(json.dumps(state, indent=2) + '\n')
     (output / 'phases.tsv').write_text('phase\tstatus\tseconds\n')
 
 
-def record(root, shard, expected, output, migration_path=None):
+def record(root, shard, expected, output, migration_path=None, lane=None):
     config = inventory(root)
     state = json.loads((output / 'source.json').read_text())
     errors = []
     try:
         require(type(state['version']) is int and state['version'] == 1 and state['shard'] == shard, 'shard start identity differs')
+        require(state.get('lane') == lane_of(shard, lane), 'migration lane differs from its start identity')
         require(state['source'] == identity(root, expected), 'source changed during shard execution')
         require(state['inventory_sha256'] == digest(root / 'scripts/ci-shards.json'), 'phase inventory changed during execution')
         phases = read_phases(output / 'phases.tsv')
@@ -170,7 +197,7 @@ def record(root, shard, expected, output, migration_path=None):
             read_parts(output / 'go-parts.tsv', shard)
         if shard == 'migration':
             require(migration_path is not None, 'complete migration evidence is required')
-            read_migration(migration_path, config)
+            read_migration(migration_path, config, state['lane'])
             shutil.copyfile(migration_path, output / 'migration-phases.tsv')
     except (EvidenceError, OSError, KeyError, ValueError) as error:
         errors.append(str(error))
@@ -189,14 +216,19 @@ def verify(root, expected, evidence, upstream_result):
     current = identity(root, expected)
     require(upstream_result == 'success', 'one or more required upstream shards did not succeed')
     paths = sorted(evidence.rglob('receipt.json'))
-    require(len(paths) == len(SHARDS), 'expected exactly one receipt for every shard')
     seen = set()
     covered = []
+    migration_rows = {}
+    migration_parents = []
     for path in paths:
         receipt = json.loads(path.read_text())
         shard = receipt.get('shard')
-        require(shard in SHARDS and shard not in seen, 'unknown or duplicate shard receipt')
-        seen.add(shard)
+        require(shard in SHARDS, 'unknown shard receipt')
+        require(shard != 'migration' or 'lane' in receipt, 'migration receipt does not name its lane')
+        lane = lane_of(shard, receipt.get('lane'))
+        key = (shard, lane)
+        require(key not in seen, 'duplicate shard receipt')
+        seen.add(key)
         require(type(receipt.get('version')) is int and receipt.get('version') == 1 and receipt.get('complete') is True and receipt.get('errors') == [],
                 'shard receipt is incomplete or failed')
         require(receipt.get('source') == current and receipt['source'].get('tracked_clean') is True, 'shard source revision, tree or cleanliness differs')
@@ -206,7 +238,10 @@ def verify(root, expected, evidence, upstream_result):
         phases = read_phases(phases_path)
         require([row['phase'] for row in phases] == owned(config, shard), 'shard phase coverage differs')
         require(all(row['status'] == 'OK' for row in phases), 'a shard phase failed or skipped')
-        covered.extend((row['phase'], shard) for row in phases)
+        if shard == 'migration':
+            migration_parents.append([row['phase'] for row in phases])
+        else:
+            covered.extend((row['phase'], shard) for row in phases)
         if shard in ('go-runtime', 'migration'):
             parts_path = path.parent / 'go-parts.tsv'
             require(receipt.get('go_parts_sha256') == digest(parts_path), 'Go gate part evidence hash differs')
@@ -214,13 +249,21 @@ def verify(root, expected, evidence, upstream_result):
         if shard == 'migration':
             migration_path = path.parent / 'migration-phases.tsv'
             require(receipt.get('migration_phases_sha256') == digest(migration_path), 'migration evidence hash differs')
-            read_migration(migration_path, config)
-    require(seen == set(SHARDS), 'required shard is missing')
+            migration_rows[lane] = read_migration(migration_path, config, lane)
+    require({shard for shard, _ in seen} == set(SHARDS), 'required shard is missing')
+    require(sorted(migration_rows) in (['full'], ['core', 'lifecycle']),
+            'migration evidence must be one complete run or both lanes')
+    lanes = ['full'] if 'full' in migration_rows else ['core', 'lifecycle']
+    joined = [row['phase'] for lane in lanes for row in migration_rows[lane]]
+    require(joined == config['migration_phases'], 'migration lanes do not join into the complete inventory')
+    require(len(migration_parents) == len(lanes) and all(p == migration_parents[0] for p in migration_parents),
+            'migration lanes differ in their parent phases')
+    covered.extend((name, 'migration') for name in migration_parents[0])
     require(sorted(covered) == sorted((item['name'], shard) for item in config['phases'] for shard in item['owners']),
             'authoritative phase/part union differs')
     return {'version': 1, 'source': current, 'parent_phases': len(config['phases']),
             'go_gate_parts': 2, 'migration_phases': len(config['migration_phases']),
-            'shards': sorted(seen), 'status': 'success'}
+            'migration_lanes': lanes, 'shards': sorted(SHARDS), 'status': 'success'}
 
 
 def main():
@@ -233,6 +276,7 @@ def main():
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--migration-phases', type=Path)
     parser.add_argument('--upstream-result')
+    parser.add_argument('--lane', choices=MIGRATION_LANES)
     args = parser.parse_args()
     try:
         config = inventory(args.root)
@@ -246,13 +290,13 @@ def main():
             read_parts(args.evidence, args.shard)
         elif args.action == 'check-migration':
             require(args.evidence, 'complete migration evidence is required')
-            read_migration(args.evidence, config)
+            read_migration(args.evidence, config, args.lane or 'full')
         elif args.action in ('start', 'record'):
             require(args.shard and args.expected_revision and args.output, 'shard, expected revision and output are required')
             if args.action == 'start':
-                start(args.root, args.shard, args.expected_revision, args.output)
+                start(args.root, args.shard, args.expected_revision, args.output, args.lane)
             else:
-                record(args.root, args.shard, args.expected_revision, args.output, args.migration_phases)
+                record(args.root, args.shard, args.expected_revision, args.output, args.migration_phases, args.lane)
         else:
             require(args.expected_revision and args.evidence and args.upstream_result,
                     'expected revision, evidence and upstream result are required')
