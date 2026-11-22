@@ -39,11 +39,18 @@ let rec validate_parent path =
     validate_parent parent
 
 let validate_file path =
-  validate_parent (Filename.dirname path);
+  let checked () =
+    validate_parent (Filename.dirname path);
+    match Unix.lstat path with
+    | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
+    | _ -> invalid path "input must be a canonical regular file"
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> () in
+  (* An existing regular file whose real path is its own spelling has a
+     canonical directory parent; anything else takes the full check, which
+     also reports which part failed. *)
   match Unix.lstat path with
   | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
-  | _ -> invalid path "input must be a canonical regular file"
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+  | _ | exception Unix.Unix_error _ -> checked ()
 
 let directories root files =
   Paths.fold (fun path _ result ->
