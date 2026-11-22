@@ -282,15 +282,18 @@ let checked_plan_uncached ~compiler_abi ~project_root ~family =
    source view: directory membership, exact source digests, import resolution
    and every captured transform link (the same guard [diagnostics_batch] uses).
    The key holds the caller's ABI label, the actual compiler/runtime/stdlib ABI,
-   the canonical root, family and overlay root. Failures are never cached. *)
-let plan_memo : (string * string * string * string * string option,
+   the canonical root and family. The overlay root is not part of the key: the
+   guard rereads every input under the caller's own source view, so an
+   application check and its captured emission share one plan. Failures are
+   never cached. *)
+let plan_memo : (string * string * string * string,
   Migration_history_sources.t * R.t) Migration_analysis_cache.t = Migration_analysis_cache.create ~limit:8
 let plan_cache_stats () = Migration_analysis_cache.stats plan_memo
 let checked_plan ~compiler_abi ~project_root ~family =
  let compute () = Migration_proof_context.without_context (fun () ->
    checked_plan_uncached ~compiler_abi ~project_root ~family) in
  let key = try (match Migration_abi.current () with
-   | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family,Source_input.project_root ())
+   | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family)
    | Error _ -> None) with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None in
  match key with
  | None -> compute ()

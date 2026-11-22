@@ -2573,7 +2573,9 @@ let checked_row_source_diagnostics filename entry history =
      Migration_transform.proof_context (Migration_transform_link.checked_transform (Migration_row_history.link binding))))
       (Migration_program.row_histories history) |> List.fold_left (fun acc context -> if List.memq context acc then acc else context::acc) [] in
     let diagnostics=integrity_diags @ Migration_proof_context.with_contexts contexts (fun () ->
-     List.concat_map (fun (m,bytes) -> Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
+     let compiler=lazy (Migration_trust.current_compiler ()) in
+     List.concat_map (fun (m,bytes) ->
+      if Migration_trust.module_edge ~compiler:(Lazy.force compiler) m bytes <> None then [] else Frontend_check.check_module ~additional:(Migration_application.make m) bytes m) captured) in
     let binding_errors=match Migration_program.verify_bindings (Some (Migration_program.source_program history)) originals with
      | Ok () -> [] | Error errors -> Migration_declaration.diagnostics_of_errors errors in
     diagnostics @ binding_errors

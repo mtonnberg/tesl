@@ -1103,6 +1103,19 @@ let print_batch_results (results : (string * Compile.diagnostic list) list) =
 
 let () =
   let args = Array.to_list Sys.argv |> List.tl in
+  (* `--full-history` (anywhere on the command line) re-checks every frozen
+     migration step instead of trusting its verified seals; same as
+     TESL_FULL_HISTORY=1. *)
+  let args = if List.mem "--full-history" args then begin
+      Migration_trust.request_full_history ();
+      List.filter (fun arg -> arg <> "--full-history") args
+    end else args in
+  (* One-shot commands share one compilation-scoped analysis cache, so a
+     migration history is discovered and inventoried once per command rather
+     than once per declaration. Long-running sessions open their own scopes. *)
+  let scoped f = match args with
+    | ("--workspace-session" | "--mutate" | "test") :: _ -> f ()
+    | _ -> Migration_program.with_compilation_cache f in
 
   (* Outermost safety net (review LSP-crash class): convert ANY uncaught
      exception into a clean `error:`/exit-1 instead of the OCaml runtime's
@@ -1111,7 +1124,7 @@ let () =
      partial-function guard) must never crash the process.  `exit` does not raise
      a catchable exception, so the explicit `exit` calls in each branch are
      unaffected. *)
-  try (match args with
+  try scoped (fun () -> match args with
   (* Handle help commands first *)
   | "--help" :: rest -> handle_help rest
   | "help" :: rest -> handle_help rest

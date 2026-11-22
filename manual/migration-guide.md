@@ -506,6 +506,44 @@ or reseal an already-deployed revision. If source publication was interrupted, u
 the guarded recovery command named by the tool rather than manually completing a
 partial multi-file write.
 
+### How later builds check frozen revisions
+
+A frozen revision gets the complete compiler check once, when `tesl migrate`
+freezes it. Its migration file then records SHA-256 hashes of everything that
+check read: the two schema snapshots (`# tesl:snapshot-source` lines), the
+migration file itself, its private helpers and its Contract
+(`# tesl:frozen-source` lines). Each `# tesl:snapshot-seal` line also records the
+compiler ABI (an identity of the compiler build, its embedded Go runtime and the
+stdlib) that ran the check.
+
+Later commands (`agent-context`, `--check-json`, Go emission, `tesl migrate`)
+re-hash those files instead of re-checking the revision. A frozen revision is
+**trusted** only when:
+
+| Condition | If it fails |
+|---|---|
+| every recorded file still has its recorded hash | full check; it reports `MIG013` for the changed file |
+| both snapshot seals name the running compiler's ABI | full check under the running compiler (accepted when the stored-value contract matches) |
+| both seals name the running stored-value contract | `MIG013`, as before: build with the compiler that sealed it |
+
+The current revision (the migration to `VCurrent`) is always checked completely,
+and so is any file you query directly. The history-wide checks (row generations,
+retained storage, Contracts, the expansion plan) and the older schema inventories
+the current revision needs are recomputed from the hash-verified files in every
+command. Trust removes only the repeated per-revision type and proof checks.
+
+Upgrading the compiler changes its ABI. Revisions frozen by the older compiler are
+then checked completely by every build, as they were before seals were trusted;
+only revisions frozen by the new compiler are trusted. There is no command yet
+that re-seals old revisions under a new compiler.
+
+The trade-off: someone who edits a frozen file *and* recomputes its recorded hashes
+is not caught by a normal build. To check every revision completely, set
+`TESL_FULL_HISTORY=1` or pass `--full-history` (for example
+`tesl --full-history --backend go app.tesl --out build`). Run that in CI on a
+schedule or before a release; when the history is intact its output is
+byte-for-byte the same as a normal build.
+
 ## Choose the deployment route
 
 Rolling support depends on the change and the retained history. It is not a

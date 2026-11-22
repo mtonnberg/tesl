@@ -76,6 +76,7 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
               d.name family current.version) [Location.dummy_loc current.root_file,"current schema"]
           else [] in
         let edges = H.completed_migrations history @ Option.to_list (H.current_migration history) in
+        let compiler = lazy (Migration_trust.current_compiler ()) in
         let queue_history_diags = if Migration_inventory.queue_contracts current.inventory=[] then [] else
           List.concat_map (fun (edge:H.migration_source) ->
             match Header.read ~file:edge.path edge.contents with
@@ -92,8 +93,20 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
             | Ok migration -> (match D.check ~compiler_abi:comparison_abi ~source:edge.contents migration with
               | Ok (Some declaration) -> Option.fold ~none:[] ~some:(query_costs modules) (D.transforms declaration)
               | _ -> [])) in
+        (* A frozen Contract belongs to its completed migration's sealed closure;
+           it is trusted with that migration. *)
+        let trusted = Hashtbl.create 16 in
+        let trusted_edge (edge:H.migration_source) = match Hashtbl.find_opt trusted edge.path with
+          | Some decision -> decision
+          | None ->
+            let decision = Migration_trust.edge ~project_root:(Source_input.realpath project_root)
+              ~compiler:(Lazy.force compiler) ~file:edge.path ~source:edge.contents <> None in
+            Hashtbl.add trusted edge.path decision; decision in
+        let untrusted_contracts=List.filter (fun (contract:H.migration_source) ->
+          not (List.exists (fun (edge:H.migration_source) -> edge.version=contract.version && trusted_edge edge)
+            (H.completed_migrations history))) (H.contracts history) in
         let contract_diags=Migration_contract.diagnostics_batch
-          (List.map(fun (contract:H.migration_source) -> contract.path,contract.contents) (H.contracts history)) in
+          (List.map(fun (contract:H.migration_source) -> contract.path,contract.contents) untrusted_contracts) in
         costs @ queue_diags @ queue_history_diags @ contract_diags @ missing @ List.concat_map (fun (edge : H.migration_source) ->
           let seals = match Header.read ~file:edge.path edge.contents with
             | Error errors -> D.diagnostics_of_errors errors
@@ -101,7 +114,9 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
                 "an application migration requires both recorded schema source seals; generate the undeployed revision before building"
                 [d.loc,"database declaring this migration history"]
             | Ok (Some _) -> [] in
-          if skip edge.path then seals else begin
+          (* A completed edge whose trust seal verifies was checked when it was
+             frozen (Migration_trust); its integrity was just re-hashed. *)
+          if skip edge.path || (seals = [] && trusted_edge edge) then seals else begin
             Hashtbl.add checked edge.path ();
             match Parser.parse_module edge.path edge.contents with
             | Err error -> seals @ [F.diag_of_parse_error error]

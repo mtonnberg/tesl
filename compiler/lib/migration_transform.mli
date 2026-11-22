@@ -23,6 +23,9 @@ val prepare : project_root:string -> source:string -> Ast.module_form -> Migrati
   functions:requested list -> fixtures:Ast.expr list -> (prepared,Migration_sparse.error list) result
 val with_prepared : prepared -> (unit -> 'a) -> ('a,Migration_sparse.error list) result
 val check_prepared : prepared -> (t,Migration_sparse.error list) result
+(** A prepared transformation of a completed step whose trust seal verified
+    (see Migration_trust); skips only the repeated frontend check. *)
+val trusted : Migration_trust.evidence -> prepared -> t
 val captured_sources : t -> (Ast.module_form * string) list
 val root : t -> Ast.module_form
 val proof_context : t -> Migration_proof_context.t

@@ -255,6 +255,19 @@ its compiler-bound semantic digest. Source verification checks the owned closure
 and canonical import resolution without running an old compiler. Semantic
 verification additionally requires the recorded ABI and reruns the full inventory
 judgment. These records are committed metadata, not authenticated database history.
+`Migration_trust` turns them into a build-time trust rule. A completed step whose
+two seals and `Migration_closure` digests still match the saved bytes, and whose
+seals name the running compiler ABI, skips its repeated per-step judgments:
+`Migration_declaration` skips seal re-derivation and the row-function frontend
+check (`Migration_transform.trusted`), `Migration_application` skips the edge and
+its Contract's diagnostics, and Go emission skips re-checking the captured
+migration module. Preparation, inventories, row history, retained storage,
+Contracts of untrusted steps and expansion origins still run. Any failed hash or a
+different ABI falls back to the full check; the comparison ABI used by ordinary
+diagnostics never matches a seal, so a directly queried file is always checked.
+`TESL_FULL_HISTORY=1` or `--full-history` disables trust. The bin wraps one-shot
+commands in `Migration_program.with_compilation_cache`, so a command discovers and
+inventories a history once instead of once per declaration.
 `Migration_header` stores predecessor and target seals, preserves surrounding
 source on replacement, and verifies that they match the declaration's adjacent
 roots. The contextual checker reports MIG001 for changed recorded VCurrent input

@@ -289,8 +289,8 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
       (match result with
        | Ok history when stdlib_inputs () = Some stdlib ->
          let size = String.length (Marshal.to_string (key,history) []) in
-         if size <= 32 * 1024 * 1024 then begin
-           if Hashtbl.length cache.entries >= 16 || cache.weight + size > 32 * 1024 * 1024 then begin
+         if size <= 256 * 1024 * 1024 then begin
+           if Hashtbl.length cache.entries >= 16 || cache.weight + size > 256 * 1024 * 1024 then begin
              Hashtbl.clear cache.entries; cache.weight <- 0
            end;
            Hashtbl.replace cache.entries key history; cache.weight <- cache.weight + size
