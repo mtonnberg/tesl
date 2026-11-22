@@ -282,13 +282,13 @@ let checked_plan_uncached ~compiler_abi ~project_root ~family =
    source view: directory membership, exact source digests, import resolution
    and every captured transform link (the same guard [diagnostics_batch] uses).
    The key holds the caller's ABI label, the actual compiler/runtime/stdlib ABI,
-   the canonical root, family and overlay root; Migration_analysis_cache also
-   requires the identical proof scope. Failures are never cached. *)
+   the canonical root, family and overlay root. Failures are never cached. *)
 let plan_memo : (string * string * string * string * string option,
   Migration_history_sources.t * R.t) Migration_analysis_cache.t = Migration_analysis_cache.create ~limit:8
 let plan_cache_stats () = Migration_analysis_cache.stats plan_memo
 let checked_plan ~compiler_abi ~project_root ~family =
- let compute () = checked_plan_uncached ~compiler_abi ~project_root ~family in
+ let compute () = Migration_proof_context.without_context (fun () ->
+   checked_plan_uncached ~compiler_abi ~project_root ~family) in
  let key = try (match Migration_abi.current () with
    | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family,Source_input.project_root ())
    | Error _ -> None) with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None in
@@ -298,7 +298,12 @@ let checked_plan ~compiler_abi ~project_root ~family =
    let guard (history,plan) =
      try Migration_history_sources.verify_unchanged history = Ok () && H.revalidate (R.history plan) = Ok ()
      with Sys_error _ | Invalid_argument _ | Unix.Unix_error _ -> false in
-   Migration_analysis_cache.find plan_memo ~key ~guard compute
+   (* The plan is a judgment about history sources only. Derive and reuse it
+      outside any caller's proof transport scope, so an application check and a
+      Contract check inside the captured source graph share one context-free
+      plan instead of each caller's grants shaping it. *)
+   Migration_proof_context.without_context (fun () ->
+     Migration_analysis_cache.find plan_memo ~key ~guard compute)
 
 let check_module_with_plan load_plan ~compiler_abi ~source (m:module_form) = protect(fun () ->
  let present=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls in
