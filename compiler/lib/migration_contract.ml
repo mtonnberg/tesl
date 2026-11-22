@@ -264,7 +264,7 @@ let rec absolute_source_path file =
  let parent=absolute_source_path parent in
  match Filename.basename file with "." -> parent | name -> Filename.concat parent name
 
-let checked_plan ~compiler_abi ~project_root ~family =
+let checked_plan_uncached ~compiler_abi ~project_root ~family =
  let h=match Migration_history_sources.discover ~compiler_abi ~project_root ~family with
   | Ok h -> h | Error e -> reject e.loc e.message in
  let schemas=Migration_history_sources.frozen h @ [Migration_history_sources.current h] |> List.map(fun(s:Migration_history_sources.schema)->s.inventory) in
@@ -274,6 +274,31 @@ let checked_plan ~compiler_abi ~project_root ~family =
  let check_history=if List.exists Migration_declaration.queue_transition edges then H.check_queue_expansion else H.check in
  let history=checked(check_history ~schemas ~edges) in
  h,checked(R.plan history)
+
+(* Every Contract check and the application's history check rebuild this plan:
+   discovery, every migration declaration and the whole row history. Within one
+   compilation scope that is quadratic in history length. A hit requires an
+   equal key and then rechecks the result's own guards under the caller's
+   source view: directory membership, exact source digests, import resolution
+   and every captured transform link (the same guard [diagnostics_batch] uses).
+   The key holds the caller's ABI label, the actual compiler/runtime/stdlib ABI,
+   the canonical root, family and overlay root; Migration_analysis_cache also
+   requires the identical proof scope. Failures are never cached. *)
+let plan_memo : (string * string * string * string * string option,
+  Migration_history_sources.t * R.t) Migration_analysis_cache.t = Migration_analysis_cache.create ~limit:8
+let plan_cache_stats () = Migration_analysis_cache.stats plan_memo
+let checked_plan ~compiler_abi ~project_root ~family =
+ let compute () = checked_plan_uncached ~compiler_abi ~project_root ~family in
+ let key = try (match Migration_abi.current () with
+   | Ok abi -> Some (compiler_abi,Migration_abi.id abi,Source_input.realpath project_root,family,Source_input.project_root ())
+   | Error _ -> None) with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None in
+ match key with
+ | None -> compute ()
+ | Some key ->
+   let guard (history,plan) =
+     try Migration_history_sources.verify_unchanged history = Ok () && H.revalidate (R.history plan) = Ok ()
+     with Sys_error _ | Invalid_argument _ | Unix.Unix_error _ -> false in
+   Migration_analysis_cache.find plan_memo ~key ~guard compute
 
 let check_module_with_plan load_plan ~compiler_abi ~source (m:module_form) = protect(fun () ->
  let present=List.exists(function DConst c -> Migration_form.is_contract m c | _ -> false) m.decls in

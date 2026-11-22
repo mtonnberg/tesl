@@ -17,6 +17,11 @@ val require_graph : t -> (Ast.module_form * string) list -> unit
 val with_contexts : t list -> (unit -> 'a) -> 'a
 val with_context : t -> (unit -> 'a) -> 'a
 val without_context : (unit -> 'a) -> 'a
+(** The exact active proof scope, compared by identity. Memoized judgments that
+    may consult the scope reuse a result only under the very same scope. *)
+type scope_token
+val current_scope : unit -> scope_token
+val same_scope : scope_token -> bool
 val with_module : Ast.module_form -> (unit -> 'a) -> 'a
 val transport : constructor:string -> field:string -> Ast.expr ->
   Proof_kernel.proven_fact list -> Proof_kernel.proven_fact list
