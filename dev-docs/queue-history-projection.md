@@ -63,11 +63,12 @@ admission and job claiming each retain their own independent checks.
 
 ## Registration and codec ownership
 
-Generated runtime initialization validates the complete companion against every
-linked database and every origin before publishing any family. Conflicting
-registrations and malformed, omitted, duplicated or reordered fields fail
-without partially publishing the database set. Accessors reparse immutable
-linked bytes and return independent copies.
+Generated runtime initialization checks the companion's integrity and identity
+against every linked database, validates its serving window (see below), and
+then publishes every family in one step. Conflicting registrations and
+malformed, omitted, duplicated or reordered fields fail without partially
+publishing the database set. Each document is decoded once per process; the
+validated form is shared and immutable, and accessors return independent copies.
 
 `RegisterQueueSchema` binds the actual queue pointer to its registered database
 pointer, linked family, current version and frozen contract. A contract has one
@@ -86,6 +87,69 @@ legacy queue/job wire names or enable cross-version decoding or claims.
 Worker facilities and runtime storage entry points keep their existing refusal.
 Other durable facilities, protected queue storage, format-4 installation,
 version-aware claiming and retirement remain separate work.
+
+## What startup validates
+
+The linked history grows by one release per release (about 90 KB in the
+twenty-release example). A process that only serves requests must not pay for
+every past release on each start, so validation is split by need. The rule is
+implemented and documented in
+`runtime/go/teslrt/migration_history_registration.go`.
+
+**At registration** (Go package initialization, before a database opens), for
+every companion (source history, queue, row transforms, retained physical rows,
+Contracts):
+
+| Check | Covers |
+| --- | --- |
+| Integrity | UTF-8 and the complete JSON string/bracket structure of all bytes; a SHA-256 digest names the document |
+| Identity | Format, kind, compiler ABI, stored-value compatibility; each database's name, family, namespace, current version and version count |
+| Serving window | Full validation of every part a request process reads |
+
+For a database at version N the serving window is:
+
+- **V1**, the fresh-install anchor. Startup compares the persisted baseline
+  (tables, queue inventory, catalog hash) byte for byte with it.
+- **V(N-1) and VN**: source schema and storage, physical row plan (VN bound to
+  V(N-1); V1 bound as the origin), current-row codecs, the transforms targeting
+  VN and their exact generation transitions, VN's queue contracts, the VN queue
+  transition, and Contracts for V(N-1) and VN.
+
+A history with at most three versions is entirely inside the window and is
+validated completely at registration, exactly as before.
+
+**At startup of a Worker-topology request process**, versions the database
+has recorded are compared with the linked bytes of the same version: the
+physical plan's contract and hash text and the queue inventory hash. Planned
+stage cancellations, which mark recorded index jobs, are read from the linked
+physical documents whose format can carry them (recognized from their leading
+bytes). Their contents are not validated again; the schema command that
+published them did.
+
+**Everything else** is validated at most once per process, when first needed:
+older schema snapshots, physical plans, transform descriptors and callback
+types, queue inventories, Contracts, installation origins and every
+cross-release rule. Every mutating schema command (`install`, `deploy`,
+`worker`, `catch-up`, `contract`, `close-epoch`), `InstallPgCompiledRowBaseline`,
+`ExecutePgCompiledRowBaseline` and every Embedded-topology process (which runs
+schema steps itself) validates the complete history before it changes the
+database. A fresh install from V1 therefore pays the full check once, in the
+command that replays it.
+
+An accessor asked for a part outside the window validates the complete history
+first; it never returns an unchecked historical part. An older transform's
+callback is bound at initialization but its descriptor and Go types are checked
+before it runs or its storage is used. So an error in a part a serving process
+needs fails at registration, before anything is published, and an error in any
+other part fails the schema command (or the reader) that uses it.
+
+Measured on `example/db-twenty-releases` (V12, ~1.1 MB linked history):
+Worker-topology startup of the non-race binary fell from 0.28 s to 0.03 s, and a
+race-instrumented test binary that runs no test from 4.8 s to 0.36 s, flat from
+V2 to V12. The remaining per-release cost is the memory-speed integrity and
+digest pass, about 1.5 ms per MB. `TestLazyHistoryServingStartIsBoundedByTheWindow`
+asserts that registration and window reads perform the same validation work
+for 10 and 200 versions; `BenchmarkLazyHistoryServingStart` reports the time.
 
 ## Regression evidence
 
