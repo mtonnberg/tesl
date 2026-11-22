@@ -2588,13 +2588,16 @@ let checked_row_source_diagnostics filename entry history =
 (* One guarded capture both decides the route and feeds row emission. [None]
    means the application has no versioned PostgreSQL history, so the caller
    takes the ordinary path; capturing twice would re-analyze every revision. *)
-let compile_public_row_source ?(debug=false) filename source entry =
+let compile_public_row_source ?(debug=false) ?(prechecked=false) filename source entry =
   let mode = if debug then Emit_go.Debug else Emit_go.Release in
   let result = Migration_program.with_source_history ~entry ~source (function
     | None -> None
     | Some captured when Migration_program.row_histories captured = [] -> None
      | Some captured -> Some (with_literal_source_graph filename (Migration_program.source_modules captured) (fun () ->
-      let diagnostics = checked_row_source_diagnostics filename entry captured in
+      (* A caller that already ran the frontend judgment over this exact source
+         graph (agent-context's backend pass) does not repeat it; the capture's
+         own guards still bind the emitted history to those bytes. *)
+      let diagnostics = if prechecked then [] else checked_row_source_diagnostics filename entry captured in
       if List.exists (fun (d:diagnostic) -> d.severity="error") diagnostics then
         GoFailure diagnostics
       else
@@ -2654,20 +2657,20 @@ let checked_migration_artifacts sources =
         collect rows (Option.fold ~none:queues ~some:(fun repair->repair::queues)repair) rest)) in
  collect [] [] sources
 
-let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions filename source =
+let compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="") ~queue_conversions filename source =
  Migration_program.with_compilation_cache (fun () ->
   let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
   | Ok m ->
-    let entry_diags = check_module source m @ go_import_boundary_diags filename m in
+    let entry_diags = (if prechecked then [] else check_module source m) @ go_import_boundary_diags filename m in
     if List.exists (fun (d:diagnostic) -> d.severity="error") entry_diags then
       GoFailure entry_diags
     (* Every versioned PostgreSQL binary participates in the row baseline
        protocol.  Additive histories still have no transform bindings, but
        emitting their physical companion lets a later transforming release
        advance the same database without an out-of-band format upgrade. *)
-    else match compile_public_row_source ~debug filename source m with
+    else match compile_public_row_source ~debug ~prechecked filename source m with
     | Some output -> output
     | None ->
     let result = Result.join (Migration_application.with_contexts ~source m (fun () ->
@@ -2731,8 +2734,8 @@ let compile_go_source_internal ?(debug=false) ?(path="") ~queue_conversions file
           with_literal_source_graph filename captured_sources emit_captured)))) in
     match result with Ok result -> result | Error es -> GoFailure (Migration_declaration.diagnostics_of_errors es))
 
-let compile_go_source ?debug ?path filename source =
-  compile_go_source_internal ?debug ?path ~queue_conversions:[] filename source
+let compile_go_source ?debug ?prechecked ?path filename source =
+  compile_go_source_internal ?debug ?prechecked ?path ~queue_conversions:[] filename source
 
 (* Pure queue-conversion artifact seam, with no CLI activation or database
    transition. Every original source and compiler resource is guarded through
@@ -2991,7 +2994,9 @@ let with_backend_diagnostics ~path source diagnostics =
      || List.exists (fun (d : diagnostic) -> d.severity = "error") diagnostics
      || not (is_entry ()) then diagnostics
   else
-    match (try Some (compile_go_source ~path path source) with _ -> None) with
+    (* The frontend judgment above found no error over this source graph;
+       the backend pass reports only the emitter's own refusals. *)
+    match (try Some (compile_go_source ~prechecked:true ~path path source) with _ -> None) with
     | Some (GoFailure backend) ->
       diagnostics @ List.filter (fun (d : diagnostic) ->
         d.severity = "error" && not (List.mem d diagnostics)) backend
