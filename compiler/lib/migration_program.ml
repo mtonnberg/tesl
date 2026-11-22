@@ -240,11 +240,12 @@ let capture_history ~source_only ~entry ~source f = with_compilation_cache (fun 
         reject ~code:"MIG030" loc "unique reliance requires the exact reviewed prior PromoteStage Contract source") (Migration_retained_storage.versions plan)
      end
     end;
-    let first = E.generate ~initial_version:1 ~schemas:inventories ~edges in
+    let generated = match E.generate_origins ~schemas:inventories ~edges with
+     | [] -> [E.generate ~initial_version:1 ~schemas:inventories ~edges]
+     | generated -> generated in
+    let first = List.hd generated in
     if not source_only then ignore (checked first);
-    let origins = {initial_version=1;steps=first} :: List.init (List.length schemas-1) (fun index ->
-     let initial_version=index+2 in
-     {initial_version;steps=E.generate ~initial_version ~schemas:inventories ~edges}) in
+    let origins = List.mapi (fun index steps -> {initial_version=index+1;steps}) generated in
     history (H.verify_unchanged h);
     {identity;family;namespace;current_version=(T.selection selected).current_version;origins;queue_versions}) targets in
    let inventories= !inventories in

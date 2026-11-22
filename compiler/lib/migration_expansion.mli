@@ -14,6 +14,11 @@ type step = {version:int;snapshot_hash:string;operations:operation list;epoch_pr
              catalog:catalog_table list}
 val generate : initial_version:int -> schemas:Migration_inventory.t list ->
   edges:Migration_declaration.t list -> (step list,Migration_sparse.error list) result
+(** [generate] for every origin V1..Vn, in order, sharing the origin-independent
+    chain validation and complete derivation. Element [i] equals
+    [generate ~initial_version:(i+1)]. *)
+val generate_origins : schemas:Migration_inventory.t list ->
+  edges:Migration_declaration.t list -> (step list,Migration_sparse.error list) result list
 val step_node : step -> Migration_canonical.node
 (** Identity of one physical step, independent of application connection naming,
     later revisions and report formatting. Domain: Migration; payload:

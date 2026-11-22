@@ -192,11 +192,10 @@ let derive ~initial_version baseline edges =
    its adjacent declarations, not merely one with an equal SQL carrier. *)
 let same_inventory a b = I.snapshot a=I.snapshot b && I.root_module a=I.root_module b &&
  I.compiler_abi a=I.compiler_abi b
-let generate ~initial_version ~schemas ~edges =
- try
+(* Validation of the whole chain and the complete V1 derivation do not depend on
+   the selected origin. They run once per call and are shared by every origin. *)
+let checked_chain ~schemas ~edges =
   let loc = Location.dummy_loc "" in
-  if initial_version<1 || initial_version>2147483646 || initial_version>List.length schemas then
-   reject ~code:"MIG020" loc "initial installation version must name a retained source revision";
   if schemas=[] || List.length edges+1<>List.length schemas then
    reject ~code:"MIG001" loc "physical planning requires a complete source history";
   let rec check_chain version schemas edges = match schemas,edges with
@@ -221,11 +220,29 @@ let generate ~initial_version ~schemas ~edges =
           (Printf.sprintf "V%d %s: transforming migrations are checked source only; the PostgreSQL transformation executor is not implemented"
             (D.version edge) entity)
       | S.Additive | S.New | S.Drop -> ()) (S.entries (D.coverage edge))) edges;
-  let complete_steps = derive ~initial_version:1 (List.hd schemas) edges in
-  Ok (if initial_version=1 then complete_steps else
+  derive ~initial_version:1 (List.hd schemas) edges
+let range_check ~initial_version ~schemas =
+  if initial_version<1 || initial_version>2147483646 || initial_version>List.length schemas then
+   reject ~code:"MIG020" (Location.dummy_loc "") "initial installation version must name a retained source revision"
+let from_origin ~initial_version ~schemas ~edges complete_steps =
+  if initial_version=1 then complete_steps else
     derive ~initial_version (List.nth schemas (initial_version-1))
-      (List.filter (fun edge -> D.version edge>initial_version) edges))
+      (List.filter (fun edge -> D.version edge>initial_version) edges)
+let generate ~initial_version ~schemas ~edges =
+ try
+  range_check ~initial_version ~schemas;
+  Ok (from_origin ~initial_version ~schemas ~edges (checked_chain ~schemas ~edges))
  with Invalid errors -> Error errors
+let generate_origins ~schemas ~edges =
+  let shared = lazy (try Ok (checked_chain ~schemas ~edges) with Invalid errors -> Error errors) in
+  List.mapi (fun index _ ->
+    let initial_version = index + 1 in
+    try
+      range_check ~initial_version ~schemas;
+      match Lazy.force shared with
+      | Error errors -> Error errors
+      | Ok complete_steps -> Ok (from_origin ~initial_version ~schemas ~edges complete_steps)
+    with Invalid errors -> Error errors) schemas
 
 (** The consumer supplies its JSON string encoder; physical transport has one owner. *)
 let step_to_json ?(include_catalog=true) ~quote s =
