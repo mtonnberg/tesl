@@ -12,10 +12,42 @@ type artifact = {
 
 (* Cache compatibility hashes the complete emitted closure, including codecs
    and runtime. Normalize our digest so project emission can reseal modules. *)
+(* Literal, leftmost, non-overlapping substring search and replacement (what
+   Str.global_replace does with Str.regexp_string), without per-byte allocation:
+   these run over the generated history constants, whose size grows with every
+   frozen revision. *)
+let find_substring ?(from=0) haystack needle =
+  let length = String.length haystack and size = String.length needle in
+  let rec matches index offset =
+    offset = size || (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && matches index (offset + 1)) in
+  let rec scan index =
+    if index + size > length then None
+    else if matches index 0 then Some index
+    else scan (index + 1) in
+  scan from
+let replace_substring ~needle ~by haystack =
+  if needle = "" then invalid_arg "replace_substring: empty needle" else
+  match find_substring haystack needle with
+  | None -> haystack
+  | Some first ->
+    let buffer = Buffer.create (String.length haystack) in
+    let rec copy start = function
+      | None -> Buffer.add_substring buffer haystack start (String.length haystack - start)
+      | Some index ->
+        Buffer.add_substring buffer haystack start (index - start);
+        Buffer.add_string buffer by;
+        let next = index + String.length needle in
+        copy next (find_substring ~from:next haystack needle) in
+    copy 0 (Some first);
+    Buffer.contents buffer
+
 let seal_cache_artifacts artifacts =
   let prefix = "const teslCacheArtifactIdentity = " in
   let rewrite identity (artifact : artifact) =
     if not (Filename.check_suffix artifact.path ".go") then artifact else
+    (* Only a line starting with [prefix] changes; without one the split and
+       join below is the identity. *)
+    if find_substring artifact.contents prefix = None then artifact else
     { artifact with contents = String.split_on_char '\n' artifact.contents
         |> List.map (fun line -> if String.starts_with ~prefix line then
              prefix ^ "\"" ^ identity ^ "\"" else line)
@@ -11076,6 +11108,11 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
 
 let contains_go_code haystack needle =
   let length = String.length haystack and needle_length = String.length needle in
+  (* Compare in place: this scan runs over every emitted Go file, including the
+     generated history constants, so it must not allocate per byte. *)
+  let rec at index offset =
+    offset = needle_length ||
+    (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && at index (offset + 1)) in
   let rec loop index in_string escaped in_comment =
     if index >= length then false
     else if in_comment then
@@ -11089,8 +11126,7 @@ let contains_go_code haystack needle =
     else if haystack.[index] = '"' then loop (index + 1) true false false
     else if haystack.[index] = '/' && index + 1 < length && haystack.[index + 1] = '/' then
       loop (index + 2) false false true
-    else if index + needle_length <= length
-         && String.sub haystack index needle_length = needle then true
+    else if index + needle_length <= length && at index 0 then true
     else loop (index + 1) false false false
   in
   needle_length = 0 || loop 0 false false false
@@ -17798,7 +17834,7 @@ let relocate_migration_history ~project_path (artifacts : artifact list) =
       invalid_arg "migration history artifact lacks its runtime package clause";
     let body = String.sub history.contents (String.length prefix) (String.length history.contents - String.length prefix) in
     let body = List.fold_left (fun body name ->
-        Str.global_replace (Str.regexp_string ("\t" ^ name ^ "(")) ("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
+        replace_substring ~needle:("\t" ^ name ^ "(") ~by:("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
       body ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
             "registerCompiledRowPhysicalHistory"; "registerCompiledRowContractHistory"] in
     let relocated = { path = "internal/teslhistory/migration_history_generated.go";
