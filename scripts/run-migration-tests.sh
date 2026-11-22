@@ -5,6 +5,12 @@
 # PostgreSQL tools on PATH. Arguments select focused kernel tests only.
 set -euo pipefail
 repo_root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+# Race-instrumented Go programs sleep one second before exiting by default
+# (GORACE atexit_sleep_ms=1000) so that other goroutines can still report a
+# race. The gates start thousands of such short-lived programs (schema
+# commands, generated tests); races are still reported when they happen and
+# still fail with exit code 66.
+export GORACE="${GORACE:-atexit_sleep_ms=0}"
 lane="${TESL_MIGRATION_TEST_LANE:-full}"
 if [[ "$lane" != full && $# != 0 ]]; then
   echo 'partitioned migration lanes cannot narrow the test selection' >&2
