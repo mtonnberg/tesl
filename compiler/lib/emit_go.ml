@@ -14203,7 +14203,7 @@ let normalize_stdlib_import_all (m : module_form) : module_form =
     { m with imports }
   end
 
-let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module_internal ?(seal=true) ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   let previous_transports = !current_nominal_transports and previous_graph= !current_emission_graph in
   let previous_meter = !current_migration_metering and previous_owned = !current_migration_owned_module in
   Fun.protect ~finally:(fun () -> current_migration_metering:=previous_meter;current_migration_owned_module:=previous_owned;current_nominal_transports := previous_transports;current_emission_graph:=previous_graph) (fun () ->
@@ -17756,7 +17756,10 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
           Embedded_go_runtime.files
       end
     in
-    Ok (seal_cache_artifacts artifacts, { ex_module = m.module_name; ex_package = package;
+    (* A project build re-seals its complete, deduplicated artifact set after
+       normalizing every identity line, so it skips this per-module seal (which
+       hashes the embedded runtime once per module). *)
+    Ok ((if seal then seal_cache_artifacts artifacts else artifacts), { ex_module = m.module_name; ex_package = package;
                      ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters; ex_nominal_mappings=List.map (fun (binding,_,_) -> binding) nominal_mapping_adapters;
                      ex_servers=List.map (fun (server : server_form) -> server.name) servers })
   with Unsupported error -> Error [error])
@@ -18499,7 +18502,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-         (match compile_module_internal ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
+         (match compile_module_internal ~seal:false ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_transports)
