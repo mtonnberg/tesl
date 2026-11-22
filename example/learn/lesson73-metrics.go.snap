@@ -125,13 +125,13 @@ func TestTesl0(teslT *testing.T) {
 //line lesson73-metrics.tesl:117
 	if teslLeft1 != "welcome to pro" {
 //line lesson73-metrics.tesl:117
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "welcome to pro")
 	}
 	teslLeft2 := RecordSignup("free")
 //line lesson73-metrics.tesl:118
 	if teslLeft2 != "welcome to free" {
 //line lesson73-metrics.tesl:118
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "welcome to free")
 	}
 }
 

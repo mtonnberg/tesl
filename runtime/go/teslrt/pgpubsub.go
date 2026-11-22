@@ -356,6 +356,12 @@ func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
 	"dispatch_seq" bigint,
 	"dispatched_at" timestamptz
 )`, table),
+		// An outbox created by an older runtime named the routing columns `channel_name` /
+		// `channel_key`. Adding the dispatch columns alone left such a table unreadable — the
+		// listener looped on `column "channel" does not exist` while the app looked healthy —
+		// so the legacy names are renamed in place, once, before anything reads them.
+		renameLegacyOutboxColumn(table, "channel_name", "channel"),
+		renameLegacyOutboxColumn(table, "channel_key", "key"),
 		`alter table ` + table + ` add column if not exists "dispatch_seq" bigint`,
 		`alter table ` + table + ` add column if not exists "dispatched_at" timestamptz`,
 		`create unique index if not exists ` + quoteIdentifier(pubsubOutboxTable+"_dispatch_idx") +
@@ -380,6 +386,18 @@ func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
 		}
 	}
 	return nil
+}
+
+// renameLegacyOutboxColumn renames `from` to `to` when the table still has the old column and
+// not yet the new one; it is a no-op on every later boot.
+func renameLegacyOutboxColumn(table, from, to string) string {
+	literal := strings.ReplaceAll(table, "'", "''")
+	return fmt.Sprintf(`do $$ begin
+  if exists (select 1 from pg_attribute where attrelid = '%s'::regclass and attname = '%s' and not attisdropped)
+     and not exists (select 1 from pg_attribute where attrelid = '%s'::regclass and attname = '%s' and not attisdropped) then
+    alter table %s rename column %s to %s;
+  end if;
+end $$`, literal, from, literal, to, table, quoteIdentifier(from), quoteIdentifier(to))
 }
 
 // normalizeLegacyPubsubRows runs during PostgreSQL bootstrap, before the Database can be bound

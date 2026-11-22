@@ -192,7 +192,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:231
 	if teslLeft1 != "5 is in [1, 10]" {
 //line lesson44-multi-param-proofs.tesl:231
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "5 is in [1, 10]")
 	}
 }
 
@@ -212,13 +212,13 @@ func TestTesl1(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:235
 	if teslLeft2 != "0 is in [0, 100]" {
 //line lesson44-multi-param-proofs.tesl:235
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "0 is in [0, 100]")
 	}
 	teslLeft3 := DescribeInBounds(teslrt.FromInt64(0), teslrt.FromInt64(100), teslrt.FromInt64(100))
 //line lesson44-multi-param-proofs.tesl:236
 	if teslLeft3 != "100 is in [0, 100]" {
 //line lesson44-multi-param-proofs.tesl:236
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "100 is in [0, 100]")
 	}
 }
 
@@ -260,7 +260,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:245
 	if teslLeft4 != "7 is in [1, 10]" {
 //line lesson44-multi-param-proofs.tesl:245
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "7 is in [1, 10]")
 	}
 //line lesson44-multi-param-proofs.tesl:246
 	teslExpectFailure(teslT, func() {
@@ -284,13 +284,13 @@ func TestTesl4(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:250
 	if teslLeft5 != "approved 80 of 100" {
 //line lesson44-multi-param-proofs.tesl:250
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "approved 80 of 100")
 	}
 	teslLeft6 := ApprovedDescription(teslrt.FromInt64(100), teslrt.FromInt64(100))
 //line lesson44-multi-param-proofs.tesl:251
 	if teslLeft6 != "approved 100 of 100" {
 //line lesson44-multi-param-proofs.tesl:251
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "approved 100 of 100")
 	}
 }
 
@@ -332,7 +332,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:260
 	if teslLeft7 != "120 is in window [100, 150] and 150 is in window [100, 150]" {
 //line lesson44-multi-param-proofs.tesl:260
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "120 is in window [100, 150] and 150 is in window [100, 150]")
 	}
 }
 
@@ -374,7 +374,7 @@ func TestTesl8(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:271
 	if teslLeft8 != "10 \xe2\x89\xa4 90 (both in range)" {
 //line lesson44-multi-param-proofs.tesl:271
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "10 \xe2\x89\xa4 90 (both in range)")
 	}
 }
 
@@ -394,7 +394,7 @@ func TestTesl9(teslT *testing.T) {
 //line lesson44-multi-param-proofs.tesl:275
 	if teslLeft9 != "50 \xe2\x89\xa4 50 (both in range)" {
 //line lesson44-multi-param-proofs.tesl:275
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "50 \xe2\x89\xa4 50 (both in range)")
 	}
 }
 

@@ -505,3 +505,37 @@ func TestPowRefusesOversizedResultsQuickly(t *testing.T) {
 		MustPow(FromInt64(3), FromInt64(200_000_000))
 	}()
 }
+
+func TestSqlBoundClampsAndSaturates(t *testing.T) {
+	if got := SqlBound(FromInt64(25)); got != 25 {
+		t.Fatalf("SqlBound(25) = %d", got)
+	}
+	if got := SqlBound(FromInt64(-3)); got != 0 {
+		t.Fatalf("a negative bound must read nothing, got %d", got)
+	}
+	huge := MustParseDecimal("123456789012345678901234567890")
+	if got := SqlBound(huge); got != int(^uint(0)>>1) {
+		t.Fatalf("an oversized bound must saturate, got %d", got)
+	}
+}
+
+func TestIntFloatAndPredicates(t *testing.T) {
+	if IntToFloat(FromInt64(7)) != 7.0 {
+		t.Error("IntToFloat")
+	}
+	if got := IntFromFloat(-2.9); got.String() != "-2" {
+		t.Errorf("IntFromFloat(-2.9) = %s, want truncation toward zero", got.String())
+	}
+	if IntDigits(FromInt64(-12345)).String() != "5" || IntDigits(FromInt64(0)).String() != "1" {
+		t.Error("IntDigits")
+	}
+	if !IntIsZero(FromInt64(0)) || !IntIsPositive(FromInt64(3)) || !IntIsNegative(FromInt64(-3)) {
+		t.Error("Int predicates")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("IntFromFloat(NaN) must trap")
+		}
+	}()
+	IntFromFloat(math.NaN())
+}

@@ -627,7 +627,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:231
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line lesson52-maybe-proof.tesl:231
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -665,7 +665,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:239
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(3)) {
 //line lesson52-maybe-proof.tesl:239
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(3)))
 					}
 				}
 			}
@@ -799,7 +799,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:266
 					if !teslrt.Equal(v, teslrt.FromInt64(7)) {
 //line lesson52-maybe-proof.tesl:266
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(7)))
 					}
 				default:
 					panic("unreachable: checker guarantees case exhaustiveness")
@@ -870,7 +870,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:282
 										if !teslrt.Equal(n, nAlt) {
 //line lesson52-maybe-proof.tesl:282
-											teslT.Fatal("Tesl expectation failed")
+											teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(n), teslrt.DescribeValue(nAlt))
 										}
 									}
 								}
@@ -927,7 +927,7 @@ func TestTesl7(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:292
 						if !teslrt.Equal(n, teslrt.FromInt64(5)) {
 //line lesson52-maybe-proof.tesl:292
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(n), teslrt.DescribeValue(teslrt.FromInt64(5)))
 						}
 					}
 				default:
@@ -958,7 +958,7 @@ func TestTesl8(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:297
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(2)) {
 //line lesson52-maybe-proof.tesl:297
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(2)))
 		}
 	}
 }
@@ -983,7 +983,7 @@ func TestTesl9(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:302
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(6)) {
 //line lesson52-maybe-proof.tesl:302
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(6)))
 		}
 	}
 }
@@ -1008,7 +1008,7 @@ func TestTesl10(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:307
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(4)) {
 //line lesson52-maybe-proof.tesl:307
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(4)))
 		}
 	}
 }
@@ -1033,7 +1033,7 @@ func TestTesl11(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:312
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(11)) {
 //line lesson52-maybe-proof.tesl:312
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(11)))
 		}
 	}
 }
@@ -1095,12 +1095,12 @@ func TestTesl12(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:326
 									if !teslrt.Equal(a, teslrt.FromInt64(10)) {
 //line lesson52-maybe-proof.tesl:326
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(a), teslrt.DescribeValue(teslrt.FromInt64(10)))
 									}
 //line lesson52-maybe-proof.tesl:327
 									if !teslrt.Equal(b, teslrt.FromInt64(20)) {
 //line lesson52-maybe-proof.tesl:327
-										teslT.Fatal("Tesl expectation failed")
+										teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(b), teslrt.DescribeValue(teslrt.FromInt64(20)))
 									}
 									{
 //line lesson52-maybe-proof.tesl:329
@@ -1114,7 +1114,7 @@ func TestTesl12(teslT *testing.T) {
 //line lesson52-maybe-proof.tesl:331
 											if !teslrt.Equal(teslLeft12, teslrt.FromInt64(30)) {
 //line lesson52-maybe-proof.tesl:331
-												teslT.Fatal("Tesl expectation failed")
+												teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(30)))
 											}
 										}
 									}

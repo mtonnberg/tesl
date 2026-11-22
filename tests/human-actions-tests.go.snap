@@ -215,13 +215,13 @@ func TestTesl0(teslT *testing.T) {
 //line human-actions-tests.tesl:119
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line human-actions-tests.tesl:119
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			teslLeft2 := teslrt.ListLength(humanTools(user))
 //line human-actions-tests.tesl:120
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line human-actions-tests.tesl:120
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -251,7 +251,7 @@ func TestTesl1(teslT *testing.T) {
 //line human-actions-tests.tesl:127
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
 //line human-actions-tests.tesl:127
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 		}
 	}
@@ -293,13 +293,13 @@ func TestTesl2(teslT *testing.T) {
 //line human-actions-tests.tesl:139
 						if teslLeft4 != "I've asked you to confirm the wipe." {
 //line human-actions-tests.tesl:139
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "I've asked you to confirm the wipe.")
 						}
 						teslLeft5 := teslrt.ReplyToolCalls(reply)
 //line human-actions-tests.tesl:140
 						if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1)) {
 //line human-actions-tests.tesl:140
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -344,13 +344,13 @@ func TestTesl3(teslT *testing.T) {
 //line human-actions-tests.tesl:151
 						if teslLeft6 != "Greeted you." {
 //line human-actions-tests.tesl:151
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "Greeted you.")
 						}
 						teslLeft7 := teslrt.ReplyToolCalls(reply)
 //line human-actions-tests.tesl:152
 						if !teslrt.Equal(teslLeft7, teslrt.FromInt64(1)) {
 //line human-actions-tests.tesl:152
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}

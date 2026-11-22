@@ -50,8 +50,8 @@
       "V001"
     ],
     "repair": [
-      "requires [dbRead Note]",
-      "requires [dbWrite Note]"
+      "-> Note\n  requires [dbRead Note]",
+      "-> Note\n  requires [dbWrite Note]"
     ]
   },
   {

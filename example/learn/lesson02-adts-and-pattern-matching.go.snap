@@ -508,6 +508,40 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue Direction) any {
+	return func() any {
+		switch teslValue.Tag {
+		case DirectionNorth:
+			return map[string]any{"tag": "North"}
+		case DirectionSouth:
+			return map[string]any{"tag": "South"}
+		case DirectionEast:
+			return map[string]any{"tag": "East"}
+		case DirectionWest:
+			return map[string]any{"tag": "West"}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
+func teslEncode2(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode3(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode2(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func TestTesl0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "colorName" && teslWanted != "TestTesl0" {
 		teslT.Skip("named test filter")
@@ -524,19 +558,19 @@ func TestTesl0(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:97
 	if teslLeft1 != "red" {
 //line lesson02-adts-and-pattern-matching.tesl:97
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "red")
 	}
 	teslLeft2 := ColorName(Color{Tag: ColorGreen})
 //line lesson02-adts-and-pattern-matching.tesl:98
 	if teslLeft2 != "green" {
 //line lesson02-adts-and-pattern-matching.tesl:98
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "green")
 	}
 	teslLeft3 := ColorName(Color{Tag: ColorBlue})
 //line lesson02-adts-and-pattern-matching.tesl:99
 	if teslLeft3 != "blue" {
 //line lesson02-adts-and-pattern-matching.tesl:99
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "blue")
 	}
 }
 
@@ -591,28 +625,28 @@ func TestTesl2(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:110
 	if !teslLeft4.TeslEqual(teslRight4) {
 //line lesson02-adts-and-pattern-matching.tesl:110
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode1(teslLeft4)), teslrt.EncodeJSONValue(teslEncode1(teslRight4)))
 	}
 	teslLeft5 := Opposite(Direction{Tag: DirectionSouth})
 	teslRight5 := Direction{Tag: DirectionNorth}
 //line lesson02-adts-and-pattern-matching.tesl:111
 	if !teslLeft5.TeslEqual(teslRight5) {
 //line lesson02-adts-and-pattern-matching.tesl:111
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode1(teslLeft5)), teslrt.EncodeJSONValue(teslEncode1(teslRight5)))
 	}
 	teslLeft6 := Opposite(Direction{Tag: DirectionEast})
 	teslRight6 := Direction{Tag: DirectionWest}
 //line lesson02-adts-and-pattern-matching.tesl:112
 	if !teslLeft6.TeslEqual(teslRight6) {
 //line lesson02-adts-and-pattern-matching.tesl:112
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode1(teslLeft6)), teslrt.EncodeJSONValue(teslEncode1(teslRight6)))
 	}
 	teslLeft7 := Opposite(Direction{Tag: DirectionWest})
 	teslRight7 := Direction{Tag: DirectionEast}
 //line lesson02-adts-and-pattern-matching.tesl:113
 	if !teslLeft7.TeslEqual(teslRight7) {
 //line lesson02-adts-and-pattern-matching.tesl:113
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode1(teslLeft7)), teslrt.EncodeJSONValue(teslEncode1(teslRight7)))
 	}
 }
 
@@ -633,21 +667,21 @@ func TestTesl3(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:117
 	if teslLeft8.Tag != teslRight8.Tag || (teslLeft8.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft8.SomethingValue, teslRight8.SomethingValue)) {
 //line lesson02-adts-and-pattern-matching.tesl:117
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft8)), teslrt.EncodeJSONValue(teslEncode3(teslRight8)))
 	}
 	teslLeft9 := SafeDivide(teslrt.FromInt64(7), teslrt.FromInt64(0))
 	teslRight9 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson02-adts-and-pattern-matching.tesl:118
 	if teslLeft9.Tag != teslRight9.Tag || (teslLeft9.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft9.SomethingValue, teslRight9.SomethingValue)) {
 //line lesson02-adts-and-pattern-matching.tesl:118
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft9)), teslrt.EncodeJSONValue(teslEncode3(teslRight9)))
 	}
 	teslLeft10 := SafeDivide(teslrt.FromInt64(0), teslrt.FromInt64(5))
 	teslRight10 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(0)}
 //line lesson02-adts-and-pattern-matching.tesl:119
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft10.SomethingValue, teslRight10.SomethingValue)) {
 //line lesson02-adts-and-pattern-matching.tesl:119
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft10)), teslrt.EncodeJSONValue(teslEncode3(teslRight10)))
 	}
 }
 
@@ -667,19 +701,19 @@ func TestTesl4(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:266
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(25)) {
 //line lesson02-adts-and-pattern-matching.tesl:266
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(25)))
 	}
 	teslLeft12 := Area(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(3), RectangleHeight: teslrt.FromInt64(4)})
 //line lesson02-adts-and-pattern-matching.tesl:267
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(12)) {
 //line lesson02-adts-and-pattern-matching.tesl:267
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(12)))
 	}
 	teslLeft13 := Area(Shape{Tag: ShapePoint})
 //line lesson02-adts-and-pattern-matching.tesl:268
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
 //line lesson02-adts-and-pattern-matching.tesl:268
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -699,13 +733,13 @@ func TestTesl5(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:272
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(99)) {
 //line lesson02-adts-and-pattern-matching.tesl:272
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(99)))
 	}
 	teslLeft15 := MyFromDefault(MyMaybe{Tag: MyMaybeMyJust, MyJustValue: teslrt.FromInt64(7)}, teslrt.FromInt64(99))
 //line lesson02-adts-and-pattern-matching.tesl:273
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(7)) {
 //line lesson02-adts-and-pattern-matching.tesl:273
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 }
 
@@ -725,24 +759,24 @@ func TestTesl6(teslT *testing.T) {
 //line lesson02-adts-and-pattern-matching.tesl:277
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(200)) {
 //line lesson02-adts-and-pattern-matching.tesl:277
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(200)))
 	}
 	teslLeft17 := StatusCode(ApiResponse{Tag: ApiResponseNotFound})
 //line lesson02-adts-and-pattern-matching.tesl:278
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(404)) {
 //line lesson02-adts-and-pattern-matching.tesl:278
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(404)))
 	}
 	teslLeft18 := StatusCode(ApiResponse{Tag: ApiResponseUnauthorized})
 //line lesson02-adts-and-pattern-matching.tesl:279
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(401)) {
 //line lesson02-adts-and-pattern-matching.tesl:279
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(401)))
 	}
 	teslLeft19 := StatusCode(ApiResponse{Tag: ApiResponseServerError, ServerErrorMessage: "oops"})
 //line lesson02-adts-and-pattern-matching.tesl:280
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(500)) {
 //line lesson02-adts-and-pattern-matching.tesl:280
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(500)))
 	}
 }

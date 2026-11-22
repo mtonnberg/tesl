@@ -109,7 +109,7 @@ func TestTesl0(teslT *testing.T) {
 //line sql-update-return-one-tests.tesl:44
 				if teslLeft1 != "alpha II" {
 //line sql-update-return-one-tests.tesl:44
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "alpha II")
 				}
 //line sql-update-return-one-tests.tesl:45
 				if !(func() bool {

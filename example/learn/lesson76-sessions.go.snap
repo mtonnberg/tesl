@@ -422,7 +422,7 @@ func TestTeslApi2(teslT *testing.T) {
 //line lesson76-sessions.tesl:362
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
 //line lesson76-sessions.tesl:362
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 	}
 }
@@ -450,7 +450,7 @@ func TestTeslApi3(teslT *testing.T) {
 //line lesson76-sessions.tesl:370
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(401)) {
 //line lesson76-sessions.tesl:370
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(401)))
 		}
 //line lesson76-sessions.tesl:371
 		{

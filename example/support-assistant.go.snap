@@ -158,13 +158,13 @@ func TestTesl0(teslT *testing.T) {
 //line support-assistant.tesl:120
 					if teslLeft1 != "Your order A-100 has shipped." {
 //line support-assistant.tesl:120
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "Your order A-100 has shipped.")
 					}
 					teslLeft2 := teslrt.ReplyToolCalls(reply)
 //line support-assistant.tesl:121
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line support-assistant.tesl:121
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -204,13 +204,13 @@ func TestTesl1(teslT *testing.T) {
 //line support-assistant.tesl:131
 					if teslLeft3 != "Done \xe2\x80\x94 your refund is on its way." {
 //line support-assistant.tesl:131
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "Done \xe2\x80\x94 your refund is on its way.")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line support-assistant.tesl:132
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line support-assistant.tesl:132
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -250,13 +250,13 @@ func TestTesl2(teslT *testing.T) {
 //line support-assistant.tesl:143
 					if teslLeft5 != "I can't refund without confirmation." {
 //line support-assistant.tesl:143
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "I can't refund without confirmation.")
 					}
 					teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line support-assistant.tesl:144
 					if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
 //line support-assistant.tesl:144
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -300,13 +300,13 @@ func TestTesl3(teslT *testing.T) {
 //line support-assistant.tesl:155
 						if teslLeft7 != "Looked it up and refunded order A-400." {
 //line support-assistant.tesl:155
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "Looked it up and refunded order A-400.")
 						}
 						teslLeft8 := teslrt.ReplyToolCalls(reply)
 //line support-assistant.tesl:156
 						if !teslrt.Equal(teslLeft8, teslrt.FromInt64(2)) {
 //line support-assistant.tesl:156
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(2)))
 						}
 					}
 				}
@@ -347,13 +347,13 @@ func TestTesl4(teslT *testing.T) {
 //line support-assistant.tesl:168
 					if teslLeft9 != "Sorry, I couldn't find that order." {
 //line support-assistant.tesl:168
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "Sorry, I couldn't find that order.")
 					}
 					teslLeft10 := teslrt.ReplyToolCalls(reply)
 //line support-assistant.tesl:169
 					if !teslrt.Equal(teslLeft10, teslrt.FromInt64(1)) {
 //line support-assistant.tesl:169
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -385,13 +385,13 @@ func TestTesl5(teslT *testing.T) {
 //line support-assistant.tesl:177
 			if teslLeft11 != "billing" {
 //line support-assistant.tesl:177
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "billing")
 			}
 			teslLeft12 := triage.Priority
 //line support-assistant.tesl:178
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(2)) {
 //line support-assistant.tesl:178
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 		}
 	}
@@ -421,13 +421,13 @@ func TestTesl6(teslT *testing.T) {
 //line support-assistant.tesl:186
 			if teslLeft13 != "shipping" {
 //line support-assistant.tesl:186
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "shipping")
 			}
 			teslLeft14 := triage.Priority
 //line support-assistant.tesl:187
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1)) {
 //line support-assistant.tesl:187
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -453,7 +453,7 @@ func TestTesl7(teslT *testing.T) {
 //line support-assistant.tesl:193
 		if teslLeft15 != "Hi! How can I help?" {
 //line support-assistant.tesl:193
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, "Hi! How can I help?")
 		}
 	}
 }

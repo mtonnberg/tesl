@@ -334,7 +334,7 @@ let check_sql_where_clauses
             (EApp { fn = EVar { name = "isNotNull"; loc };
                     arg = EField { obj = EVar { name = binder; loc }; field; loc };
                     loc })
-        | SqlOr clauses -> List.iter (check_clause binder_env binder) clauses
+        | SqlOr clauses | SqlAnd clauses -> List.iter (check_clause binder_env binder) clauses
         | SqlIn _ | SqlNotIn _ | SqlInList _ | SqlNotInList _ | SqlLike _ | SqlILike _ -> ()
       in
       (match query with
@@ -946,25 +946,7 @@ let check_sql_query_shape (decls : top_decl list) : validation_error list =
        | _ -> base :: args)
     | other -> [other]
   in
-  (* `limit`/`offset` are lowered from an INTEGER LITERAL only (emit_racket's
-     [parse_select_tail] reads them with [int_literal_value]); a variable or an
-     arithmetic expression there is the one cause a reader is most likely to hit
-     and least likely to guess from a generic message. *)
-  let rec non_literal_bound = function
-    | EVar { name = ("limit" | "offset") as kw; _ } :: value :: _
-      when (match value with ELit { lit = LInt _; _ } -> false | _ -> true) -> Some kw
-    | _ :: rest -> non_literal_bound rest
-    | [] -> None
-  in
-  let hint_for name atoms =
-    match non_literal_bound atoms with
-    | Some kw ->
-      Printf.sprintf
-        "`%s` is lowered from an integer literal — `%s 20` works, a variable or \
-         an expression does not (yet).  Bind the rows and slice them in Tesl, or \
-         use a literal bound."
-        kw kw
-    | None ->
+  let hint_for name _atoms =
       match name with
       | "update" | "updateAndReturnOne" | "delete" | "deleteAndReturnResult" ->
         "write one clause per line, indented under the statement:\n\

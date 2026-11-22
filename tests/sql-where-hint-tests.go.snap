@@ -134,7 +134,7 @@ func TestTesl1(teslT *testing.T) {
 //line sql-where-hint-tests.tesl:43
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line sql-where-hint-tests.tesl:43
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}

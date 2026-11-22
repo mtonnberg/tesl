@@ -64,7 +64,7 @@ func TestTesl0(teslT *testing.T) {
 //line agent-tests.tesl:41
 			if reply != "hello from mock" {
 //line agent-tests.tesl:41
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", reply, "hello from mock")
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func TestTesl1(teslT *testing.T) {
 //line agent-tests.tesl:45
 	if teslLeft2 != "hello from mock" {
 //line agent-tests.tesl:45
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "hello from mock")
 	}
 }
 
@@ -117,12 +117,12 @@ func TestTesl2(teslT *testing.T) {
 //line agent-tests.tesl:52
 				if r1 != "first" {
 //line agent-tests.tesl:52
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", r1, "first")
 				}
 //line agent-tests.tesl:53
 				if r2 != "second" {
 //line agent-tests.tesl:53
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", r2, "second")
 				}
 			}
 		}

@@ -100,13 +100,13 @@ func TestTesl0(teslT *testing.T) {
 //line trace-propagation-tests.tesl:121
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(200)) {
 //line trace-propagation-tests.tesl:121
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(200)))
 		}
 		teslLeft2 := teslrt.HttpCallCount("GET", "https://billing.internal/invoice/42")
 //line trace-propagation-tests.tesl:122
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
 //line trace-propagation-tests.tesl:122
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -332,7 +332,7 @@ func TestTeslApi5(teslT *testing.T) {
 //line trace-propagation-tests.tesl:105
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
 //line trace-propagation-tests.tesl:105
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -373,7 +373,7 @@ func TestTeslApi6(teslT *testing.T) {
 //line trace-propagation-tests.tesl:113
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line trace-propagation-tests.tesl:113
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }

@@ -192,6 +192,10 @@ and pattern =
 and sql_clause =
   | SqlPred of { field : string; op : binop; value : expr }
   | SqlOr of sql_clause list
+  (* A conjunction INSIDE a disjunction: `where a < x || (a == x && b < y)`, the keyset
+     comparison every cursor-paged list needs.  At the top level clauses are already a
+     conjunction, so this node only ever appears under `SqlOr`. *)
+  | SqlAnd of sql_clause list
   | SqlIsNull of { field : string }
   | SqlIsNotNull of { field : string }
   | SqlIn of { field : string; values : expr list }
@@ -227,12 +231,18 @@ and sql_select_seed = {
   entity : string;
   where_field : string option;
   order : (string * string) option;
-  limit : int option;
-  offset : int option;
+  limit : sql_bound option;
+  offset : sql_bound option;
   static_clauses : sql_clause list;
   group_by : sql_group_key list;
   joins : sql_join list;
 }
+
+(* A `limit`/`offset` bound: a literal, or an Int expression — a
+   page size the request chose — bound as a statement parameter, never spliced into SQL. *)
+and sql_bound =
+  | BoundLiteral of int
+  | BoundExpr of expr
 
 and sql_insert = {
   entity : string;

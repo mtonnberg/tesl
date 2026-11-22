@@ -101,3 +101,18 @@ func RejectShape[T any](message string) Check[T] {
 func (result Check[T]) IsShapeMismatch() bool {
 	return !result.ok && result.shape
 }
+
+// DescribeValue renders a value for a failed `expect` message: an api-test JSON value as its
+// JSON text, anything with a String method through it, and the rest as Go prints it. A failed
+// `expect resp.status == 200` used to say only "Tesl expectation failed", so the actual status
+// (a 421 from a Host check, say) had to be found by trial.
+func DescribeValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return fmt.Sprintf("%q", typed)
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprintf("%+v", typed)
+	}
+}

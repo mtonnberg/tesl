@@ -122,7 +122,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson56-uuid.tesl:199
 			if result != id {
 //line lesson56-uuid.tesl:199
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, id)
 			}
 		}
 	}
@@ -151,7 +151,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson56-uuid.tesl:205
 			if result != id {
 //line lesson56-uuid.tesl:205
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", result, id)
 			}
 		}
 	}
@@ -181,7 +181,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson56-uuid.tesl:211
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:211
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(36)))
 			}
 		}
 	}
@@ -211,7 +211,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson56-uuid.tesl:217
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:217
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(36)))
 			}
 		}
 	}
@@ -313,13 +313,13 @@ func TestTesl8(teslT *testing.T) {
 //line lesson56-uuid.tesl:239
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:239
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(36)))
 			}
 			teslLeft6 := UuidLength(v7)
 //line lesson56-uuid.tesl:240
 			if !teslrt.Equal(teslLeft6, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:240
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(36)))
 			}
 		}
 	}
@@ -403,7 +403,7 @@ func TestTesl11(teslT *testing.T) {
 //line lesson56-uuid.tesl:257
 		if teslLeft7 != "UUID v4 (random)" {
 //line lesson56-uuid.tesl:257
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "UUID v4 (random)")
 		}
 	}
 }
@@ -428,7 +428,7 @@ func TestTesl12(teslT *testing.T) {
 //line lesson56-uuid.tesl:262
 		if teslLeft8 != "UUID v7 (time-ordered)" {
 //line lesson56-uuid.tesl:262
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "UUID v7 (time-ordered)")
 		}
 	}
 }
@@ -491,25 +491,25 @@ func TestTesl15(teslT *testing.T) {
 //line lesson56-uuid.tesl:275
 		if teslLeft9 != "-" {
 //line lesson56-uuid.tesl:275
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "-")
 		}
 		teslLeft10 := teslrt.StringSlice(v4, teslrt.FromInt64(13), teslrt.FromInt64(14))
 //line lesson56-uuid.tesl:276
 		if teslLeft10 != "-" {
 //line lesson56-uuid.tesl:276
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "-")
 		}
 		teslLeft11 := teslrt.StringSlice(v4, teslrt.FromInt64(18), teslrt.FromInt64(19))
 //line lesson56-uuid.tesl:277
 		if teslLeft11 != "-" {
 //line lesson56-uuid.tesl:277
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "-")
 		}
 		teslLeft12 := teslrt.StringSlice(v4, teslrt.FromInt64(23), teslrt.FromInt64(24))
 //line lesson56-uuid.tesl:278
 		if teslLeft12 != "-" {
 //line lesson56-uuid.tesl:278
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "-")
 		}
 	}
 }
@@ -539,13 +539,13 @@ func TestTesl16(teslT *testing.T) {
 //line lesson56-uuid.tesl:287
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:287
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(36)))
 		}
 		teslLeft14 := DescribeUuid(id)
 //line lesson56-uuid.tesl:288
 		if teslLeft14 != "UUID v4 (random)" {
 //line lesson56-uuid.tesl:288
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft14, "UUID v4 (random)")
 		}
 	}
 }
@@ -575,13 +575,13 @@ func TestTesl17(teslT *testing.T) {
 //line lesson56-uuid.tesl:294
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(36)) {
 //line lesson56-uuid.tesl:294
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(36)))
 		}
 		teslLeft16 := DescribeUuid(id)
 //line lesson56-uuid.tesl:295
 		if teslLeft16 != "UUID v7 (time-ordered)" {
 //line lesson56-uuid.tesl:295
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft16, "UUID v7 (time-ordered)")
 		}
 	}
 }

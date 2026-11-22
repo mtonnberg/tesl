@@ -63,6 +63,48 @@ func TestMain(teslM *testing.M) {
 	os.Exit(testExitCode)
 }
 
+func teslEncode1(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue []teslrt.Int) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode1(teslItem)
+		}
+		return teslOut
+	}()
+}
+
+func teslEncode3(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode1(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
+func teslEncode4(teslValue teslrt.Maybe[[]teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode2(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func teslEqualTeslrtInt(teslX, teslY teslrt.Int) bool {
 	return teslrt.Equal(teslX, teslY)
 }
@@ -103,7 +145,7 @@ func TestTesl0(teslT *testing.T) {
 //line lifted-list-tests.tesl:44
 	if !teslrt.ListEqualBy(teslLeft1, teslRight1, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:44
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft1)), teslrt.EncodeJSONValue(teslEncode2(teslRight1)))
 	}
 	teslLeft2 := (func() []teslrt.Int {
 		teslSrc1 := []teslrt.Int{}
@@ -117,7 +159,7 @@ func TestTesl0(teslT *testing.T) {
 //line lifted-list-tests.tesl:45
 	if !teslrt.ListEqualBy(teslLeft2, teslRight2, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:45
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft2)), teslrt.EncodeJSONValue(teslEncode2(teslRight2)))
 	}
 }
 
@@ -147,7 +189,7 @@ func TestTesl1(teslT *testing.T) {
 //line lifted-list-tests.tesl:49
 	if !teslrt.ListEqualBy(teslLeft3, teslRight3, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:49
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft3)), teslrt.EncodeJSONValue(teslEncode2(teslRight3)))
 	}
 	teslLeft4 := (func() []teslrt.Int {
 		teslSrc1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
@@ -163,7 +205,7 @@ func TestTesl1(teslT *testing.T) {
 //line lifted-list-tests.tesl:50
 	if !teslrt.ListEqualBy(teslLeft4, teslRight4, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:50
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft4)), teslrt.EncodeJSONValue(teslEncode2(teslRight4)))
 	}
 }
 
@@ -191,7 +233,7 @@ func TestTesl2(teslT *testing.T) {
 //line lifted-list-tests.tesl:54
 	if !teslrt.ListEqualBy(teslLeft5, teslRight5, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:54
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft5)), teslrt.EncodeJSONValue(teslEncode2(teslRight5)))
 	}
 }
 
@@ -212,14 +254,14 @@ func TestTesl3(teslT *testing.T) {
 //line lifted-list-tests.tesl:58
 	if !teslrt.ListEqualBy(teslLeft6, teslRight6, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:58
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft6)), teslrt.EncodeJSONValue(teslEncode2(teslRight6)))
 	}
 	teslLeft7 := teslrt.ListReverse([]teslrt.Int{})
 	teslRight7 := []teslrt.Int{}
 //line lifted-list-tests.tesl:59
 	if !teslrt.ListEqualBy(teslLeft7, teslRight7, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:59
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft7)), teslrt.EncodeJSONValue(teslEncode2(teslRight7)))
 	}
 }
 
@@ -240,7 +282,7 @@ func TestTesl4(teslT *testing.T) {
 //line lifted-list-tests.tesl:63
 	if !teslrt.ListEqualBy(teslLeft8, teslRight8, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:63
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft8)), teslrt.EncodeJSONValue(teslEncode2(teslRight8)))
 	}
 }
 
@@ -273,7 +315,7 @@ func TestTesl5(teslT *testing.T) {
 //line lifted-list-tests.tesl:67
 	if !teslrt.ListEqualBy(teslLeft9, teslRight9, teslEqualTeslrtTuple2TeslrtIntString) {
 //line lifted-list-tests.tesl:67
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslRight9))
 	}
 	teslLeft10 := (func() []teslrt.Tuple2[teslrt.Int, string] {
 		teslLeft1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
@@ -292,7 +334,7 @@ func TestTesl5(teslT *testing.T) {
 //line lifted-list-tests.tesl:68
 	if !teslrt.ListEqualBy(teslLeft10, teslRight10, teslEqualTeslrtTuple2TeslrtIntString) {
 //line lifted-list-tests.tesl:68
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslRight10))
 	}
 }
 
@@ -312,13 +354,13 @@ func TestTesl6(teslT *testing.T) {
 //line lifted-list-tests.tesl:74
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {
 //line lifted-list-tests.tesl:74
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft12 := teslrt.ListLength([]teslrt.Int{})
 //line lifted-list-tests.tesl:75
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(0)) {
 //line lifted-list-tests.tesl:75
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -363,14 +405,14 @@ func TestTesl8(teslT *testing.T) {
 //line lifted-list-tests.tesl:84
 	if teslLeft13.Tag != teslRight13.Tag || (teslLeft13.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft13.SomethingValue, teslRight13.SomethingValue)) {
 //line lifted-list-tests.tesl:84
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft13)), teslrt.EncodeJSONValue(teslEncode3(teslRight13)))
 	}
 	teslLeft14 := teslrt.ListHead([]teslrt.Int{})
 	teslRight14 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lifted-list-tests.tesl:85
 	if teslLeft14.Tag != teslRight14.Tag || (teslLeft14.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft14.SomethingValue, teslRight14.SomethingValue)) {
 //line lifted-list-tests.tesl:85
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft14)), teslrt.EncodeJSONValue(teslEncode3(teslRight14)))
 	}
 }
 
@@ -391,14 +433,14 @@ func TestTesl9(teslT *testing.T) {
 //line lifted-list-tests.tesl:89
 	if teslLeft15.Tag != teslRight15.Tag || (teslLeft15.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(teslLeft15.SomethingValue, teslRight15.SomethingValue, teslEqualTeslrtInt)) {
 //line lifted-list-tests.tesl:89
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode4(teslLeft15)), teslrt.EncodeJSONValue(teslEncode4(teslRight15)))
 	}
 	teslLeft16 := teslrt.ListTail([]teslrt.Int{})
 	teslRight16 := teslrt.Maybe[[]teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lifted-list-tests.tesl:90
 	if teslLeft16.Tag != teslRight16.Tag || (teslLeft16.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(teslLeft16.SomethingValue, teslRight16.SomethingValue, teslEqualTeslrtInt)) {
 //line lifted-list-tests.tesl:90
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode4(teslLeft16)), teslrt.EncodeJSONValue(teslEncode4(teslRight16)))
 	}
 }
 
@@ -507,7 +549,7 @@ func TestTesl12(teslT *testing.T) {
 //line lifted-list-tests.tesl:104
 	if teslLeft17.Tag != teslRight17.Tag || (teslLeft17.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft17.SomethingValue, teslRight17.SomethingValue)) {
 //line lifted-list-tests.tesl:104
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft17)), teslrt.EncodeJSONValue(teslEncode3(teslRight17)))
 	}
 	teslLeft18 := (func() teslrt.Maybe[teslrt.Int] {
 		teslSrc1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
@@ -522,7 +564,7 @@ func TestTesl12(teslT *testing.T) {
 //line lifted-list-tests.tesl:105
 	if teslLeft18.Tag != teslRight18.Tag || (teslLeft18.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft18.SomethingValue, teslRight18.SomethingValue)) {
 //line lifted-list-tests.tesl:105
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft18)), teslrt.EncodeJSONValue(teslEncode3(teslRight18)))
 	}
 }
 
@@ -590,13 +632,13 @@ func TestTesl15(teslT *testing.T) {
 //line lifted-list-tests.tesl:119
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(10)) {
 //line lifted-list-tests.tesl:119
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft20 := teslrt.ListSum([]teslrt.Int{})
 //line lifted-list-tests.tesl:120
 	if !teslrt.Equal(teslLeft20, teslrt.FromInt64(0)) {
 //line lifted-list-tests.tesl:120
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -617,14 +659,14 @@ func TestTesl16(teslT *testing.T) {
 //line lifted-list-tests.tesl:124
 	if teslLeft21.Tag != teslRight21.Tag || (teslLeft21.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft21.SomethingValue, teslRight21.SomethingValue)) {
 //line lifted-list-tests.tesl:124
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft21)), teslrt.EncodeJSONValue(teslEncode3(teslRight21)))
 	}
 	teslLeft22 := teslrt.ListMaximum([]teslrt.Int{}, teslLessTeslrtInt)
 	teslRight22 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lifted-list-tests.tesl:125
 	if teslLeft22.Tag != teslRight22.Tag || (teslLeft22.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft22.SomethingValue, teslRight22.SomethingValue)) {
 //line lifted-list-tests.tesl:125
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft22)), teslrt.EncodeJSONValue(teslEncode3(teslRight22)))
 	}
 }
 
@@ -645,14 +687,14 @@ func TestTesl17(teslT *testing.T) {
 //line lifted-list-tests.tesl:129
 	if teslLeft23.Tag != teslRight23.Tag || (teslLeft23.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft23.SomethingValue, teslRight23.SomethingValue)) {
 //line lifted-list-tests.tesl:129
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft23)), teslrt.EncodeJSONValue(teslEncode3(teslRight23)))
 	}
 	teslLeft24 := teslrt.ListMinimum([]teslrt.Int{}, teslLessTeslrtInt)
 	teslRight24 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lifted-list-tests.tesl:130
 	if teslLeft24.Tag != teslRight24.Tag || (teslLeft24.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft24.SomethingValue, teslRight24.SomethingValue)) {
 //line lifted-list-tests.tesl:130
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode3(teslLeft24)), teslrt.EncodeJSONValue(teslEncode3(teslRight24)))
 	}
 }
 
@@ -673,14 +715,14 @@ func TestTesl18(teslT *testing.T) {
 //line lifted-list-tests.tesl:136
 	if !teslrt.ListEqualBy(teslLeft25, teslRight25, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:136
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft25)), teslrt.EncodeJSONValue(teslEncode2(teslRight25)))
 	}
 	teslLeft26 := teslrt.ListAppend([]teslrt.Int{}, []teslrt.Int{teslrt.FromInt64(1)})
 	teslRight26 := []teslrt.Int{teslrt.FromInt64(1)}
 //line lifted-list-tests.tesl:137
 	if !teslrt.ListEqualBy(teslLeft26, teslRight26, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:137
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft26)), teslrt.EncodeJSONValue(teslEncode2(teslRight26)))
 	}
 }
 
@@ -701,14 +743,14 @@ func TestTesl19(teslT *testing.T) {
 //line lifted-list-tests.tesl:141
 	if !teslrt.ListEqualBy(teslLeft27, teslRight27, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:141
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft27)), teslrt.EncodeJSONValue(teslEncode2(teslRight27)))
 	}
 	teslLeft28 := teslrt.ListConcat([][]teslrt.Int{})
 	teslRight28 := []teslrt.Int{}
 //line lifted-list-tests.tesl:142
 	if !teslrt.ListEqualBy(teslLeft28, teslRight28, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:142
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft28)), teslrt.EncodeJSONValue(teslEncode2(teslRight28)))
 	}
 }
 
@@ -729,14 +771,14 @@ func TestTesl20(teslT *testing.T) {
 //line lifted-list-tests.tesl:146
 	if !teslrt.ListEqualBy(teslLeft29, teslRight29, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:146
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft29)), teslrt.EncodeJSONValue(teslEncode2(teslRight29)))
 	}
 	teslLeft30 := teslrt.ListRange(teslrt.FromInt64(3), teslrt.FromInt64(3))
 	teslRight30 := []teslrt.Int{}
 //line lifted-list-tests.tesl:147
 	if !teslrt.ListEqualBy(teslLeft30, teslRight30, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:147
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft30)), teslrt.EncodeJSONValue(teslEncode2(teslRight30)))
 	}
 }
 
@@ -757,14 +799,14 @@ func TestTesl21(teslT *testing.T) {
 //line lifted-list-tests.tesl:167
 	if !teslrt.ListEqualBy(teslLeft31, teslRight31, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:167
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft31)), teslrt.EncodeJSONValue(teslEncode2(teslRight31)))
 	}
 	teslLeft32 := repeatN(teslrt.FromInt64(7), teslrt.FromInt64(0))
 	teslRight32 := []teslrt.Int{}
 //line lifted-list-tests.tesl:168
 	if !teslrt.ListEqualBy(teslLeft32, teslRight32, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:168
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft32)), teslrt.EncodeJSONValue(teslEncode2(teslRight32)))
 	}
 }
 
@@ -793,7 +835,7 @@ func TestTesl22(teslT *testing.T) {
 //line lifted-list-tests.tesl:174
 	if !teslrt.Equal(teslLeft33, teslrt.FromInt64(6)) {
 //line lifted-list-tests.tesl:174
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft33), teslrt.DescribeValue(teslrt.FromInt64(6)))
 	}
 	teslLeft34 := (func() teslrt.Int {
 		teslState1 := teslrt.FromInt64(0)
@@ -809,7 +851,7 @@ func TestTesl22(teslT *testing.T) {
 //line lifted-list-tests.tesl:175
 	if !teslrt.Equal(teslLeft34, teslRight34) {
 //line lifted-list-tests.tesl:175
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft34), teslrt.DescribeValue(teslRight34))
 	}
 }
 
@@ -840,7 +882,7 @@ func TestTesl23(teslT *testing.T) {
 //line lifted-list-tests.tesl:179
 	if !teslrt.Equal(teslLeft35, teslrt.FromInt64(6)) {
 //line lifted-list-tests.tesl:179
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft35), teslrt.DescribeValue(teslrt.FromInt64(6)))
 	}
 }
 
@@ -861,14 +903,14 @@ func TestTesl24(teslT *testing.T) {
 //line lifted-list-tests.tesl:185
 	if !teslrt.ListEqualBy(teslLeft36, teslRight36, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:185
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft36)), teslrt.EncodeJSONValue(teslEncode2(teslRight36)))
 	}
 	teslLeft37 := takeN(teslrt.FromInt64(0), []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 	teslRight37 := []teslrt.Int{}
 //line lifted-list-tests.tesl:186
 	if !teslrt.ListEqualBy(teslLeft37, teslRight37, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:186
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft37)), teslrt.EncodeJSONValue(teslEncode2(teslRight37)))
 	}
 }
 
@@ -889,13 +931,13 @@ func TestTesl25(teslT *testing.T) {
 //line lifted-list-tests.tesl:190
 	if !teslrt.ListEqualBy(teslLeft38, teslRight38, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:190
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft38)), teslrt.EncodeJSONValue(teslEncode2(teslRight38)))
 	}
 	teslLeft39 := dropN(teslrt.FromInt64(0), []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 	teslRight39 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
 //line lifted-list-tests.tesl:191
 	if !teslrt.ListEqualBy(teslLeft39, teslRight39, teslEqualTeslrtInt) {
 //line lifted-list-tests.tesl:191
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft39)), teslrt.EncodeJSONValue(teslEncode2(teslRight39)))
 	}
 }

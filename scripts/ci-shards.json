@@ -57,6 +57,12 @@
       ]
     },
     {
+      "name": "Generated Elm clients compile (elm make)",
+      "owners": [
+        "compiler-integration"
+      ]
+    },
+    {
       "name": "Manual coherence suite (manual/tests)",
       "owners": [
         "compiler-integration"

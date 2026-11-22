@@ -86,7 +86,7 @@ class ShardEvidence(unittest.TestCase):
 
     def test_exact_union_passes(self):
         result = self.verify()
-        self.assertEqual(result['parent_phases'], 24)
+        self.assertEqual(result['parent_phases'], 25)
         self.assertEqual(result['go_gate_parts'], 2)
         self.assertEqual(result['migration_phases'], len(self.config['migration_phases']))
         self.assertEqual(result['status'], 'success')

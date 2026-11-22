@@ -164,6 +164,17 @@ func JSONFieldValue(object any, key string) (any, error) {
 	return jsonField(object, key)
 }
 
+// JSONFieldValueOptional is JSONFieldValue for a `Maybe` field read through `with_codec
+// Maybe`: an absent key is nil (Nothing) rather than an error, the same rule the derived
+// decoder applies. A non-object is still refused.
+func JSONFieldValueOptional(object any, key string) (any, error) {
+	fields, isObject := object.(map[string]any)
+	if !isObject {
+		return jsonField(object, key)
+	}
+	return fields[key], nil
+}
+
 // jsonTypeName names a parsed JSON shape for an error message. It lives HERE rather than beside
 // the api-test assertions because `json.go` ships with every program while the api-test half
 // does not, and the ADT tag decoder below needs it.
@@ -273,13 +284,21 @@ func EncodeJSONValue(value any) string {
 // value to take, and an EXTRA field is a 400 too, which is the surprising half: silently
 // ignoring unknown keys is how a typo'd field name becomes a silent default.
 func DecodeObjectShape(raw any, typeName string, expected []string) (map[string]any, error) {
+	return DecodeObjectShapeOptional(raw, typeName, expected, nil)
+}
+
+// DecodeObjectShapeOptional is DecodeObjectShape for a record with `Maybe` fields: a key in
+// `optional` may be absent, which reads as Nothing — absence is the natural spelling of "no
+// value" for a client, and refusing it made an optional request field impossible to send.
+// Extra keys are still refused.
+func DecodeObjectShapeOptional(raw any, typeName string, expected, optional []string) (map[string]any, error) {
 	fields, ok := raw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("expected record JSON for type %s, got %s", typeName, jsonTypeName(raw))
 	}
 	missing := make([]string, 0, len(expected))
 	for _, name := range expected {
-		if _, present := fields[name]; !present {
+		if _, present := fields[name]; !present && !containsName(optional, name) {
 			missing = append(missing, name)
 		}
 	}

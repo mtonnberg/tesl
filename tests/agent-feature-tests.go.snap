@@ -303,7 +303,7 @@ func TestTesl0(teslT *testing.T) {
 //line agent-feature-tests.tesl:185
 		if teslLeft1 != "hello" {
 //line agent-feature-tests.tesl:185
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "hello")
 		}
 	}
 }
@@ -328,7 +328,7 @@ func TestTesl1(teslT *testing.T) {
 //line agent-feature-tests.tesl:190
 		if teslLeft2 != "The answer is 42." {
 //line agent-feature-tests.tesl:190
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "The answer is 42.")
 		}
 	}
 }
@@ -349,7 +349,7 @@ func TestTesl2(teslT *testing.T) {
 //line agent-feature-tests.tesl:194
 	if teslLeft3 != "wrapped reply" {
 //line agent-feature-tests.tesl:194
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "wrapped reply")
 	}
 }
 
@@ -373,19 +373,19 @@ func TestTesl3(teslT *testing.T) {
 //line agent-feature-tests.tesl:199
 		if teslLeft4 != "first" {
 //line agent-feature-tests.tesl:199
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "first")
 		}
 		teslLeft5 := teslrt.Ask(agent, "b")
 //line agent-feature-tests.tesl:200
 		if teslLeft5 != "second" {
 //line agent-feature-tests.tesl:200
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "second")
 		}
 		teslLeft6 := teslrt.Ask(agent, "c")
 //line agent-feature-tests.tesl:201
 		if teslLeft6 != "third" {
 //line agent-feature-tests.tesl:201
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft6, "third")
 		}
 	}
 }
@@ -410,7 +410,7 @@ func TestTesl4(teslT *testing.T) {
 //line agent-feature-tests.tesl:206
 		if teslLeft7 != "fixed" {
 //line agent-feature-tests.tesl:206
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "fixed")
 		}
 	}
 }
@@ -435,7 +435,7 @@ func TestTesl5(teslT *testing.T) {
 //line agent-feature-tests.tesl:211
 		if teslLeft8 != "ok" {
 //line agent-feature-tests.tesl:211
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "ok")
 		}
 	}
 }
@@ -460,7 +460,7 @@ func TestTesl6(teslT *testing.T) {
 //line agent-feature-tests.tesl:216
 		if teslLeft9 != "" {
 //line agent-feature-tests.tesl:216
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "")
 		}
 	}
 }
@@ -485,7 +485,7 @@ func TestTesl7(teslT *testing.T) {
 //line agent-feature-tests.tesl:221
 		if teslLeft10 != "caf\xc3\xa9 \xe2\x80\x94 na\xc3\xafve \xe2\x9c\x93" {
 //line agent-feature-tests.tesl:221
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft10, "caf\xc3\xa9 \xe2\x80\x94 na\xc3\xafve \xe2\x9c\x93")
 		}
 	}
 }
@@ -514,13 +514,13 @@ func TestTesl8(teslT *testing.T) {
 //line agent-feature-tests.tesl:227
 			if teslLeft11 != "from a1" {
 //line agent-feature-tests.tesl:227
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "from a1")
 			}
 			teslLeft12 := teslrt.Ask(a2, "hi")
 //line agent-feature-tests.tesl:228
 			if teslLeft12 != "from a2" {
 //line agent-feature-tests.tesl:228
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "from a2")
 			}
 		}
 	}
@@ -550,7 +550,7 @@ func TestTesl9(teslT *testing.T) {
 //line agent-feature-tests.tesl:238
 			if teslLeft13 != "reply body" {
 //line agent-feature-tests.tesl:238
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "reply body")
 			}
 		}
 	}
@@ -580,7 +580,7 @@ func TestTesl10(teslT *testing.T) {
 //line agent-feature-tests.tesl:244
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
 //line agent-feature-tests.tesl:244
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 		}
 	}
@@ -640,7 +640,7 @@ func TestTesl12(teslT *testing.T) {
 //line agent-feature-tests.tesl:256
 			if teslLeft15 != teslRight15 {
 //line agent-feature-tests.tesl:256
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft15, teslRight15)
 			}
 		}
 	}
@@ -666,7 +666,7 @@ func TestTesl13(teslT *testing.T) {
 //line agent-feature-tests.tesl:261
 		if teslLeft16 != "plain text" {
 //line agent-feature-tests.tesl:261
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft16, "plain text")
 		}
 	}
 }
@@ -707,13 +707,13 @@ func TestTesl14(teslT *testing.T) {
 //line agent-feature-tests.tesl:279
 						if teslLeft17 != "It is sunny." {
 //line agent-feature-tests.tesl:279
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft17, "It is sunny.")
 						}
 						teslLeft18 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:280
 						if !teslrt.Equal(teslLeft18, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:280
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -762,13 +762,13 @@ func TestTesl15(teslT *testing.T) {
 //line agent-feature-tests.tesl:290
 							if teslLeft19 != "Both checked." {
 //line agent-feature-tests.tesl:290
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft19, "Both checked.")
 							}
 							teslLeft20 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:291
 							if !teslrt.Equal(teslLeft20, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:291
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(2)))
 							}
 						}
 					}
@@ -822,7 +822,7 @@ func TestTesl16(teslT *testing.T) {
 //line agent-feature-tests.tesl:302
 								if !teslrt.Equal(teslLeft21, teslrt.FromInt64(3)) {
 //line agent-feature-tests.tesl:302
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft21), teslrt.DescribeValue(teslrt.FromInt64(3)))
 								}
 							}
 						}
@@ -869,13 +869,13 @@ func TestTesl17(teslT *testing.T) {
 //line agent-feature-tests.tesl:311
 						if teslLeft22 != "Computed." {
 //line agent-feature-tests.tesl:311
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft22, "Computed.")
 						}
 						teslLeft23 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:312
 						if !teslrt.Equal(teslLeft23, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:312
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft23), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -920,13 +920,13 @@ func TestTesl18(teslT *testing.T) {
 //line agent-feature-tests.tesl:321
 						if teslLeft24 != "Set." {
 //line agent-feature-tests.tesl:321
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft24, "Set.")
 						}
 						teslLeft25 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:322
 						if !teslrt.Equal(teslLeft25, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:322
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -971,13 +971,13 @@ func TestTesl19(teslT *testing.T) {
 //line agent-feature-tests.tesl:331
 						if teslLeft26 != "Cleared." {
 //line agent-feature-tests.tesl:331
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft26, "Cleared.")
 						}
 						teslLeft27 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:332
 						if !teslrt.Equal(teslLeft27, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:332
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft27), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -1014,13 +1014,13 @@ func TestTesl20(teslT *testing.T) {
 //line agent-feature-tests.tesl:339
 				if teslLeft28 != "no tools needed" {
 //line agent-feature-tests.tesl:339
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft28, "no tools needed")
 				}
 				teslLeft29 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:340
 				if !teslrt.Equal(teslLeft29, teslrt.FromInt64(0)) {
 //line agent-feature-tests.tesl:340
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft29), teslrt.DescribeValue(teslrt.FromInt64(0)))
 				}
 			}
 		}
@@ -1067,13 +1067,13 @@ func TestTesl21(teslT *testing.T) {
 //line agent-feature-tests.tesl:350
 							if teslLeft30 != "picked add" {
 //line agent-feature-tests.tesl:350
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft30, "picked add")
 							}
 							teslLeft31 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:351
 							if !teslrt.Equal(teslLeft31, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:351
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft31), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -1119,13 +1119,13 @@ func TestTesl22(teslT *testing.T) {
 //line agent-feature-tests.tesl:364
 						if teslLeft32 != "Sorry, could not look that up." {
 //line agent-feature-tests.tesl:364
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft32, "Sorry, could not look that up.")
 						}
 						teslLeft33 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:365
 						if !teslrt.Equal(teslLeft33, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:365
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft33), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -1170,13 +1170,13 @@ func TestTesl23(teslT *testing.T) {
 //line agent-feature-tests.tesl:374
 						if teslLeft34 != "recovered" {
 //line agent-feature-tests.tesl:374
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft34, "recovered")
 						}
 						teslLeft35 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:375
 						if !teslrt.Equal(teslLeft35, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:375
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft35), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -1221,13 +1221,13 @@ func TestTesl24(teslT *testing.T) {
 //line agent-feature-tests.tesl:384
 						if teslLeft36 != "no city given" {
 //line agent-feature-tests.tesl:384
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft36, "no city given")
 						}
 						teslLeft37 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:385
 						if !teslrt.Equal(teslLeft37, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:385
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft37), teslrt.DescribeValue(teslrt.FromInt64(1)))
 						}
 					}
 				}
@@ -1276,13 +1276,13 @@ func TestTesl25(teslT *testing.T) {
 //line agent-feature-tests.tesl:395
 							if teslLeft38 != "Looked up Lund." {
 //line agent-feature-tests.tesl:395
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft38, "Looked up Lund.")
 							}
 							teslLeft39 := teslrt.ReplyToolCalls(reply)
 //line agent-feature-tests.tesl:396
 							if !teslrt.Equal(teslLeft39, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:396
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft39), teslrt.DescribeValue(teslrt.FromInt64(2)))
 							}
 						}
 					}
@@ -1316,13 +1316,13 @@ func TestTesl26(teslT *testing.T) {
 //line agent-feature-tests.tesl:406
 			if teslLeft40 != "All good" {
 //line agent-feature-tests.tesl:406
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft40, "All good")
 			}
 			teslLeft41 := summary.Score
 //line agent-feature-tests.tesl:407
 			if !teslrt.Equal(teslLeft41, teslrt.FromInt64(42)) {
 //line agent-feature-tests.tesl:407
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft41), teslrt.DescribeValue(teslrt.FromInt64(42)))
 			}
 		}
 	}
@@ -1352,7 +1352,7 @@ func TestTesl27(teslT *testing.T) {
 //line agent-feature-tests.tesl:413
 			if teslLeft42 != "positive" {
 //line agent-feature-tests.tesl:413
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft42, "positive")
 			}
 		}
 	}
@@ -1378,7 +1378,7 @@ func TestTesl28(teslT *testing.T) {
 //line agent-feature-tests.tesl:418
 		if teslLeft43 != "positive" {
 //line agent-feature-tests.tesl:418
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft43, "positive")
 		}
 	}
 }
@@ -1407,13 +1407,13 @@ func TestTesl29(teslT *testing.T) {
 //line agent-feature-tests.tesl:424
 			if teslLeft44 != "One shot" {
 //line agent-feature-tests.tesl:424
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft44, "One shot")
 			}
 			teslLeft45 := summary.Score
 //line agent-feature-tests.tesl:425
 			if !teslrt.Equal(teslLeft45, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:425
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft45), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -1444,7 +1444,7 @@ func TestTesl30(teslT *testing.T) {
 //line agent-feature-tests.tesl:431
 			if !teslrt.Equal(teslLeft46, teslRight46) {
 //line agent-feature-tests.tesl:431
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft46), teslrt.DescribeValue(teslRight46))
 			}
 		}
 	}
@@ -1474,13 +1474,13 @@ func TestTesl31(teslT *testing.T) {
 //line agent-feature-tests.tesl:441
 			if teslLeft47 != "Recovered" {
 //line agent-feature-tests.tesl:441
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft47, "Recovered")
 			}
 			teslLeft48 := summary.Score
 //line agent-feature-tests.tesl:442
 			if !teslrt.Equal(teslLeft48, teslrt.FromInt64(7)) {
 //line agent-feature-tests.tesl:442
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft48), teslrt.DescribeValue(teslrt.FromInt64(7)))
 			}
 		}
 	}
@@ -1510,13 +1510,13 @@ func TestTesl32(teslT *testing.T) {
 //line agent-feature-tests.tesl:448
 			if teslLeft49 != "Third" {
 //line agent-feature-tests.tesl:448
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft49, "Third")
 			}
 			teslLeft50 := summary.Score
 //line agent-feature-tests.tesl:449
 			if !teslrt.Equal(teslLeft50, teslrt.FromInt64(3)) {
 //line agent-feature-tests.tesl:449
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft50), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 		}
 	}
@@ -1546,7 +1546,7 @@ func TestTesl33(teslT *testing.T) {
 //line agent-feature-tests.tesl:455
 			if teslLeft51 != "neutral" {
 //line agent-feature-tests.tesl:455
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft51, "neutral")
 			}
 		}
 	}
@@ -1576,13 +1576,13 @@ func TestTesl34(teslT *testing.T) {
 //line agent-feature-tests.tesl:463
 			if teslLeft52 != "A" {
 //line agent-feature-tests.tesl:463
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft52, "A")
 			}
 			teslLeft53 := (teslrt.AskFor(a2, "y", decodeSummary, teslrt.FromInt64(2))).Title
 //line agent-feature-tests.tesl:464
 			if teslLeft53 != "B" {
 //line agent-feature-tests.tesl:464
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft53, "B")
 			}
 		}
 	}
@@ -1616,7 +1616,7 @@ func TestTesl35(teslT *testing.T) {
 //line agent-feature-tests.tesl:475
 				if teslLeft54 != "override reply" {
 //line agent-feature-tests.tesl:475
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft54, "override reply")
 				}
 			}
 		}
@@ -1647,7 +1647,7 @@ func TestTesl36(teslT *testing.T) {
 //line agent-feature-tests.tesl:481
 			if teslLeft55 != "right" {
 //line agent-feature-tests.tesl:481
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft55, "right")
 			}
 		}
 	}
@@ -1681,13 +1681,13 @@ func TestTesl37(teslT *testing.T) {
 //line agent-feature-tests.tesl:488
 				if teslLeft56 != "o1" {
 //line agent-feature-tests.tesl:488
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft56, "o1")
 				}
 				teslLeft57 := teslrt.ReplyText(r2)
 //line agent-feature-tests.tesl:489
 				if teslLeft57 != "o2" {
 //line agent-feature-tests.tesl:489
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft57, "o2")
 				}
 			}
 		}
@@ -1718,7 +1718,7 @@ func TestTesl38(teslT *testing.T) {
 //line agent-feature-tests.tesl:495
 			if !teslrt.Equal(teslLeft58, teslrt.FromInt64(0)) {
 //line agent-feature-tests.tesl:495
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft58), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 		}
 	}
@@ -1756,13 +1756,13 @@ func TestTesl39(teslT *testing.T) {
 //line agent-feature-tests.tesl:507
 					if teslLeft59 != "First reply about cats" {
 //line agent-feature-tests.tesl:507
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft59, "First reply about cats")
 					}
 					teslLeft60 := teslrt.ConversationLength(conv1)
 //line agent-feature-tests.tesl:508
 					if !teslrt.Equal(teslLeft60, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:508
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft60), teslrt.DescribeValue(teslrt.FromInt64(2)))
 					}
 					{
 //line agent-feature-tests.tesl:509
@@ -1776,13 +1776,13 @@ func TestTesl39(teslT *testing.T) {
 //line agent-feature-tests.tesl:511
 							if teslLeft61 != "Second reply still about cats" {
 //line agent-feature-tests.tesl:511
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft61, "Second reply still about cats")
 							}
 							teslLeft62 := teslrt.ConversationLength(conv2)
 //line agent-feature-tests.tesl:512
 							if !teslrt.Equal(teslLeft62, teslrt.FromInt64(4)) {
 //line agent-feature-tests.tesl:512
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft62), teslrt.DescribeValue(teslrt.FromInt64(4)))
 							}
 							{
 //line agent-feature-tests.tesl:513
@@ -1836,7 +1836,7 @@ func TestTesl40(teslT *testing.T) {
 //line agent-feature-tests.tesl:522
 			if !teslrt.Equal(teslLeft63, teslrt.FromInt64(0)) {
 //line agent-feature-tests.tesl:522
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft63), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 		}
 	}
@@ -1870,7 +1870,7 @@ func TestTesl41(teslT *testing.T) {
 //line agent-feature-tests.tesl:529
 				if !teslrt.Equal(teslLeft64, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:529
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft64), teslrt.DescribeValue(teslrt.FromInt64(2)))
 				}
 			}
 		}
@@ -1913,19 +1913,19 @@ func TestTesl42(teslT *testing.T) {
 //line agent-feature-tests.tesl:538
 						if !teslrt.Equal(teslLeft65, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:538
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft65), teslrt.DescribeValue(teslrt.FromInt64(2)))
 						}
 						teslLeft66 := teslrt.ConversationLength(c2)
 //line agent-feature-tests.tesl:539
 						if !teslrt.Equal(teslLeft66, teslrt.FromInt64(4)) {
 //line agent-feature-tests.tesl:539
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft66), teslrt.DescribeValue(teslrt.FromInt64(4)))
 						}
 						teslLeft67 := teslrt.ConversationLength(c3)
 //line agent-feature-tests.tesl:540
 						if !teslrt.Equal(teslLeft67, teslrt.FromInt64(6)) {
 //line agent-feature-tests.tesl:540
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft67), teslrt.DescribeValue(teslrt.FromInt64(6)))
 						}
 					}
 				}
@@ -1966,13 +1966,13 @@ func TestTesl43(teslT *testing.T) {
 //line agent-feature-tests.tesl:548
 					if teslLeft68 != "alpha" {
 //line agent-feature-tests.tesl:548
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft68, "alpha")
 					}
 					teslLeft69 := teslrt.ReplyText(teslrt.TurnReply(t2))
 //line agent-feature-tests.tesl:549
 					if teslLeft69 != "beta" {
 //line agent-feature-tests.tesl:549
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft69, "beta")
 					}
 				}
 			}
@@ -2153,7 +2153,7 @@ func TestTesl47(teslT *testing.T) {
 //line agent-feature-tests.tesl:591
 						if !teslrt.Equal(teslLeft70, teslrt.FromInt64(2)) {
 //line agent-feature-tests.tesl:591
-							teslT.Fatal("Tesl expectation failed")
+							teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft70), teslrt.DescribeValue(teslrt.FromInt64(2)))
 						}
 						{
 //line agent-feature-tests.tesl:592
@@ -2167,13 +2167,13 @@ func TestTesl47(teslT *testing.T) {
 //line agent-feature-tests.tesl:594
 								if teslLeft71 != "Reply two" {
 //line agent-feature-tests.tesl:594
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft71, "Reply two")
 								}
 								teslLeft72 := teslrt.ConversationLength(conv2)
 //line agent-feature-tests.tesl:595
 								if !teslrt.Equal(teslLeft72, teslrt.FromInt64(4)) {
 //line agent-feature-tests.tesl:595
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft72), teslrt.DescribeValue(teslrt.FromInt64(4)))
 								}
 								{
 //line agent-feature-tests.tesl:596
@@ -2240,7 +2240,7 @@ func TestTesl48(teslT *testing.T) {
 //line agent-feature-tests.tesl:608
 							if !teslrt.Equal(teslLeft73, teslRight73) {
 //line agent-feature-tests.tesl:608
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft73), teslrt.DescribeValue(teslRight73))
 							}
 						}
 					}
@@ -2327,7 +2327,7 @@ func TestTesl50(teslT *testing.T) {
 //line agent-feature-tests.tesl:625
 				if !teslrt.Equal(teslLeft74, teslrt.FromInt64(0)) {
 //line agent-feature-tests.tesl:625
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft74), teslrt.DescribeValue(teslrt.FromInt64(0)))
 				}
 			}
 		}
@@ -2354,7 +2354,7 @@ func TestTesl51(teslT *testing.T) {
 //line agent-feature-tests.tesl:635
 		if teslLeft75 != "cap ok" {
 //line agent-feature-tests.tesl:635
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft75, "cap ok")
 		}
 	}
 }
@@ -2379,7 +2379,7 @@ func TestTesl52(teslT *testing.T) {
 //line agent-feature-tests.tesl:640
 		if teslLeft76 != "cap reply" {
 //line agent-feature-tests.tesl:640
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft76, "cap reply")
 		}
 	}
 }
@@ -2404,7 +2404,7 @@ func TestTesl53(teslT *testing.T) {
 //line agent-feature-tests.tesl:645
 		if teslLeft77 != "byok ok" {
 //line agent-feature-tests.tesl:645
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft77, "byok ok")
 		}
 	}
 }
@@ -2429,7 +2429,7 @@ func TestTesl54(teslT *testing.T) {
 //line agent-feature-tests.tesl:650
 		if teslLeft78 != "ok" {
 //line agent-feature-tests.tesl:650
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft78, "ok")
 		}
 	}
 }
@@ -2458,7 +2458,7 @@ func TestTesl55(teslT *testing.T) {
 //line agent-feature-tests.tesl:656
 			if teslLeft79 != "cap converse" {
 //line agent-feature-tests.tesl:656
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft79, "cap converse")
 			}
 		}
 	}
@@ -2484,13 +2484,13 @@ func TestTesl56(teslT *testing.T) {
 //line agent-feature-tests.tesl:665
 		if teslLeft80 != "direct" {
 //line agent-feature-tests.tesl:665
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft80, "direct")
 		}
 		teslLeft81 := s.Score
 //line agent-feature-tests.tesl:666
 		if !teslrt.Equal(teslLeft81, teslrt.FromInt64(9)) {
 //line agent-feature-tests.tesl:666
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft81), teslrt.DescribeValue(teslrt.FromInt64(9)))
 		}
 	}
 }
@@ -2523,7 +2523,7 @@ func TestTesl57(teslT *testing.T) {
 //line agent-feature-tests.tesl:673
 				if !teslrt.Equal(teslLeft82, teslrt.FromInt64(1)) {
 //line agent-feature-tests.tesl:673
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft82), teslrt.DescribeValue(teslrt.FromInt64(1)))
 				}
 				{
 //line agent-feature-tests.tesl:674
@@ -2533,7 +2533,7 @@ func TestTesl57(teslT *testing.T) {
 //line agent-feature-tests.tesl:675
 					if teslLeft83 != "positive" {
 //line agent-feature-tests.tesl:675
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft83, "positive")
 					}
 				}
 			}
@@ -2573,7 +2573,7 @@ func TestTesl58(teslT *testing.T) {
 //line agent-feature-tests.tesl:683
 					if teslLeft84 != "happy" {
 //line agent-feature-tests.tesl:683
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft84, "happy")
 					}
 				}
 			}
@@ -2605,7 +2605,7 @@ func TestTesl59(teslT *testing.T) {
 //line agent-feature-tests.tesl:689
 			if teslLeft85 != "no call" {
 //line agent-feature-tests.tesl:689
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft85, "no call")
 			}
 		}
 	}

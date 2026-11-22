@@ -1495,6 +1495,7 @@ api-test "subscribers receive published room events" for ChatServer {
 - Read events with `collect <stream> count <n> timeout <ms>` (both clauses required)
 - Trigger publishes through the endpoint under test
 - Assert on event order (positional) and content
+- Assert a REFUSED subscription with a plain request: `get "<route>"` answers the route's status (`401` from its `auth`) and, when accepted, `200` with `content-type: text/event-stream` and an empty body; `subscribe` itself traps on refusal
 
 ### 6. Load Tests
 

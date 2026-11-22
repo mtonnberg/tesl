@@ -116,20 +116,21 @@ let test_the_fallthrough_names_what_it_refuses () =
     check bool "checker refusal names the export" true (contains message "`Span`")
 
 let test_unavailable_export_is_rejected_by_checker () =
-  match probe "Tesl.List" "List.nth" with
+  match probe "Tesl.Json" "int32Codec" with
   | Rejected message ->
     check bool "names backend" true (contains message "Go backend");
-    check bool "names module" true (contains message "`Tesl.List`");
-    check bool "names export" true (contains message "`List.nth`")
+    check bool "names module" true (contains message "`Tesl.Json`");
+    check bool "names export" true (contains message "`int32Codec`")
   | Refused message ->
     failf "unavailable export reached the emitter instead of the checker: %s" message
   | Wired -> fail "unavailable export unexpectedly compiled"
 
 let test_import_all_rejects_unavailable_use () =
-  let source = {|module GoImportAllProbe exposing [dedupe]
-import Tesl.Prelude exposing [Int, List]
-import Tesl.List
-fn dedupe(xs: List Int) -> List Int = List.dedupe xs
+  let source = {|module GoImportAllProbe exposing [codecName]
+import Tesl.Prelude exposing [String]
+import Tesl.UUID
+fn codecName() -> String =
+  uuidV4Codec
 |} in
   match Compile.compile_go_source "<go-import-all-probe>" source with
   | Compile.GoSuccess _ -> fail "qualified unavailable export unexpectedly compiled"
@@ -137,7 +138,7 @@ fn dedupe(xs: List Int) -> List Int = List.dedupe xs
     let message = String.concat "; "
       (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
     check bool "names backend" true (contains message "Go backend");
-    check bool "names unavailable use" true (contains message "`List.dedupe`")
+    check bool "names unavailable use" true (contains message "`uuidV4Codec`")
 
 (* ── The `App` field inventory ─────────────────────────────────────────────────
    `App { … }` is the startup surface: `Desugar.lower_main_app` reads its fields and turns them

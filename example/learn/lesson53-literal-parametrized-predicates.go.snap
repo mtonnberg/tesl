@@ -281,19 +281,19 @@ func TestTesl0(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:188
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
 //line lesson53-literal-parametrized-predicates.tesl:188
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft2 := TestAllBounds(teslrt.FromInt64(50))
 //line lesson53-literal-parametrized-predicates.tesl:189
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(50)) {
 //line lesson53-literal-parametrized-predicates.tesl:189
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(50)))
 	}
 	teslLeft3 := TestAllBounds(teslrt.FromInt64(100))
 //line lesson53-literal-parametrized-predicates.tesl:190
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(100)) {
 //line lesson53-literal-parametrized-predicates.tesl:190
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(100)))
 	}
 //line lesson53-literal-parametrized-predicates.tesl:193
 	teslExpectFailure(teslT, func() {
@@ -315,7 +315,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:199
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(10)) {
 //line lesson53-literal-parametrized-predicates.tesl:199
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(10)))
 			}
 			{
 //line lesson53-literal-parametrized-predicates.tesl:202
@@ -329,7 +329,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:204
 					if !teslrt.Equal(teslLeft5, teslrt.FromInt64(20)) {
 //line lesson53-literal-parametrized-predicates.tesl:204
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(20)))
 					}
 					{
 //line lesson53-literal-parametrized-predicates.tesl:207
@@ -366,7 +366,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:213
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(80)) {
 //line lesson53-literal-parametrized-predicates.tesl:213
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(80)))
 		}
 		{
 //line lesson53-literal-parametrized-predicates.tesl:215
@@ -383,7 +383,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:218
 					if !teslrt.Equal(result, teslrt.FromInt64(443)) {
 //line lesson53-literal-parametrized-predicates.tesl:218
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(result), teslrt.DescribeValue(teslrt.FromInt64(443)))
 					}
 				}
 			}
@@ -407,19 +407,19 @@ func TestTesl2(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:222
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(50)) {
 //line lesson53-literal-parametrized-predicates.tesl:222
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(50)))
 	}
 	teslLeft9 := testClampedLet(teslrt.FromInt64(1))
 //line lesson53-literal-parametrized-predicates.tesl:223
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(1)) {
 //line lesson53-literal-parametrized-predicates.tesl:223
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft10 := testClampedLet(teslrt.FromInt64(100))
 //line lesson53-literal-parametrized-predicates.tesl:224
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(100)) {
 //line lesson53-literal-parametrized-predicates.tesl:224
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(100)))
 	}
 //line lesson53-literal-parametrized-predicates.tesl:225
 	teslExpectFailure(teslT, func() {
@@ -447,25 +447,25 @@ func TestTesl3(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:231
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {
 //line lesson53-literal-parametrized-predicates.tesl:231
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft12 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(13)})
 //line lesson53-literal-parametrized-predicates.tesl:232
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1)) {
 //line lesson53-literal-parametrized-predicates.tesl:232
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft13 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(5), teslrt.FromInt64(8), teslrt.FromInt64(9)})
 //line lesson53-literal-parametrized-predicates.tesl:233
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
 //line lesson53-literal-parametrized-predicates.tesl:233
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft14 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(10), teslrt.FromInt64(100), teslrt.FromInt64(110)})
 //line lesson53-literal-parametrized-predicates.tesl:234
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(2)) {
 //line lesson53-literal-parametrized-predicates.tesl:234
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	{
 //line lesson53-literal-parametrized-predicates.tesl:237
@@ -475,7 +475,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:238
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(45)) {
 //line lesson53-literal-parametrized-predicates.tesl:238
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(45)))
 		}
 		{
 //line lesson53-literal-parametrized-predicates.tesl:241
@@ -485,7 +485,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson53-literal-parametrized-predicates.tesl:242
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
 //line lesson53-literal-parametrized-predicates.tesl:242
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 		}
 	}

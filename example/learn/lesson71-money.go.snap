@@ -145,31 +145,31 @@ func TestTesl0(teslT *testing.T) {
 //line lesson71-money.tesl:130
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1050)) {
 //line lesson71-money.tesl:130
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1050)))
 		}
 		teslLeft2 := teslrt.MoneyDisplay(price)
 //line lesson71-money.tesl:131
 		if teslLeft2 != "$10.50" {
 //line lesson71-money.tesl:131
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "$10.50")
 		}
 		teslLeft3 := teslrt.MoneyDisplay(teslrt.MoneyFromMinorUnits(teslrt.CurrencyOf("JPY", 0), teslrt.FromInt64(1000)))
 //line lesson71-money.tesl:132
 		if teslLeft3 != "\xc2\xa51000" {
 //line lesson71-money.tesl:132
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "\xc2\xa51000")
 		}
 		teslLeft4 := teslrt.MoneyDisplay(teslrt.MoneyOf(teslrt.FromInt64(1050), "SEK", 2))
 //line lesson71-money.tesl:133
 		if teslLeft4 != "10.50 SEK" {
 //line lesson71-money.tesl:133
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft4, "10.50 SEK")
 		}
 		teslLeft5 := ShowPrice()
 //line lesson71-money.tesl:134
 		if teslLeft5 != "$10.50" {
 //line lesson71-money.tesl:134
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft5, "$10.50")
 		}
 	}
 }
@@ -195,7 +195,7 @@ func TestTesl1(teslT *testing.T) {
 //line lesson71-money.tesl:139
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(597)) {
 //line lesson71-money.tesl:139
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(597)))
 		}
 	}
 }
@@ -225,7 +225,7 @@ func TestTesl2(teslT *testing.T) {
 //line lesson71-money.tesl:145
 			if teslLeft7 != "$12.50" {
 //line lesson71-money.tesl:145
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft7, "$12.50")
 			}
 		}
 	}
@@ -252,7 +252,7 @@ func TestTesl3(teslT *testing.T) {
 //line lesson71-money.tesl:151
 		if teslLeft8 != "\xe2\x82\xac9.16" {
 //line lesson71-money.tesl:151
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft8, "\xe2\x82\xac9.16")
 		}
 	}
 }
@@ -278,7 +278,7 @@ func TestTesl4(teslT *testing.T) {
 //line lesson71-money.tesl:156
 		if teslLeft9 != "exchange rate is FROM EUR but amount is in USD" {
 //line lesson71-money.tesl:156
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft9, "exchange rate is FROM EUR but amount is in USD")
 		}
 	}
 }
@@ -304,7 +304,7 @@ func TestTesl5(teslT *testing.T) {
 //line lesson71-money.tesl:161
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(916)) {
 //line lesson71-money.tesl:161
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(916)))
 		}
 	}
 }
@@ -332,7 +332,7 @@ func TestTesl6(teslT *testing.T) {
 //line lesson71-money.tesl:167
 			if teslLeft11 != "$15.50" {
 //line lesson71-money.tesl:167
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft11, "$15.50")
 			}
 		}
 	}
@@ -359,19 +359,19 @@ func TestTesl7(teslT *testing.T) {
 //line lesson71-money.tesl:181
 		if teslLeft12 != "950.00 SEK/h" {
 //line lesson71-money.tesl:181
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft12, "950.00 SEK/h")
 		}
 		teslLeft13 := teslrt.MoneyDisplay(consultantInvoice(hourly, teslrt.DurationHours(float64(1.5))))
 //line lesson71-money.tesl:182
 		if teslLeft13 != "1425.00 SEK" {
 //line lesson71-money.tesl:182
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft13, "1425.00 SEK")
 		}
 		teslLeft14 := teslrt.MoneyDisplay(consultantInvoice(hourly, teslrt.DurationMinutes(float64(3e+01))))
 //line lesson71-money.tesl:183
 		if teslLeft14 != "475.00 SEK" {
 //line lesson71-money.tesl:183
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft14, "475.00 SEK")
 		}
 	}
 }

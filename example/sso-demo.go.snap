@@ -86,7 +86,7 @@ var DemoServer = teslrt.Server{
 func init() {
 	teslrt.SetPublicOriginValue("https://demo.example.com")
 	teslrt.SetSessionPolicy(teslrt.SessionPolicyTTL("ShortSession"))
-	teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret("PREVIOUS_SESSION_KEY")))
+	teslrt.SetPreviousSessionKeyEnv("PREVIOUS_SESSION_KEY")
 	teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {
 		return revoked(teslSubject, teslrt.SecondsToPosix(teslrt.FromInt64(teslIssuedAt)))
 	})

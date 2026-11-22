@@ -361,7 +361,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson26-time-and-posix.tesl:321
 			if teslLeft1 != "5m ago" {
 //line lesson26-time-and-posix.tesl:321
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "5m ago")
 			}
 			{
 //line lesson26-time-and-posix.tesl:323
@@ -371,7 +371,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson26-time-and-posix.tesl:324
 				if teslLeft2 != "2h ago" {
 //line lesson26-time-and-posix.tesl:324
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft2, "2h ago")
 				}
 				{
 //line lesson26-time-and-posix.tesl:326
@@ -381,7 +381,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson26-time-and-posix.tesl:327
 					if teslLeft3 != "just now" {
 //line lesson26-time-and-posix.tesl:327
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft3, "just now")
 					}
 				}
 			}
@@ -479,13 +479,13 @@ func TestTesl3(teslT *testing.T) {
 //line lesson26-time-and-posix.tesl:348
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1500)) {
 //line lesson26-time-and-posix.tesl:348
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1500)))
 			}
 			teslLeft5 := teslrt.DiffMs(t1, teslrt.AddMs(t1, teslrt.FromInt64(500)))
 //line lesson26-time-and-posix.tesl:350
 			if !teslrt.Equal(teslLeft5, teslrt.FromInt64(500)) {
 //line lesson26-time-and-posix.tesl:350
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(500)))
 			}
 		}
 	}

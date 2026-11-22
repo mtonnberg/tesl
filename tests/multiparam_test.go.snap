@@ -80,7 +80,7 @@ func TestTesl0(teslT *testing.T) {
 //line multiparam_test.tesl:21
 					if teslLeft1 != "5 is in [1, 10]" {
 //line multiparam_test.tesl:21
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "5 is in [1, 10]")
 					}
 				}
 			}

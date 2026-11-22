@@ -31,6 +31,8 @@
 #   4a. Doc integrity         tests/doc-integrity.sh — relative links, cited
 #                             #anchors, MANUAL.md ↔ `tesl help manual` round-trip,
 #                             orphan docs, hand-typed corpus counts
+#  4a2. Elm clients           tests/elm-client-compile.sh — every corpus
+#                             program's generated Elm client passes elm make
 #   4b. Manual coherence      manual/tests — the standalone dune project guarding
 #                             the anchor contract + doc-prose lints (str/unix only)
 #    5. Format                tesl fmt (in place), bounded xargs -P pool
@@ -961,6 +963,25 @@ elif [ "$_docint_rc" -eq 77 ]; then
     phase_end SKIP
 else
     phase_end FAIL
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 4a2 — Generated Elm clients compile
+# ══════════════════════════════════════════════════════════════════════════════
+# `tesl generate elm` output is compiled by nothing else in this gate, and a
+# downstream project found four distinct generator bugs only by committing the
+# client; a corpus sweep then found 71 of 76
+# clients did not compile.  tests/elm-client-compile.sh generates every corpus
+# program's client and runs `elm make` against the offline package cache.  It
+# self-SKIPs (exit 0, logged) without elm or a cached package.
+if ci_phase_selected "Generated Elm clients compile (elm make)"; then
+phase_begin "Generated Elm clients compile (elm make)"
+if TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe" \
+    bash "$SCRIPT_DIR/tests/elm-client-compile.sh"; then
+    phase_end OK
+else
+    phase_end FAIL
+fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1305,6 +1305,20 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 	teslThunk()
 }
 
+func teslEncode1(teslValue string) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue []string) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode1(teslItem)
+		}
+		return teslOut
+	}()
+}
+
 func teslEqualString(teslX, teslY string) bool {
 	return (teslX == teslY)
 }
@@ -1325,7 +1339,7 @@ func TestTesl0(teslT *testing.T) {
 //line civil-time-tests.tesl:76
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(0)) {
 //line civil-time-tests.tesl:76
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	{
 //line civil-time-tests.tesl:77
@@ -1335,19 +1349,19 @@ func TestTesl0(teslT *testing.T) {
 //line civil-time-tests.tesl:78
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1970)) {
 //line civil-time-tests.tesl:78
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(1970)))
 		}
 		teslLeft3 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:79
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:79
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft4 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:80
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:80
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -1368,7 +1382,7 @@ func TestTesl1(teslT *testing.T) {
 //line civil-time-tests.tesl:84
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(18628)) {
 //line civil-time-tests.tesl:84
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(18628)))
 	}
 	{
 //line civil-time-tests.tesl:85
@@ -1378,19 +1392,19 @@ func TestTesl1(teslT *testing.T) {
 //line civil-time-tests.tesl:86
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(2021)) {
 //line civil-time-tests.tesl:86
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(2021)))
 		}
 		teslLeft7 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:87
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:87
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft8 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:88
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:88
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		{
 //line civil-time-tests.tesl:89
@@ -1400,19 +1414,19 @@ func TestTesl1(teslT *testing.T) {
 //line civil-time-tests.tesl:90
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(2023)) {
 //line civil-time-tests.tesl:90
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslrt.FromInt64(2023)))
 			}
 			teslLeft10 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(e))
 //line civil-time-tests.tesl:91
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(11)) {
 //line civil-time-tests.tesl:91
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslrt.FromInt64(11)))
 			}
 			teslLeft11 := teslmodciviltime.Day(e)
 //line civil-time-tests.tesl:92
 			if !teslrt.Equal(teslLeft11, teslrt.FromInt64(14)) {
 //line civil-time-tests.tesl:92
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslrt.FromInt64(14)))
 			}
 		}
 	}
@@ -1435,7 +1449,7 @@ func TestTesl2(teslT *testing.T) {
 //line civil-time-tests.tesl:96
 	if !teslrt.Equal(teslLeft12, teslRight12) {
 //line civil-time-tests.tesl:96
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslRight12))
 	}
 	{
 //line civil-time-tests.tesl:97
@@ -1445,25 +1459,25 @@ func TestTesl2(teslT *testing.T) {
 //line civil-time-tests.tesl:98
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(1900)) {
 //line civil-time-tests.tesl:98
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslrt.FromInt64(1900)))
 		}
 		teslLeft14 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:99
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:99
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft15 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:100
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:100
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 		teslLeft16 := isoOf(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(28))
 //line civil-time-tests.tesl:101
 		if teslLeft16 != "1900-02-28" {
 //line civil-time-tests.tesl:101
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft16, "1900-02-28")
 		}
 	}
 }
@@ -1488,13 +1502,13 @@ func TestTesl3(teslT *testing.T) {
 //line civil-time-tests.tesl:106
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(2)) {
 //line civil-time-tests.tesl:106
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(2)))
 		}
 		teslLeft18 := teslmodciviltime.Day(feb29)
 //line civil-time-tests.tesl:107
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(29)) {
 //line civil-time-tests.tesl:107
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(29)))
 		}
 		{
 //line civil-time-tests.tesl:108
@@ -1504,13 +1518,13 @@ func TestTesl3(teslT *testing.T) {
 //line civil-time-tests.tesl:109
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(3)) {
 //line civil-time-tests.tesl:109
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(3)))
 			}
 			teslLeft20 := teslmodciviltime.Day(next)
 //line civil-time-tests.tesl:110
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:110
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft20), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 		}
 	}
@@ -1552,25 +1566,25 @@ func TestTesl4(teslT *testing.T) {
 //line civil-time-tests.tesl:118
 	if !teslrt.Equal(teslLeft21, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:118
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft21), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft22 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(29)))
 //line civil-time-tests.tesl:119
 	if !teslrt.Equal(teslLeft22, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:119
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft22), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft23 := teslmodciviltime.DaysInMonth(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary})
 //line civil-time-tests.tesl:120
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(28)) {
 //line civil-time-tests.tesl:120
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft23), teslrt.DescribeValue(teslrt.FromInt64(28)))
 	}
 	teslLeft24 := teslmodciviltime.DaysInMonth(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary})
 //line civil-time-tests.tesl:121
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(29)) {
 //line civil-time-tests.tesl:121
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft24), teslrt.DescribeValue(teslrt.FromInt64(29)))
 	}
 }
 
@@ -1590,31 +1604,31 @@ func TestTesl5(teslT *testing.T) {
 //line civil-time-tests.tesl:125
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(31)) {
 //line civil-time-tests.tesl:125
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(31)))
 	}
 	teslLeft26 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:126
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(28)) {
 //line civil-time-tests.tesl:126
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft26), teslrt.DescribeValue(teslrt.FromInt64(28)))
 	}
 	teslLeft27 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:127
 	if !teslrt.Equal(teslLeft27, teslrt.FromInt64(31)) {
 //line civil-time-tests.tesl:127
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft27), teslrt.DescribeValue(teslrt.FromInt64(31)))
 	}
 	teslLeft28 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:128
 	if !teslrt.Equal(teslLeft28, teslrt.FromInt64(365)) {
 //line civil-time-tests.tesl:128
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft28), teslrt.DescribeValue(teslrt.FromInt64(365)))
 	}
 	teslLeft29 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2021), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2020), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:129
 	if !teslrt.Equal(teslLeft29, teslrt.FromInt64(366)) {
 //line civil-time-tests.tesl:129
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft29), teslrt.DescribeValue(teslrt.FromInt64(366)))
 	}
 }
 
@@ -1640,7 +1654,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:134
 			if teslLeft30 != teslRight30 {
 //line civil-time-tests.tesl:134
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft30, teslRight30)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft31 := true
@@ -1648,7 +1662,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:135
 			if teslLeft31 != teslRight31 {
 //line civil-time-tests.tesl:135
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft31, teslRight31)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -1664,7 +1678,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:137
 			if teslLeft32 != teslRight32 {
 //line civil-time-tests.tesl:137
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft32, teslRight32)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft33 := true
@@ -1672,7 +1686,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:138
 			if teslLeft33 != teslRight33 {
 //line civil-time-tests.tesl:138
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft33, teslRight33)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -1688,7 +1702,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:140
 			if teslLeft34 != teslRight34 {
 //line civil-time-tests.tesl:140
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft34, teslRight34)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft35 := false
@@ -1696,7 +1710,7 @@ func TestTesl6(teslT *testing.T) {
 //line civil-time-tests.tesl:141
 			if teslLeft35 != teslRight35 {
 //line civil-time-tests.tesl:141
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft35, teslRight35)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -1720,31 +1734,31 @@ func TestTesl7(teslT *testing.T) {
 //line civil-time-tests.tesl:145
 	if !teslrt.Equal(teslLeft36, teslrt.FromInt64(4)) {
 //line civil-time-tests.tesl:145
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft36), teslrt.DescribeValue(teslrt.FromInt64(4)))
 	}
 	teslLeft37 := teslmodciviltime.WeekdayNumber(teslmodciviltime.Weekday_(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:146
 	if !teslrt.Equal(teslLeft37, teslrt.FromInt64(3)) {
 //line civil-time-tests.tesl:146
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft37), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft38 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31)))
 //line civil-time-tests.tesl:147
 	if !teslrt.Equal(teslLeft38, teslrt.FromInt64(365)) {
 //line civil-time-tests.tesl:147
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft38), teslrt.DescribeValue(teslrt.FromInt64(365)))
 	}
 	teslLeft39 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31)))
 //line civil-time-tests.tesl:148
 	if !teslrt.Equal(teslLeft39, teslrt.FromInt64(366)) {
 //line civil-time-tests.tesl:148
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft39), teslrt.DescribeValue(teslrt.FromInt64(366)))
 	}
 	teslLeft40 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:149
 	if !teslrt.Equal(teslLeft40, teslrt.FromInt64(1)) {
 //line civil-time-tests.tesl:149
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft40), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 }
 
@@ -1764,67 +1778,67 @@ func TestTesl8(teslT *testing.T) {
 //line civil-time-tests.tesl:155
 	if teslLeft41 != "2026-W32" {
 //line civil-time-tests.tesl:155
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft41, "2026-W32")
 	}
 	teslLeft42 := weekLabelOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:156
 	if teslLeft42 != "2026-W53" {
 //line civil-time-tests.tesl:156
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft42, "2026-W53")
 	}
 	teslLeft43 := weekLabelOf(teslrt.FromInt64(2021), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:157
 	if teslLeft43 != "2020-W53" {
 //line civil-time-tests.tesl:157
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft43, "2020-W53")
 	}
 	teslLeft44 := weekLabelOf(teslrt.FromInt64(2020), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31))
 //line civil-time-tests.tesl:158
 	if teslLeft44 != "2020-W53" {
 //line civil-time-tests.tesl:158
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft44, "2020-W53")
 	}
 	teslLeft45 := weekLabelOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:159
 	if teslLeft45 != "2026-W01" {
 //line civil-time-tests.tesl:159
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft45, "2026-W01")
 	}
 	teslLeft46 := weekLabelOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(30))
 //line civil-time-tests.tesl:160
 	if teslLeft46 != "2025-W01" {
 //line civil-time-tests.tesl:160
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft46, "2025-W01")
 	}
 	teslLeft47 := weekLabelOf(teslrt.FromInt64(2004), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:161
 	if teslLeft47 != "2004-W01" {
 //line civil-time-tests.tesl:161
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft47, "2004-W01")
 	}
 	teslLeft48 := weekLabelOf(teslrt.FromInt64(2005), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:162
 	if teslLeft48 != "2004-W53" {
 //line civil-time-tests.tesl:162
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft48, "2004-W53")
 	}
 	teslLeft49 := weekLabelOf(teslrt.FromInt64(2005), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(3))
 //line civil-time-tests.tesl:163
 	if teslLeft49 != "2005-W01" {
 //line civil-time-tests.tesl:163
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft49, "2005-W01")
 	}
 	teslLeft50 := weekLabelOf(teslrt.FromInt64(2006), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:164
 	if teslLeft50 != "2005-W52" {
 //line civil-time-tests.tesl:164
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft50, "2005-W52")
 	}
 	teslLeft51 := weekLabelOf(teslrt.FromInt64(2007), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31))
 //line civil-time-tests.tesl:165
 	if teslLeft51 != "2008-W01" {
 //line civil-time-tests.tesl:165
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft51, "2008-W01")
 	}
 }
 
@@ -1848,19 +1862,19 @@ func TestTesl9(teslT *testing.T) {
 //line civil-time-tests.tesl:170
 		if !teslrt.Equal(teslLeft52, teslrt.FromInt64(2026)) {
 //line civil-time-tests.tesl:170
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft52), teslrt.DescribeValue(teslrt.FromInt64(2026)))
 		}
 		teslLeft53 := teslmodciviltime.WeekNumber(w)
 //line civil-time-tests.tesl:171
 		if !teslrt.Equal(teslLeft53, teslrt.FromInt64(53)) {
 //line civil-time-tests.tesl:171
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft53), teslrt.DescribeValue(teslrt.FromInt64(53)))
 		}
 		teslLeft54 := teslmodciviltime.Year(dateOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:172
 		if !teslrt.Equal(teslLeft54, teslrt.FromInt64(2027)) {
 //line civil-time-tests.tesl:172
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft54), teslrt.DescribeValue(teslrt.FromInt64(2027)))
 		}
 	}
 }
@@ -1885,31 +1899,31 @@ func TestTesl10(teslT *testing.T) {
 //line civil-time-tests.tesl:177
 		if teslLeft55 != "2026-02-28" {
 //line civil-time-tests.tesl:177
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft55, "2026-02-28")
 		}
 		teslLeft56 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(31)), teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:178
 		if teslLeft56 != "2024-02-29" {
 //line civil-time-tests.tesl:178
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft56, "2024-02-29")
 		}
 		teslLeft57 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(jan31, teslrt.FromInt64(12)))
 //line civil-time-tests.tesl:179
 		if teslLeft57 != "2027-01-31" {
 //line civil-time-tests.tesl:179
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft57, "2027-01-31")
 		}
 		teslLeft58 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(jan31, teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1))))
 //line civil-time-tests.tesl:180
 		if teslLeft58 != "2025-12-31" {
 //line civil-time-tests.tesl:180
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft58, "2025-12-31")
 		}
 		teslLeft59 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(15)), teslrt.FromInt64(0)))
 //line civil-time-tests.tesl:181
 		if teslLeft59 != "2026-03-15" {
 //line civil-time-tests.tesl:181
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft59, "2026-03-15")
 		}
 	}
 }
@@ -1930,31 +1944,31 @@ func TestTesl11(teslT *testing.T) {
 //line civil-time-tests.tesl:185
 	if teslLeft60 != "2026-08-01" {
 //line civil-time-tests.tesl:185
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft60, "2026-08-01")
 	}
 	teslLeft61 := teslmodciviltime.ToIso(teslmodciviltime.EndOfMonth(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:186
 	if teslLeft61 != "2026-02-28" {
 //line civil-time-tests.tesl:186
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft61, "2026-02-28")
 	}
 	teslLeft62 := teslmodciviltime.ToIso(teslmodciviltime.EndOfMonth(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:187
 	if teslLeft62 != "2024-02-29" {
 //line civil-time-tests.tesl:187
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft62, "2024-02-29")
 	}
 	teslLeft63 := teslmodciviltime.ToIso(teslmodciviltime.StartOfWeek(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:188
 	if teslLeft63 != "2026-08-03" {
 //line civil-time-tests.tesl:188
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft63, "2026-08-03")
 	}
 	teslLeft64 := teslmodciviltime.ToIso(teslmodciviltime.StartOfWeek(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(3))))
 //line civil-time-tests.tesl:189
 	if teslLeft64 != "2026-08-03" {
 //line civil-time-tests.tesl:189
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft64, "2026-08-03")
 	}
 }
 
@@ -1986,7 +2000,7 @@ func TestTesl12(teslT *testing.T) {
 //line civil-time-tests.tesl:196
 				if !teslrt.Equal(teslLeft65, teslrt.FromInt64(3)) {
 //line civil-time-tests.tesl:196
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft65), teslrt.DescribeValue(teslrt.FromInt64(3)))
 				}
 				teslLeft66 := (func() []string {
 					teslSrc4 := teslmodciviltime.DatesBetween(a, bb)
@@ -2000,7 +2014,7 @@ func TestTesl12(teslT *testing.T) {
 //line civil-time-tests.tesl:197
 				if !teslrt.ListEqualBy(teslLeft66, teslRight66, teslEqualString) {
 //line civil-time-tests.tesl:197
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode2(teslLeft66)), teslrt.EncodeJSONValue(teslEncode2(teslRight66)))
 				}
 				{
 //line civil-time-tests.tesl:198
@@ -2010,7 +2024,7 @@ func TestTesl12(teslT *testing.T) {
 //line civil-time-tests.tesl:199
 					if !teslrt.Equal(teslLeft67, teslrt.FromInt64(0)) {
 //line civil-time-tests.tesl:199
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft67), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 				}
 			}
@@ -2050,14 +2064,14 @@ func TestTesl13(teslT *testing.T) {
 //line civil-time-tests.tesl:207
 					if !teslrt.Equal(teslLeft68, teslrt.FromInt64(30)) {
 //line civil-time-tests.tesl:207
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft68), teslrt.DescribeValue(teslrt.FromInt64(30)))
 					}
 					teslLeft69 := teslmodciviltime.DiffDays(a, bb)
 					teslRight69 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(30))
 //line civil-time-tests.tesl:208
 					if !teslrt.Equal(teslLeft69, teslRight69) {
 //line civil-time-tests.tesl:208
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft69), teslrt.DescribeValue(teslRight69))
 					}
 				}
 			}
@@ -2081,13 +2095,13 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:212
 	if teslLeft70 != "2026-08-05" {
 //line civil-time-tests.tesl:212
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft70, "2026-08-05")
 	}
 	teslLeft71 := isoOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:213
 	if teslLeft71 != "2026-01-01" {
 //line civil-time-tests.tesl:213
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft71, "2026-01-01")
 	}
 //line civil-time-tests.tesl:214
 	{
@@ -2100,7 +2114,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:215
 			if teslLeft72 != "2026-08-05" {
 //line civil-time-tests.tesl:215
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft72, "2026-08-05")
 			}
 		case teslrt.MaybeNothing:
 			teslLeft73 := false
@@ -2108,7 +2122,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:216
 			if teslLeft73 != teslRight73 {
 //line civil-time-tests.tesl:216
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft73, teslRight73)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -2124,7 +2138,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:218
 			if teslLeft74 != teslRight74 {
 //line civil-time-tests.tesl:218
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft74, teslRight74)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft75 := true
@@ -2132,7 +2146,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:219
 			if teslLeft75 != teslRight75 {
 //line civil-time-tests.tesl:219
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft75, teslRight75)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -2148,7 +2162,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:221
 			if teslLeft76 != teslRight76 {
 //line civil-time-tests.tesl:221
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft76, teslRight76)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft77 := true
@@ -2156,7 +2170,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:222
 			if teslLeft77 != teslRight77 {
 //line civil-time-tests.tesl:222
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft77, teslRight77)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -2172,7 +2186,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:224
 			if teslLeft78 != teslRight78 {
 //line civil-time-tests.tesl:224
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft78, teslRight78)
 			}
 		case teslrt.MaybeNothing:
 			teslLeft79 := true
@@ -2180,7 +2194,7 @@ func TestTesl14(teslT *testing.T) {
 //line civil-time-tests.tesl:225
 			if teslLeft79 != teslRight79 {
 //line civil-time-tests.tesl:225
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft79, teslRight79)
 			}
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -2212,7 +2226,7 @@ func TestTesl15(teslT *testing.T) {
 //line civil-time-tests.tesl:232
 			if !teslrt.Equal(teslLeft80, teslrt.FromInt64(5)) {
 //line civil-time-tests.tesl:232
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft80), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 		}
 	}
@@ -2243,13 +2257,13 @@ func TestTesl16(teslT *testing.T) {
 //line civil-time-tests.tesl:239
 			if !teslrt.Equal(teslLeft81, teslRight81) {
 //line civil-time-tests.tesl:239
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft81), teslrt.DescribeValue(teslRight81))
 			}
 			teslLeft82 := teslrt.Sub(teslrt.PosixToSeconds(teslmodciviltime.EndOfDay(d)), teslrt.PosixToSeconds(teslmodciviltime.StartOfDay(d)))
 //line civil-time-tests.tesl:240
 			if !teslrt.Equal(teslLeft82, teslrt.FromInt64(86400)) {
 //line civil-time-tests.tesl:240
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft82), teslrt.DescribeValue(teslrt.FromInt64(86400)))
 			}
 		}
 	}
@@ -2368,21 +2382,21 @@ func TestTesl21(teslT *testing.T) {
 //line civil-time-tests.tesl:300
 	if !teslrt.Equal(teslLeft83, teslRight83) {
 //line civil-time-tests.tesl:300
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft83), teslrt.DescribeValue(teslRight83))
 	}
 	teslLeft84 := dayLengthSeconds(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthOctober}, teslrt.FromInt64(25)))
 	teslRight84 := teslrt.Mul(teslrt.FromInt64(25), teslrt.FromInt64(3600))
 //line civil-time-tests.tesl:301
 	if !teslrt.Equal(teslLeft84, teslRight84) {
 //line civil-time-tests.tesl:301
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft84), teslrt.DescribeValue(teslRight84))
 	}
 	teslLeft85 := dayLengthSeconds(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5)))
 	teslRight85 := teslrt.Mul(teslrt.FromInt64(24), teslrt.FromInt64(3600))
 //line civil-time-tests.tesl:302
 	if !teslrt.Equal(teslLeft85, teslRight85) {
 //line civil-time-tests.tesl:302
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft85), teslrt.DescribeValue(teslRight85))
 	}
 }
 
@@ -2410,26 +2424,26 @@ func TestTesl22(teslT *testing.T) {
 //line civil-time-tests.tesl:311
 			if teslLeft86 != "2026-03-29" {
 //line civil-time-tests.tesl:311
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft86, "2026-03-29")
 			}
 			teslLeft87 := teslrt.PosixToSeconds(teslmodciviltime.StartOfDay(d))
 			teslRight87 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.NamedZone("Europe/Stockholm"), noonAfterSpringForward))
 //line civil-time-tests.tesl:312
 			if !teslrt.Equal(teslLeft87, teslRight87) {
 //line civil-time-tests.tesl:312
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft87), teslrt.DescribeValue(teslRight87))
 			}
 			teslLeft88 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslmodciviltime.StartOfDay(d))
 //line civil-time-tests.tesl:313
 			if !teslrt.Equal(teslLeft88, teslrt.FromInt64(60)) {
 //line civil-time-tests.tesl:313
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft88), teslrt.DescribeValue(teslrt.FromInt64(60)))
 			}
 			teslLeft89 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslmodciviltime.EndOfDay(d))
 //line civil-time-tests.tesl:314
 			if !teslrt.Equal(teslLeft89, teslrt.FromInt64(120)) {
 //line civil-time-tests.tesl:314
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft89), teslrt.DescribeValue(teslrt.FromInt64(120)))
 			}
 		}
 	}
@@ -2463,13 +2477,13 @@ func TestTesl23(teslT *testing.T) {
 //line civil-time-tests.tesl:324
 				if !teslrt.Equal(teslLeft90, teslrt.FromInt64(3600)) {
 //line civil-time-tests.tesl:324
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft90), teslrt.DescribeValue(teslrt.FromInt64(3600)))
 				}
 				teslLeft91 := teslmodciviltime.ToIso(teslmodciviltime.FromInstant(teslrt.NamedZone("Europe/Stockholm"), civilNextDay))
 //line civil-time-tests.tesl:325
 				if teslLeft91 != "2026-03-30" {
 //line civil-time-tests.tesl:325
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft91, "2026-03-30")
 				}
 			}
 		}
@@ -2501,7 +2515,7 @@ func TestTesl24(teslT *testing.T) {
 //line civil-time-tests.tesl:340
 			if !teslrt.Equal(teslLeft92, teslRight92) {
 //line civil-time-tests.tesl:340
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft92), teslrt.DescribeValue(teslRight92))
 			}
 //line civil-time-tests.tesl:341
 			teslExpectFailure(teslT, func() {

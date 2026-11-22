@@ -1586,6 +1586,48 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 	teslThunk()
 }
 
+func teslEncode3(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode4(teslValue []teslrt.Int) any {
+	return func() any {
+		teslOut := make([]any, len(teslValue))
+		for teslAt, teslItem := range teslValue {
+			teslOut[teslAt] = teslEncode3(teslItem)
+		}
+		return teslOut
+	}()
+}
+
+func teslEncode5(teslValue teslrt.Maybe[[]teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode4(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
+func teslEncode6(teslValue teslrt.Maybe[teslrt.Int]) any {
+	return func() any {
+		switch teslValue.Tag {
+		case teslrt.MaybeNothing:
+			return map[string]any{"tag": "Nothing"}
+		case teslrt.MaybeSomething:
+			return map[string]any{"tag": "Something", "fields": map[string]any{
+				"value": teslEncode3(teslValue.SomethingValue),
+			}}
+		}
+		panic("unreachable: checker guarantees case exhaustiveness")
+	}()
+}
+
 func teslEqualTeslrtInt(teslX, teslY teslrt.Int) bool {
 	return teslrt.Equal(teslX, teslY)
 }
@@ -1630,19 +1672,19 @@ func TestTesl0(teslT *testing.T) {
 //line adversarial-review-tests.tesl:128
 							if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:128
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft1), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 							teslLeft2 := RequiresRange(r100)
 //line adversarial-review-tests.tesl:129
 							if !teslrt.Equal(teslLeft2, teslrt.FromInt64(101)) {
 //line adversarial-review-tests.tesl:129
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft2), teslrt.DescribeValue(teslrt.FromInt64(101)))
 							}
 							teslLeft3 := RequiresRange(r50)
 //line adversarial-review-tests.tesl:130
 							if !teslrt.Equal(teslLeft3, teslrt.FromInt64(51)) {
 //line adversarial-review-tests.tesl:130
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft3), teslrt.DescribeValue(teslrt.FromInt64(51)))
 							}
 						}
 					}
@@ -1748,19 +1790,19 @@ func TestTesl3(teslT *testing.T) {
 //line adversarial-review-tests.tesl:174
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:174
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft4), teslrt.DescribeValue(teslrt.FromInt64(5)))
 							}
 							teslLeft5 := RequiresNonEmpty(b)
 //line adversarial-review-tests.tesl:175
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:175
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft5), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 							teslLeft6 := RequiresNonEmpty(c)
 //line adversarial-review-tests.tesl:176
 							if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:176
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft6), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 						}
 					}
@@ -1820,13 +1862,13 @@ func TestTesl5(teslT *testing.T) {
 //line adversarial-review-tests.tesl:200
 					if !teslrt.Equal(teslLeft7, teslrt.FromInt64(16)) {
 //line adversarial-review-tests.tesl:200
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft7), teslrt.DescribeValue(teslrt.FromInt64(16)))
 					}
 					teslLeft8 := teslrt.StringLength(e2)
 //line adversarial-review-tests.tesl:201
 					if !teslrt.Equal(teslLeft8, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:201
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft8), teslrt.DescribeValue(teslrt.FromInt64(5)))
 					}
 				}
 			}
@@ -1881,28 +1923,28 @@ func TestTesl7(teslT *testing.T) {
 //line adversarial-review-tests.tesl:240
 	if teslLeft9.Tag != teslRight9.Tag || (teslLeft9.Tag == teslrt.EitherLeft && (teslLeft9.LeftValue != teslRight9.LeftValue)) || (teslLeft9.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft9.RightValue, teslRight9.RightValue)) {
 //line adversarial-review-tests.tesl:240
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft9), teslrt.DescribeValue(teslRight9))
 	}
 	teslLeft10 := safeDiv(teslrt.FromInt64(0), teslrt.FromInt64(0))
 	teslRight10 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherLeft, LeftValue: "division by zero"}
 //line adversarial-review-tests.tesl:241
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.EitherLeft && (teslLeft10.LeftValue != teslRight10.LeftValue)) || (teslLeft10.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft10.RightValue, teslRight10.RightValue)) {
 //line adversarial-review-tests.tesl:241
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft10), teslrt.DescribeValue(teslRight10))
 	}
 	teslLeft11 := safeDiv(teslrt.FromInt64(100), teslrt.FromInt64(5))
 	teslRight11 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(20)}
 //line adversarial-review-tests.tesl:242
 	if teslLeft11.Tag != teslRight11.Tag || (teslLeft11.Tag == teslrt.EitherLeft && (teslLeft11.LeftValue != teslRight11.LeftValue)) || (teslLeft11.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft11.RightValue, teslRight11.RightValue)) {
 //line adversarial-review-tests.tesl:242
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft11), teslrt.DescribeValue(teslRight11))
 	}
 	teslLeft12 := safeDiv(teslrt.FromInt64(7), teslrt.FromInt64(2))
 	teslRight12 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(3)}
 //line adversarial-review-tests.tesl:243
 	if teslLeft12.Tag != teslRight12.Tag || (teslLeft12.Tag == teslrt.EitherLeft && (teslLeft12.LeftValue != teslRight12.LeftValue)) || (teslLeft12.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft12.RightValue, teslRight12.RightValue)) {
 //line adversarial-review-tests.tesl:243
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft12), teslrt.DescribeValue(teslRight12))
 	}
 }
 
@@ -1923,14 +1965,14 @@ func TestTesl8(teslT *testing.T) {
 //line adversarial-review-tests.tesl:247
 	if teslLeft13.Tag != teslRight13.Tag || (teslLeft13.Tag == teslrt.EitherLeft && (teslLeft13.LeftValue != teslRight13.LeftValue)) || (teslLeft13.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft13.RightValue, teslRight13.RightValue)) {
 //line adversarial-review-tests.tesl:247
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft13), teslrt.DescribeValue(teslRight13))
 	}
 	teslLeft14 := safeDiv(teslrt.FromInt64(-7), teslrt.FromInt64(2))
 	teslRight14 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(-3)}
 //line adversarial-review-tests.tesl:248
 	if teslLeft14.Tag != teslRight14.Tag || (teslLeft14.Tag == teslrt.EitherLeft && (teslLeft14.LeftValue != teslRight14.LeftValue)) || (teslLeft14.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft14.RightValue, teslRight14.RightValue)) {
 //line adversarial-review-tests.tesl:248
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft14), teslrt.DescribeValue(teslRight14))
 	}
 }
 
@@ -1950,31 +1992,31 @@ func TestTesl9(teslT *testing.T) {
 //line adversarial-review-tests.tesl:252
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:252
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft15), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft16 := ClampAndAdd(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(15), teslrt.FromInt64(3))
 //line adversarial-review-tests.tesl:253
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(13)) {
 //line adversarial-review-tests.tesl:253
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft16), teslrt.DescribeValue(teslrt.FromInt64(13)))
 	}
 	teslLeft17 := ClampAndAdd(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5), teslrt.FromInt64(3))
 //line adversarial-review-tests.tesl:254
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(8)) {
 //line adversarial-review-tests.tesl:254
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft17), teslrt.DescribeValue(teslrt.FromInt64(8)))
 	}
 	teslLeft18 := ClampAndAdd(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(0), teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:255
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:255
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft18), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft19 := ClampAndAdd(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(10), teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:256
 	if !teslrt.Equal(teslLeft19, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:256
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft19), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 }
 
@@ -1994,25 +2036,25 @@ func TestTesl10(teslT *testing.T) {
 //line adversarial-review-tests.tesl:285
 	if teslLeft20 != "red" {
 //line adversarial-review-tests.tesl:285
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft20, "red")
 	}
 	teslLeft21 := describeColor(Color{Tag: ColorGreen})
 //line adversarial-review-tests.tesl:286
 	if teslLeft21 != "green" {
 //line adversarial-review-tests.tesl:286
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft21, "green")
 	}
 	teslLeft22 := describeColor(Color{Tag: ColorBlue})
 //line adversarial-review-tests.tesl:287
 	if teslLeft22 != "blue" {
 //line adversarial-review-tests.tesl:287
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft22, "blue")
 	}
 	teslLeft23 := describeColor(Color{Tag: ColorCustom, CustomR: teslrt.FromInt64(255), CustomG: teslrt.FromInt64(128), CustomB: teslrt.FromInt64(0)})
 //line adversarial-review-tests.tesl:288
 	if teslLeft23 != "custom(255,128,0)" {
 //line adversarial-review-tests.tesl:288
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft23, "custom(255,128,0)")
 	}
 }
 
@@ -2036,7 +2078,7 @@ func TestTesl11(teslT *testing.T) {
 //line adversarial-review-tests.tesl:293
 		if !teslrt.Equal(teslLeft24, teslrt.FromInt64(4)) {
 //line adversarial-review-tests.tesl:293
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft24), teslrt.DescribeValue(teslrt.FromInt64(4)))
 		}
 	}
 }
@@ -2057,38 +2099,38 @@ func TestTesl12(teslT *testing.T) {
 //line adversarial-review-tests.tesl:311
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:311
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft25), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft26 := Evaluate(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(3)}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(4)})})
 //line adversarial-review-tests.tesl:312
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(7)) {
 //line adversarial-review-tests.tesl:312
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft26), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 	teslLeft27 := Evaluate(Expr{Tag: ExprMul, MulLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(2)}), MulRight: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(6)})})
 //line adversarial-review-tests.tesl:313
 	if !teslrt.Equal(teslLeft27, teslrt.FromInt64(12)) {
 //line adversarial-review-tests.tesl:313
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft27), teslrt.DescribeValue(teslrt.FromInt64(12)))
 	}
 	teslLeft28 := Evaluate(Expr{Tag: ExprNeg, NegInner: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(3)})})
 	teslRight28 := teslrt.Neg(teslrt.FromInt64(3))
 //line adversarial-review-tests.tesl:314
 	if !teslrt.Equal(teslLeft28, teslRight28) {
 //line adversarial-review-tests.tesl:314
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft28), teslrt.DescribeValue(teslRight28))
 	}
 	teslLeft29 := Evaluate(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprMul, MulLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(2)}), MulRight: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(3)})}), AddRight: teslrt.Boxed(Expr{Tag: ExprNeg, NegInner: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(1)})})})
 //line adversarial-review-tests.tesl:315
 	if !teslrt.Equal(teslLeft29, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:315
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft29), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft30 := Evaluate(Expr{Tag: ExprMul, MulLeft: teslrt.Boxed(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(1)}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(2)})}), MulRight: teslrt.Boxed(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(3)}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitN: teslrt.FromInt64(4)})})})
 //line adversarial-review-tests.tesl:316
 	if !teslrt.Equal(teslLeft30, teslrt.FromInt64(21)) {
 //line adversarial-review-tests.tesl:316
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft30), teslrt.DescribeValue(teslrt.FromInt64(21)))
 	}
 }
 
@@ -2108,19 +2150,19 @@ func TestTesl13(teslT *testing.T) {
 //line adversarial-review-tests.tesl:326
 	if teslLeft31 != "A: circle with radius 5" {
 //line adversarial-review-tests.tesl:326
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft31, "A: circle with radius 5")
 	}
 	teslLeft32 := DescribeNested(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(3), RectangleHeight: teslrt.FromInt64(4)}, "B")
 //line adversarial-review-tests.tesl:327
 	if teslLeft32 != "B: 3x4 rectangle" {
 //line adversarial-review-tests.tesl:327
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft32, "B: 3x4 rectangle")
 	}
 	teslLeft33 := DescribeNested(Shape{Tag: ShapeTriangle, TriangleBase: teslrt.FromInt64(6), TriangleHeight: teslrt.FromInt64(8)}, "C")
 //line adversarial-review-tests.tesl:328
 	if teslLeft33 != "C: triangle base=6 height=8" {
 //line adversarial-review-tests.tesl:328
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft33, "C: triangle base=6 height=8")
 	}
 }
 
@@ -2144,7 +2186,7 @@ func TestTesl14(teslT *testing.T) {
 //line adversarial-review-tests.tesl:359
 		if !teslrt.Equal(teslLeft34, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:359
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft34), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -2169,7 +2211,7 @@ func TestTesl15(teslT *testing.T) {
 //line adversarial-review-tests.tesl:364
 		if !teslrt.Equal(teslLeft35, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:364
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft35), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }
@@ -2194,7 +2236,7 @@ func TestTesl16(teslT *testing.T) {
 //line adversarial-review-tests.tesl:369
 		if !teslrt.Equal(teslLeft36, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:369
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft36), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }
@@ -2219,7 +2261,7 @@ func TestTesl17(teslT *testing.T) {
 //line adversarial-review-tests.tesl:374
 		if !teslrt.Equal(teslLeft37, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:374
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft37), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -2305,7 +2347,7 @@ func TestTesl19(teslT *testing.T) {
 //line adversarial-review-tests.tesl:386
 			if result.Tag != teslRight38.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(result.SomethingValue, teslRight38.SomethingValue, teslEqualTeslrtInt)) {
 //line adversarial-review-tests.tesl:386
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode5(result)), teslrt.EncodeJSONValue(teslEncode5(teslRight38)))
 			}
 		}
 	}
@@ -2335,13 +2377,13 @@ func TestTesl20(teslT *testing.T) {
 //line adversarial-review-tests.tesl:411
 			if teslLeft39 != "user-123-user" {
 //line adversarial-review-tests.tesl:411
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft39, "user-123-user")
 			}
 			teslLeft40 := requiresProjectId(pid)
 //line adversarial-review-tests.tesl:412
 			if teslLeft40 != "project-456-project" {
 //line adversarial-review-tests.tesl:412
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft40, "project-456-project")
 			}
 		}
 	}
@@ -2367,7 +2409,7 @@ func TestTesl21(teslT *testing.T) {
 //line adversarial-review-tests.tesl:417
 		if teslLeft41 != "abc" {
 //line adversarial-review-tests.tesl:417
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft41, "abc")
 		}
 	}
 }
@@ -2395,7 +2437,7 @@ func TestTesl22(teslT *testing.T) {
 //line adversarial-review-tests.tesl:438
 			if !teslrt.Equal(v, teslrt.FromInt64(50)) {
 //line adversarial-review-tests.tesl:438
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(50)))
 			}
 		}
 	}
@@ -2468,12 +2510,12 @@ func TestTesl25(teslT *testing.T) {
 //line adversarial-review-tests.tesl:454
 					if !teslrt.Equal(zero, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:454
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(zero), teslrt.DescribeValue(teslrt.FromInt64(0)))
 					}
 //line adversarial-review-tests.tesl:455
 					if !teslrt.Equal(limit, teslrt.FromInt64(99)) {
 //line adversarial-review-tests.tesl:455
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(limit), teslrt.DescribeValue(teslrt.FromInt64(99)))
 					}
 				}
 			}
@@ -2513,13 +2555,13 @@ func TestTesl26(teslT *testing.T) {
 //line adversarial-review-tests.tesl:478
 					if !teslrt.Equal(teslLeft45, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:478
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft45), teslrt.DescribeValue(teslrt.FromInt64(5)))
 					}
 					teslLeft46 := RequiresTrimmed(b)
 //line adversarial-review-tests.tesl:479
 					if !teslrt.Equal(teslLeft46, teslrt.FromInt64(14)) {
 //line adversarial-review-tests.tesl:479
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft46), teslrt.DescribeValue(teslrt.FromInt64(14)))
 					}
 				}
 			}
@@ -2605,19 +2647,19 @@ func TestTesl30(teslT *testing.T) {
 //line adversarial-review-tests.tesl:518
 	if teslLeft47 != "age is 25" {
 //line adversarial-review-tests.tesl:518
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft47, "age is 25")
 	}
 	teslLeft48 := DecomposeThenPass(teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:519
 	if teslLeft48 != "age is 0" {
 //line adversarial-review-tests.tesl:519
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft48, "age is 0")
 	}
 	teslLeft49 := DecomposeThenPass(teslrt.FromInt64(150))
 //line adversarial-review-tests.tesl:520
 	if teslLeft49 != "age is 150" {
 //line adversarial-review-tests.tesl:520
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft49, "age is 150")
 	}
 }
 
@@ -2674,7 +2716,7 @@ func TestTesl32(teslT *testing.T) {
 //line adversarial-review-tests.tesl:548
 					if !teslrt.Equal(x, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:548
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(x), teslrt.DescribeValue(teslrt.FromInt64(5)))
 					}
 				}
 			}
@@ -2721,12 +2763,12 @@ func TestTesl33(teslT *testing.T) {
 //line adversarial-review-tests.tesl:558
 							if !teslrt.Equal(atLo, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:558
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(atLo), teslrt.DescribeValue(teslrt.FromInt64(0)))
 							}
 //line adversarial-review-tests.tesl:559
 							if !teslrt.Equal(atHi, teslrt.FromInt64(100)) {
 //line adversarial-review-tests.tesl:559
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(atHi), teslrt.DescribeValue(teslrt.FromInt64(100)))
 							}
 						}
 					}
@@ -2876,31 +2918,31 @@ func TestTesl38(teslT *testing.T) {
 //line adversarial-review-tests.tesl:621
 	if teslLeft53 != "positive" {
 //line adversarial-review-tests.tesl:621
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft53, "positive")
 	}
 	teslLeft54 := intBoundary(teslrt.FromInt64(-1))
 //line adversarial-review-tests.tesl:622
 	if teslLeft54 != "negative" {
 //line adversarial-review-tests.tesl:622
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft54, "negative")
 	}
 	teslLeft55 := intBoundary(teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:623
 	if teslLeft55 != "zero" {
 //line adversarial-review-tests.tesl:623
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft55, "zero")
 	}
 	teslLeft56 := intBoundary(teslrt.FromInt64(1000000))
 //line adversarial-review-tests.tesl:624
 	if teslLeft56 != "positive" {
 //line adversarial-review-tests.tesl:624
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft56, "positive")
 	}
 	teslLeft57 := intBoundary(teslrt.FromInt64(-1000000))
 //line adversarial-review-tests.tesl:625
 	if teslLeft57 != "negative" {
 //line adversarial-review-tests.tesl:625
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft57, "negative")
 	}
 }
 
@@ -2920,38 +2962,38 @@ func TestTesl39(teslT *testing.T) {
 //line adversarial-review-tests.tesl:629
 	if !teslrt.Equal(teslLeft58, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:629
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft58), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft59 := DivByTwo(teslrt.FromInt64(5))
 //line adversarial-review-tests.tesl:630
 	if !teslrt.Equal(teslLeft59, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:630
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft59), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft60 := DivByTwo(teslrt.FromInt64(-5))
 	teslRight60 := teslrt.Neg(teslrt.FromInt64(2))
 //line adversarial-review-tests.tesl:631
 	if !teslrt.Equal(teslLeft60, teslRight60) {
 //line adversarial-review-tests.tesl:631
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft60), teslrt.DescribeValue(teslRight60))
 	}
 	teslLeft61 := DivByTwo(teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:632
 	if !teslrt.Equal(teslLeft61, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:632
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft61), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft62 := DivByTwo(teslrt.FromInt64(1))
 //line adversarial-review-tests.tesl:633
 	if !teslrt.Equal(teslLeft62, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:633
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft62), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft63 := DivByTwo(teslrt.FromInt64(-1))
 //line adversarial-review-tests.tesl:634
 	if !teslrt.Equal(teslLeft63, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:634
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft63), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -2973,7 +3015,7 @@ func TestTesl40(teslT *testing.T) {
 //line adversarial-review-tests.tesl:646
 	if !teslrt.Equal(teslLeft64, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:646
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft64), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft65 := applyValidated(teslrt.FromInt64(3), func(x teslrt.Int) teslrt.Int {
 		return teslrt.Add(x, teslrt.FromInt64(10))
@@ -2981,7 +3023,7 @@ func TestTesl40(teslT *testing.T) {
 //line adversarial-review-tests.tesl:647
 	if !teslrt.Equal(teslLeft65, teslrt.FromInt64(13)) {
 //line adversarial-review-tests.tesl:647
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft65), teslrt.DescribeValue(teslrt.FromInt64(13)))
 	}
 }
 
@@ -3027,13 +3069,13 @@ func TestTesl42(teslT *testing.T) {
 //line adversarial-review-tests.tesl:669
 	if teslLeft66 != "Hello Alice! You have 3 items." {
 //line adversarial-review-tests.tesl:669
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft66, "Hello Alice! You have 3 items.")
 	}
 	teslLeft67 := buildMessage("Bob", teslrt.FromInt64(0))
 //line adversarial-review-tests.tesl:670
 	if teslLeft67 != "Hello Bob! You have 0 items." {
 //line adversarial-review-tests.tesl:670
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft67, "Hello Bob! You have 0 items.")
 	}
 }
 
@@ -3053,13 +3095,13 @@ func TestTesl43(teslT *testing.T) {
 //line adversarial-review-tests.tesl:674
 	if teslLeft68 != "test" {
 //line adversarial-review-tests.tesl:674
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft68, "test")
 	}
 	teslLeft69 := emptyInterp("")
 //line adversarial-review-tests.tesl:675
 	if teslLeft69 != "" {
 //line adversarial-review-tests.tesl:675
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft69, "")
 	}
 }
 
@@ -3079,13 +3121,13 @@ func TestTesl44(teslT *testing.T) {
 //line adversarial-review-tests.tesl:679
 	if teslLeft70 != "a-b-c" {
 //line adversarial-review-tests.tesl:679
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft70, "a-b-c")
 	}
 	teslLeft71 := nestedConcat("", "", "")
 //line adversarial-review-tests.tesl:680
 	if teslLeft71 != "--" {
 //line adversarial-review-tests.tesl:680
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft71, "--")
 	}
 }
 
@@ -3105,25 +3147,25 @@ func TestTesl45(teslT *testing.T) {
 //line adversarial-review-tests.tesl:697
 	if !teslrt.Equal(teslLeft72, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:697
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft72), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft73 := sumList([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 //line adversarial-review-tests.tesl:698
 	if !teslrt.Equal(teslLeft73, teslrt.FromInt64(6)) {
 //line adversarial-review-tests.tesl:698
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft73), teslrt.DescribeValue(teslrt.FromInt64(6)))
 	}
 	teslLeft74 := sumList([]teslrt.Int{teslrt.Neg(teslrt.FromInt64(1)), teslrt.FromInt64(0), teslrt.FromInt64(1)})
 //line adversarial-review-tests.tesl:699
 	if !teslrt.Equal(teslLeft74, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:699
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft74), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft75 := sumList([]teslrt.Int{teslrt.FromInt64(100)})
 //line adversarial-review-tests.tesl:700
 	if !teslrt.Equal(teslLeft75, teslrt.FromInt64(100)) {
 //line adversarial-review-tests.tesl:700
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft75), teslrt.DescribeValue(teslrt.FromInt64(100)))
 	}
 }
 
@@ -3206,13 +3248,13 @@ func TestTesl48(teslT *testing.T) {
 //line adversarial-review-tests.tesl:733
 	if teslLeft76 != "read" {
 //line adversarial-review-tests.tesl:733
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft76, "read")
 	}
 	teslLeft77 := ReadAndWrite()
 //line adversarial-review-tests.tesl:734
 	if teslLeft77 != "read and write" {
 //line adversarial-review-tests.tesl:734
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft77, "read and write")
 	}
 }
 
@@ -3233,7 +3275,7 @@ func TestTesl49(teslT *testing.T) {
 //line adversarial-review-tests.tesl:754
 	if teslLeft78.Tag != teslRight78.Tag || (teslLeft78.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft78.SomethingValue, teslRight78.SomethingValue)) {
 //line adversarial-review-tests.tesl:754
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode6(teslLeft78)), teslrt.EncodeJSONValue(teslEncode6(teslRight78)))
 	}
 }
 
@@ -3254,14 +3296,14 @@ func TestTesl50(teslT *testing.T) {
 //line adversarial-review-tests.tesl:758
 	if teslLeft79.Tag != teslRight79.Tag || (teslLeft79.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft79.SomethingValue, teslRight79.SomethingValue)) {
 //line adversarial-review-tests.tesl:758
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode6(teslLeft79)), teslrt.EncodeJSONValue(teslEncode6(teslRight79)))
 	}
 	teslLeft80 := safeHead([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 	teslRight80 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(1)}
 //line adversarial-review-tests.tesl:759
 	if teslLeft80.Tag != teslRight80.Tag || (teslLeft80.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft80.SomethingValue, teslRight80.SomethingValue)) {
 //line adversarial-review-tests.tesl:759
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.EncodeJSONValue(teslEncode6(teslLeft80)), teslrt.EncodeJSONValue(teslEncode6(teslRight80)))
 	}
 }
 
@@ -3281,19 +3323,19 @@ func TestTesl51(teslT *testing.T) {
 //line adversarial-review-tests.tesl:763
 	if !teslrt.Equal(teslLeft81, teslrt.FromInt64(99)) {
 //line adversarial-review-tests.tesl:763
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft81), teslrt.DescribeValue(teslrt.FromInt64(99)))
 	}
 	teslLeft82 := withDefault(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)}, teslrt.FromInt64(99))
 //line adversarial-review-tests.tesl:764
 	if !teslrt.Equal(teslLeft82, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:764
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft82), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft83 := withDefault(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(0)}, teslrt.FromInt64(99))
 //line adversarial-review-tests.tesl:765
 	if !teslrt.Equal(teslLeft83, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:765
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft83), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -3313,13 +3355,13 @@ func TestTesl52(teslT *testing.T) {
 //line adversarial-review-tests.tesl:769
 	if !teslrt.Equal(teslLeft84, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:769
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft84), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft85 := chainMaybe([]teslrt.Int{})
 //line adversarial-review-tests.tesl:770
 	if !teslrt.Equal(teslLeft85, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:770
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft85), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -3346,7 +3388,7 @@ func TestTesl53(teslT *testing.T) {
 //line adversarial-review-tests.tesl:798
 			if !teslrt.Equal(v, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:798
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 //line adversarial-review-tests.tesl:799
 			if (checkAtLeastFive(teslrt.FromInt64(4))).OK() {
@@ -3379,7 +3421,7 @@ func TestTesl54(teslT *testing.T) {
 //line adversarial-review-tests.tesl:805
 			if !teslrt.Equal(v, teslrt.FromInt64(6)) {
 //line adversarial-review-tests.tesl:805
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(6)))
 			}
 			{
 //line adversarial-review-tests.tesl:806
@@ -3392,7 +3434,7 @@ func TestTesl54(teslT *testing.T) {
 //line adversarial-review-tests.tesl:808
 					if !teslrt.Equal(w, teslrt.FromInt64(1000)) {
 //line adversarial-review-tests.tesl:808
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(w), teslrt.DescribeValue(teslrt.FromInt64(1000)))
 					}
 				}
 			}
@@ -3423,7 +3465,7 @@ func TestTesl55(teslT *testing.T) {
 //line adversarial-review-tests.tesl:814
 			if !teslrt.Equal(v, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:814
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(10)))
 			}
 //line adversarial-review-tests.tesl:815
 			if (checkAtMostTen(teslrt.FromInt64(11))).OK() {
@@ -3456,7 +3498,7 @@ func TestTesl56(teslT *testing.T) {
 //line adversarial-review-tests.tesl:821
 			if !teslrt.Equal(v, teslrt.FromInt64(9)) {
 //line adversarial-review-tests.tesl:821
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(v), teslrt.DescribeValue(teslrt.FromInt64(9)))
 			}
 			{
 //line adversarial-review-tests.tesl:822
@@ -3470,7 +3512,7 @@ func TestTesl56(teslT *testing.T) {
 //line adversarial-review-tests.tesl:824
 					if !teslrt.Equal(w, teslRight91) {
 //line adversarial-review-tests.tesl:824
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(w), teslrt.DescribeValue(teslRight91))
 					}
 				}
 			}
@@ -3578,43 +3620,43 @@ func TestTesl60(teslT *testing.T) {
 //line adversarial-review-tests.tesl:870
 	if teslLeft92 != "low-negative" {
 //line adversarial-review-tests.tesl:870
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft92, "low-negative")
 	}
 	teslLeft93 := classifyThreshold(Threshold{Tag: ThresholdLow, LowN: teslrt.FromInt64(0)})
 //line adversarial-review-tests.tesl:871
 	if teslLeft93 != "low-nonneg" {
 //line adversarial-review-tests.tesl:871
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft93, "low-nonneg")
 	}
 	teslLeft94 := classifyThreshold(Threshold{Tag: ThresholdLow, LowN: teslrt.FromInt64(10)})
 //line adversarial-review-tests.tesl:872
 	if teslLeft94 != "low-nonneg" {
 //line adversarial-review-tests.tesl:872
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft94, "low-nonneg")
 	}
 	teslLeft95 := classifyThreshold(Threshold{Tag: ThresholdMid, MidN: teslrt.FromInt64(51)})
 //line adversarial-review-tests.tesl:873
 	if teslLeft95 != "mid-high" {
 //line adversarial-review-tests.tesl:873
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft95, "mid-high")
 	}
 	teslLeft96 := classifyThreshold(Threshold{Tag: ThresholdMid, MidN: teslrt.FromInt64(50)})
 //line adversarial-review-tests.tesl:874
 	if teslLeft96 != "mid-low" {
 //line adversarial-review-tests.tesl:874
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft96, "mid-low")
 	}
 	teslLeft97 := classifyThreshold(Threshold{Tag: ThresholdMid, MidN: teslrt.FromInt64(0)})
 //line adversarial-review-tests.tesl:875
 	if teslLeft97 != "mid-low" {
 //line adversarial-review-tests.tesl:875
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft97, "mid-low")
 	}
 	teslLeft98 := classifyThreshold(Threshold{Tag: ThresholdHigh, HighN: teslrt.FromInt64(999)})
 //line adversarial-review-tests.tesl:876
 	if teslLeft98 != "high" {
 //line adversarial-review-tests.tesl:876
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft98, "high")
 	}
 }
 
@@ -3634,19 +3676,19 @@ func TestTesl61(teslT *testing.T) {
 //line adversarial-review-tests.tesl:890
 	if !teslrt.Equal(teslLeft99, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:890
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft99), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft100 := countItems([]teslrt.Int{teslrt.FromInt64(1)})
 //line adversarial-review-tests.tesl:891
 	if !teslrt.Equal(teslLeft100, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:891
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft100), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft101 := countItems([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(4), teslrt.FromInt64(5)})
 //line adversarial-review-tests.tesl:892
 	if !teslrt.Equal(teslLeft101, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:892
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft101), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 }
 
@@ -3666,25 +3708,25 @@ func TestTesl62(teslT *testing.T) {
 //line adversarial-review-tests.tesl:896
 	if !teslrt.Equal(teslLeft102, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:896
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft102), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft103 := sumSquares([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 //line adversarial-review-tests.tesl:897
 	if !teslrt.Equal(teslLeft103, teslrt.FromInt64(14)) {
 //line adversarial-review-tests.tesl:897
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft103), teslrt.DescribeValue(teslrt.FromInt64(14)))
 	}
 	teslLeft104 := sumSquares([]teslrt.Int{teslrt.FromInt64(0), teslrt.FromInt64(0), teslrt.FromInt64(0)})
 //line adversarial-review-tests.tesl:898
 	if !teslrt.Equal(teslLeft104, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:898
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft104), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft105 := sumSquares([]teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(4)})
 //line adversarial-review-tests.tesl:899
 	if !teslrt.Equal(teslLeft105, teslrt.FromInt64(25)) {
 //line adversarial-review-tests.tesl:899
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft105), teslrt.DescribeValue(teslrt.FromInt64(25)))
 	}
 }
 
@@ -3712,7 +3754,7 @@ func TestTesl63(teslT *testing.T) {
 //line adversarial-review-tests.tesl:925
 			if !teslrt.Equal(teslLeft106, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:925
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft106), teslrt.DescribeValue(teslrt.FromInt64(2)))
 			}
 			{
 //line adversarial-review-tests.tesl:926
@@ -3726,7 +3768,7 @@ func TestTesl63(teslT *testing.T) {
 //line adversarial-review-tests.tesl:928
 					if !teslrt.Equal(teslLeft107, teslrt.FromInt64(1998)) {
 //line adversarial-review-tests.tesl:928
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft107), teslrt.DescribeValue(teslrt.FromInt64(1998)))
 					}
 				}
 			}
@@ -3788,7 +3830,7 @@ func TestTesl65(teslT *testing.T) {
 //line adversarial-review-tests.tesl:941
 			if !teslrt.Equal(teslLeft108, teslrt.FromInt64(1000)) {
 //line adversarial-review-tests.tesl:941
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft108), teslrt.DescribeValue(teslrt.FromInt64(1000)))
 			}
 		}
 	}
@@ -3818,7 +3860,7 @@ func TestTesl66(teslT *testing.T) {
 //line adversarial-review-tests.tesl:979
 			if !teslrt.Equal(teslLeft109, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:979
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft109), teslrt.DescribeValue(teslrt.FromInt64(1)))
 			}
 			{
 //line adversarial-review-tests.tesl:980
@@ -3832,7 +3874,7 @@ func TestTesl66(teslT *testing.T) {
 //line adversarial-review-tests.tesl:982
 					if !teslrt.Equal(teslLeft110, teslrt.FromInt64(99)) {
 //line adversarial-review-tests.tesl:982
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft110), teslrt.DescribeValue(teslrt.FromInt64(99)))
 					}
 //line adversarial-review-tests.tesl:984
 					{
@@ -3848,7 +3890,7 @@ func TestTesl66(teslT *testing.T) {
 //line adversarial-review-tests.tesl:986
 							if !teslrt.Equal(teslLeft111, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:986
-								teslT.Fatal("Tesl expectation failed")
+								teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft111), teslrt.DescribeValue(teslrt.FromInt64(1)))
 							}
 //line adversarial-review-tests.tesl:988
 							{
@@ -3862,7 +3904,7 @@ func TestTesl66(teslT *testing.T) {
 //line adversarial-review-tests.tesl:989
 								if !teslrt.Equal(teslLeft112, teslrt.FromInt64(99)) {
 //line adversarial-review-tests.tesl:989
-									teslT.Fatal("Tesl expectation failed")
+									teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft112), teslrt.DescribeValue(teslrt.FromInt64(99)))
 								}
 							}
 						}
@@ -3947,7 +3989,7 @@ func TestTesl70(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1025
 		if !teslrt.Equal(teslLeft113, teslrt.FromInt64(42)) {
 //line adversarial-review-tests.tesl:1025
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft113), teslrt.DescribeValue(teslrt.FromInt64(42)))
 		}
 		{
 //line adversarial-review-tests.tesl:1026
@@ -3957,7 +3999,7 @@ func TestTesl70(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1027
 			if !teslrt.Equal(teslLeft114, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1027
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft114), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 			{
 //line adversarial-review-tests.tesl:1028
@@ -3968,7 +4010,7 @@ func TestTesl70(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1029
 				if !teslrt.Equal(teslLeft115, teslRight115) {
 //line adversarial-review-tests.tesl:1029
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft115), teslrt.DescribeValue(teslRight115))
 				}
 			}
 		}
@@ -3995,7 +4037,7 @@ func TestTesl71(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1034
 		if !teslrt.Equal(teslLeft116, teslrt.FromInt64(2147483647)) {
 //line adversarial-review-tests.tesl:1034
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft116), teslrt.DescribeValue(teslrt.FromInt64(2147483647)))
 		}
 	}
 }
@@ -4024,7 +4066,7 @@ func TestTesl72(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1055
 			if !teslrt.Equal(teslLeft117, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:1055
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft117), teslrt.DescribeValue(teslrt.FromInt64(5)))
 			}
 			{
 //line adversarial-review-tests.tesl:1056
@@ -4038,7 +4080,7 @@ func TestTesl72(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1058
 					if !teslrt.Equal(teslLeft118, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1058
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft118), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -4095,7 +4137,7 @@ func TestTesl74(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1078
 					if !teslrt.Equal(w, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:1078
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(w), teslrt.DescribeValue(teslrt.FromInt64(10)))
 					}
 				}
 			}
@@ -4141,19 +4183,19 @@ func TestTesl76(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1100
 	if !teslrt.Equal(teslLeft120, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:1100
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft120), teslrt.DescribeValue(teslrt.FromInt64(10)))
 	}
 	teslLeft121 := WrapAndUnwrap(teslrt.FromInt64(1))
 //line adversarial-review-tests.tesl:1101
 	if !teslrt.Equal(teslLeft121, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:1101
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft121), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft122 := WrapAndUnwrap(teslrt.FromInt64(99))
 //line adversarial-review-tests.tesl:1102
 	if !teslrt.Equal(teslLeft122, teslrt.FromInt64(198)) {
 //line adversarial-review-tests.tesl:1102
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft122), teslrt.DescribeValue(teslrt.FromInt64(198)))
 	}
 }
 
@@ -4195,7 +4237,7 @@ func TestTesl78(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1123
 	if !teslrt.FloatEqual(teslLeft123, float64(0.5)) {
 //line adversarial-review-tests.tesl:1123
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft123), teslrt.DescribeValue(float64(0.5)))
 	}
 }
 
@@ -4216,7 +4258,7 @@ func TestTesl79(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1127
 	if !teslrt.FloatEqual(teslLeft124, teslRight124) {
 //line adversarial-review-tests.tesl:1127
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft124), teslrt.DescribeValue(teslRight124))
 	}
 }
 
@@ -4254,7 +4296,7 @@ func TestTesl81(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1135
 	if !teslrt.FloatEqual(teslLeft125, float64(0)) {
 //line adversarial-review-tests.tesl:1135
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft125), teslrt.DescribeValue(float64(0)))
 	}
 }
 
@@ -4274,7 +4316,7 @@ func TestTesl82(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1139
 	if !teslrt.FloatEqual(teslLeft126, float64(3)) {
 //line adversarial-review-tests.tesl:1139
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft126), teslrt.DescribeValue(float64(3)))
 	}
 }
 
@@ -4302,7 +4344,7 @@ func TestTesl83(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1163
 			if !teslrt.Equal(teslLeft127, teslrt.FromInt64(7)) {
 //line adversarial-review-tests.tesl:1163
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft127), teslrt.DescribeValue(teslrt.FromInt64(7)))
 			}
 			{
 //line adversarial-review-tests.tesl:1164
@@ -4316,7 +4358,7 @@ func TestTesl83(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1166
 					if !teslrt.Equal(teslLeft128, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1166
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft128), teslrt.DescribeValue(teslrt.FromInt64(1)))
 					}
 				}
 			}
@@ -4366,7 +4408,7 @@ func TestTesl85(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1176
 			if !teslrt.Equal(teslLeft129, teslrt.FromInt64(64)) {
 //line adversarial-review-tests.tesl:1176
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft129), teslrt.DescribeValue(teslrt.FromInt64(64)))
 			}
 		}
 	}
@@ -4418,7 +4460,7 @@ func TestTesl87(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1194
 				if !teslrt.Equal(teslLeft130, teslrt.FromInt64(51)) {
 //line adversarial-review-tests.tesl:1194
-					teslT.Fatal("Tesl expectation failed")
+					teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft130), teslrt.DescribeValue(teslrt.FromInt64(51)))
 				}
 			}
 		}
@@ -4449,7 +4491,7 @@ func TestTesl88(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1214
 			if !teslrt.Equal(teslLeft131, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1214
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft131), teslrt.DescribeValue(teslrt.FromInt64(0)))
 			}
 			{
 //line adversarial-review-tests.tesl:1215
@@ -4463,7 +4505,7 @@ func TestTesl88(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1217
 					if !teslrt.Equal(teslLeft132, teslrt.FromInt64(11)) {
 //line adversarial-review-tests.tesl:1217
-						teslT.Fatal("Tesl expectation failed")
+						teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft132), teslrt.DescribeValue(teslrt.FromInt64(11)))
 					}
 				}
 			}
@@ -4487,7 +4529,7 @@ func TestTesl89(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1240
 	if !teslrt.Equal(teslLeft133, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1240
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft133), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -4511,7 +4553,7 @@ func TestTesl90(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1245
 		if !teslrt.Equal(teslLeft134, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1245
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft134), teslrt.DescribeValue(teslrt.FromInt64(1)))
 		}
 	}
 }
@@ -4536,7 +4578,7 @@ func TestTesl91(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1250
 		if !teslrt.Equal(teslLeft135, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:1250
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft135), teslrt.DescribeValue(teslrt.FromInt64(2)))
 		}
 	}
 }
@@ -4561,7 +4603,7 @@ func TestTesl92(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1255
 		if !teslrt.Equal(teslLeft136, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:1255
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft136), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -4586,7 +4628,7 @@ func TestTesl93(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1260
 		if !teslrt.Equal(teslLeft137, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:1260
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft137), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -4607,19 +4649,19 @@ func TestTesl94(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1284
 	if !teslrt.Equal(teslLeft138, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1284
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft138), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft139 := Factorial(teslrt.FromInt64(1))
 //line adversarial-review-tests.tesl:1285
 	if !teslrt.Equal(teslLeft139, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1285
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft139), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft140 := Factorial(teslrt.FromInt64(-5))
 //line adversarial-review-tests.tesl:1286
 	if !teslrt.Equal(teslLeft140, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1286
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft140), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 }
 
@@ -4639,25 +4681,25 @@ func TestTesl95(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1290
 	if !teslrt.Equal(teslLeft141, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:1290
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft141), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft142 := Factorial(teslrt.FromInt64(3))
 //line adversarial-review-tests.tesl:1291
 	if !teslrt.Equal(teslLeft142, teslrt.FromInt64(6)) {
 //line adversarial-review-tests.tesl:1291
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft142), teslrt.DescribeValue(teslrt.FromInt64(6)))
 	}
 	teslLeft143 := Factorial(teslrt.FromInt64(4))
 //line adversarial-review-tests.tesl:1292
 	if !teslrt.Equal(teslLeft143, teslrt.FromInt64(24)) {
 //line adversarial-review-tests.tesl:1292
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft143), teslrt.DescribeValue(teslrt.FromInt64(24)))
 	}
 	teslLeft144 := Factorial(teslrt.FromInt64(5))
 //line adversarial-review-tests.tesl:1293
 	if !teslrt.Equal(teslLeft144, teslrt.FromInt64(120)) {
 //line adversarial-review-tests.tesl:1293
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft144), teslrt.DescribeValue(teslrt.FromInt64(120)))
 	}
 }
 
@@ -4677,13 +4719,13 @@ func TestTesl96(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1297
 	if !teslrt.Equal(teslLeft145, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1297
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft145), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 	teslLeft146 := Fibonacci(teslrt.FromInt64(1))
 //line adversarial-review-tests.tesl:1298
 	if !teslrt.Equal(teslLeft146, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1298
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft146), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 }
 
@@ -4703,37 +4745,37 @@ func TestTesl97(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1302
 	if !teslrt.Equal(teslLeft147, teslrt.FromInt64(1)) {
 //line adversarial-review-tests.tesl:1302
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft147), teslrt.DescribeValue(teslrt.FromInt64(1)))
 	}
 	teslLeft148 := Fibonacci(teslrt.FromInt64(3))
 //line adversarial-review-tests.tesl:1303
 	if !teslrt.Equal(teslLeft148, teslrt.FromInt64(2)) {
 //line adversarial-review-tests.tesl:1303
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft148), teslrt.DescribeValue(teslrt.FromInt64(2)))
 	}
 	teslLeft149 := Fibonacci(teslrt.FromInt64(4))
 //line adversarial-review-tests.tesl:1304
 	if !teslrt.Equal(teslLeft149, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:1304
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft149), teslrt.DescribeValue(teslrt.FromInt64(3)))
 	}
 	teslLeft150 := Fibonacci(teslrt.FromInt64(5))
 //line adversarial-review-tests.tesl:1305
 	if !teslrt.Equal(teslLeft150, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:1305
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft150), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 	teslLeft151 := Fibonacci(teslrt.FromInt64(6))
 //line adversarial-review-tests.tesl:1306
 	if !teslrt.Equal(teslLeft151, teslrt.FromInt64(8)) {
 //line adversarial-review-tests.tesl:1306
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft151), teslrt.DescribeValue(teslrt.FromInt64(8)))
 	}
 	teslLeft152 := Fibonacci(teslrt.FromInt64(10))
 //line adversarial-review-tests.tesl:1307
 	if !teslrt.Equal(teslLeft152, teslrt.FromInt64(55)) {
 //line adversarial-review-tests.tesl:1307
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft152), teslrt.DescribeValue(teslrt.FromInt64(55)))
 	}
 }
 
@@ -4753,7 +4795,7 @@ func TestTesl98(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1321
 	if teslLeft153 != "done" {
 //line adversarial-review-tests.tesl:1321
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft153, "done")
 	}
 }
 
@@ -4773,7 +4815,7 @@ func TestTesl99(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1325
 	if teslLeft154 != "done" {
 //line adversarial-review-tests.tesl:1325
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft154, "done")
 	}
 }
 
@@ -4838,7 +4880,7 @@ func TestTesl102(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1347
 			if !teslrt.Equal(teslLeft155, teslRight155) {
 //line adversarial-review-tests.tesl:1347
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft155), teslrt.DescribeValue(teslRight155))
 			}
 		}
 	}
@@ -4860,14 +4902,14 @@ func TestTesl103(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1351
 	if !teslrt.Equal(teslLeft156, teslrt.FromInt64(42)) {
 //line adversarial-review-tests.tesl:1351
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft156), teslrt.DescribeValue(teslrt.FromInt64(42)))
 	}
 	teslLeft157 := sumList2([]teslrt.Int{teslrt.Neg(teslrt.FromInt64(7))})
 	teslRight157 := teslrt.Neg(teslrt.FromInt64(7))
 //line adversarial-review-tests.tesl:1352
 	if !teslrt.Equal(teslLeft157, teslRight157) {
 //line adversarial-review-tests.tesl:1352
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft157), teslrt.DescribeValue(teslRight157))
 	}
 }
 
@@ -4969,7 +5011,7 @@ func TestTesl107(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1395
 	if !teslrt.Equal(teslLeft158, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1395
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft158), teslrt.DescribeValue(teslrt.FromInt64(0)))
 	}
 }
 
@@ -4990,7 +5032,7 @@ func TestTesl108(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1399
 	if !teslrt.Equal(teslLeft159, teslRight159) {
 //line adversarial-review-tests.tesl:1399
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft159), teslrt.DescribeValue(teslRight159))
 	}
 }
 
@@ -5011,7 +5053,7 @@ func TestTesl109(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1403
 	if !teslrt.Equal(teslLeft160, teslRight160) {
 //line adversarial-review-tests.tesl:1403
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft160), teslrt.DescribeValue(teslRight160))
 	}
 }
 
@@ -5031,7 +5073,7 @@ func TestTesl110(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1437
 	if teslLeft161 != "15 is in [10, 20]" {
 //line adversarial-review-tests.tesl:1437
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft161, "15 is in [10, 20]")
 	}
 }
 
@@ -5051,7 +5093,7 @@ func TestTesl111(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1441
 	if teslLeft162 != "5 is in [5, 5]" {
 //line adversarial-review-tests.tesl:1441
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft162, "5 is in [5, 5]")
 	}
 }
 
@@ -5071,7 +5113,7 @@ func TestTesl112(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1445
 	if teslLeft163 != "-5 is in [-10, -1]" {
 //line adversarial-review-tests.tesl:1445
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft163, "-5 is in [-10, -1]")
 	}
 }
 
@@ -5091,7 +5133,7 @@ func TestTesl113(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1449
 	if teslLeft164 != "0 is in [0, 100]" {
 //line adversarial-review-tests.tesl:1449
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft164, "0 is in [0, 100]")
 	}
 }
 
@@ -5140,7 +5182,7 @@ func TestTesl115(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1472
 	if teslLeft165.Tag != teslRight165.Tag || (teslLeft165.Tag == teslrt.EitherLeft && (teslLeft165.LeftValue != teslRight165.LeftValue)) || (teslLeft165.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft165.RightValue, teslRight165.RightValue)) {
 //line adversarial-review-tests.tesl:1472
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft165), teslrt.DescribeValue(teslRight165))
 	}
 }
 
@@ -5161,7 +5203,7 @@ func TestTesl116(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1476
 	if teslLeft166.Tag != teslRight166.Tag || (teslLeft166.Tag == teslrt.EitherLeft && (teslLeft166.LeftValue != teslRight166.LeftValue)) || (teslLeft166.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft166.RightValue, teslRight166.RightValue)) {
 //line adversarial-review-tests.tesl:1476
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft166), teslrt.DescribeValue(teslRight166))
 	}
 }
 
@@ -5182,7 +5224,7 @@ func TestTesl117(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1480
 	if teslLeft167.Tag != teslRight167.Tag || (teslLeft167.Tag == teslrt.EitherLeft && (teslLeft167.LeftValue != teslRight167.LeftValue)) || (teslLeft167.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft167.RightValue, teslRight167.RightValue)) {
 //line adversarial-review-tests.tesl:1480
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft167), teslrt.DescribeValue(teslRight167))
 	}
 }
 
@@ -5224,7 +5266,7 @@ func TestTesl119(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1503
 		if !teslrt.Equal(teslLeft168, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:1503
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft168), teslrt.DescribeValue(teslrt.FromInt64(5)))
 		}
 	}
 }
@@ -5249,7 +5291,7 @@ func TestTesl120(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1508
 		if !teslrt.Equal(teslLeft169, teslrt.FromInt64(25)) {
 //line adversarial-review-tests.tesl:1508
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft169), teslrt.DescribeValue(teslrt.FromInt64(25)))
 		}
 	}
 }
@@ -5274,7 +5316,7 @@ func TestTesl121(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1513
 		if !teslrt.Equal(teslLeft170, teslrt.FromInt64(10)) {
 //line adversarial-review-tests.tesl:1513
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft170), teslrt.DescribeValue(teslrt.FromInt64(10)))
 		}
 	}
 }
@@ -5299,7 +5341,7 @@ func TestTesl122(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1518
 		if !teslrt.Equal(teslLeft171, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1518
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft171), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }
@@ -5320,7 +5362,7 @@ func TestTesl123(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1540
 	if !teslrt.Equal(teslLeft172, teslrt.FromInt64(30)) {
 //line adversarial-review-tests.tesl:1540
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft172), teslrt.DescribeValue(teslrt.FromInt64(30)))
 	}
 }
 
@@ -5412,7 +5454,7 @@ func TestTesl128(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1574
 	if !teslrt.Equal(teslLeft173, teslrt.FromInt64(5)) {
 //line adversarial-review-tests.tesl:1574
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft173), teslrt.DescribeValue(teslrt.FromInt64(5)))
 	}
 }
 
@@ -5432,7 +5474,7 @@ func TestTesl129(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1578
 	if !teslrt.Equal(teslLeft174, teslrt.FromInt64(9)) {
 //line adversarial-review-tests.tesl:1578
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft174), teslrt.DescribeValue(teslrt.FromInt64(9)))
 	}
 }
 
@@ -5452,7 +5494,7 @@ func TestTesl130(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1582
 	if !teslrt.Equal(teslLeft175, teslrt.FromInt64(7)) {
 //line adversarial-review-tests.tesl:1582
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft175), teslrt.DescribeValue(teslrt.FromInt64(7)))
 	}
 }
 
@@ -5480,7 +5522,7 @@ func TestTesl131(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1588
 			if !teslrt.Equal(teslLeft176, b) {
 //line adversarial-review-tests.tesl:1588
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft176), teslrt.DescribeValue(b))
 			}
 		}
 	}
@@ -5511,7 +5553,7 @@ func TestTesl132(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1608
 			if teslLeft177 != teslRight177 {
 //line adversarial-review-tests.tesl:1608
-				teslT.Fatal("Tesl expectation failed")
+				teslT.Fatalf("Tesl expectation failed: %t != %t", teslLeft177, teslRight177)
 			}
 		}
 	}
@@ -5583,7 +5625,7 @@ func TestTesl135(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1637
 		if !teslrt.Equal(teslLeft178, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:1637
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft178), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -5608,7 +5650,7 @@ func TestTesl136(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1642
 		if !teslrt.Equal(teslLeft179, teslrt.FromInt64(3)) {
 //line adversarial-review-tests.tesl:1642
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft179), teslrt.DescribeValue(teslrt.FromInt64(3)))
 		}
 	}
 }
@@ -5633,7 +5675,7 @@ func TestTesl137(teslT *testing.T) {
 //line adversarial-review-tests.tesl:1647
 		if !teslrt.Equal(teslLeft180, teslrt.FromInt64(0)) {
 //line adversarial-review-tests.tesl:1647
-			teslT.Fatal("Tesl expectation failed")
+			teslT.Fatalf("Tesl expectation failed: %s != %s", teslrt.DescribeValue(teslLeft180), teslrt.DescribeValue(teslrt.FromInt64(0)))
 		}
 	}
 }

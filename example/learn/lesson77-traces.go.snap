@@ -112,7 +112,7 @@ func TestTesl0(teslT *testing.T) {
 //line lesson77-traces.tesl:140
 	if teslLeft1 != "described n-1" {
 //line lesson77-traces.tesl:140
-		teslT.Fatal("Tesl expectation failed")
+		teslT.Fatalf("Tesl expectation failed: %q != %q", teslLeft1, "described n-1")
 	}
 }
 

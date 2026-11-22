@@ -141,7 +141,12 @@ let routes ()=project(fun _ _ _ file->
  let renamed=replace "note.title == \"same\"" "note.owner == \"writer\"" app in
  accepts file renamed;ignore(artifacts file renamed))
 let refused field file text=
- accepts file text;
+ (* `check` runs the emitter too, so the refusal is reported there as well as at emission —
+    a program that cannot be emitted no longer checks clean. *)
+ let message="migration query on `Note." ^ field ^ "` needs a value-preserving Copy, Rename or Revalidate field; querying a computed or retyped field during this window is not supported yet" in
+ check bool "check reports the emission refusal" true
+   (List.exists(fun(d:Compile.diagnostic)->d.code = "V001" && d.message = message)
+     (Compile.agent_context_result_source file text).diagnostics);
  match emit file text with
  | GoSuccess _->fail "unchecked delete predicate emitted"
  | GoFailure ds->check bool (describe ds) true(List.exists(fun(d:Compile.diagnostic)->d.code = "V001" && d.message = "migration query on `Note." ^ field ^ "` needs a value-preserving Copy, Rename or Revalidate field; querying a computed or retyped field during this window is not supported yet")ds)
