@@ -35,7 +35,19 @@ let portable_and_native_agree () =
       (Migration_hash.compute source) (Migration_hash.compute_native source)
   done
 
+(* Hashing pieces equals hashing their concatenation, across block boundaries. *)
+let parts_equal_concatenation () =
+  let source = String.init 1000 (fun i -> Char.chr ((i * 31 + 7) mod 256)) in
+  List.iter (fun cuts ->
+    let rec pieces start = function
+      | [] -> [String.sub source start (String.length source - start)]
+      | cut::rest -> String.sub source start (cut - start) :: pieces cut rest in
+    check string (String.concat "," (List.map string_of_int cuts))
+      (Migration_hash.digest source) (Migration_hash.digest_parts (pieces 0 cuts)))
+    [[]; [0]; [1]; [63]; [64]; [65]; [1;2;3]; [55;56;57]; [64;128;192]; [100;100;700]; [999]; [1000]]
+
 let () = run "migration-hash" ["SHA-256", [
+  test_case "pieces hash like their concatenation" `Quick parts_equal_concatenation;
   test_case "portable and native implementations agree" `Quick portable_and_native_agree;
   test_case "published vectors" `Quick vectors;
   test_case "independent binary and padding corpus" `Quick padding_boundaries;

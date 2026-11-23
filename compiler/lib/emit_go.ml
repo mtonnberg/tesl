@@ -55,11 +55,14 @@ let seal_cache_artifacts artifacts =
              prefix ^ "\"" ^ identity ^ "\"" else line)
         |> String.concat "\n" } in
   let normalized = List.map (rewrite "") artifacts in
-  let document = normalized |> List.sort (fun a b -> String.compare a.path b.path)
-    |> List.map (fun a -> Migration_canonical.seq
-         [Migration_canonical.bytes a.path; Migration_canonical.bytes a.contents]) in
-  let identity = Migration_hash.digest (Migration_canonical.encode
-    (Migration_canonical.seq (Migration_canonical.bytes "tesl-cache-artifact-v1" :: document))) in
+  (* The digest of Migration_canonical.encode (Seq (Bytes "tesl-cache-artifact-v1"
+     :: [Seq [Bytes path; Bytes contents]] sorted by path)), hashed piece by piece:
+     the emitted history alone can be tens of megabytes. *)
+  let sorted = List.sort (fun a b -> String.compare a.path b.path) normalized in
+  let bytes value = ["s" ^ string_of_int (String.length value) ^ ":"; value] in
+  let parts = ("l" ^ string_of_int (List.length sorted + 1) ^ ":") :: bytes "tesl-cache-artifact-v1" @
+    List.concat_map (fun a -> "l2:" :: bytes a.path @ bytes a.contents) sorted in
+  let identity = Migration_hash.digest_parts parts in
   List.map (rewrite identity) normalized
 
 type emit_error = {
@@ -17838,15 +17841,38 @@ let relocate_migration_history ~project_path (artifacts : artifact list) =
     if not (String.starts_with ~prefix history.contents) then
       invalid_arg "migration history artifact lacks its runtime package clause";
     let body = String.sub history.contents (String.length prefix) (String.length history.contents - String.length prefix) in
-    let body = List.fold_left (fun body name ->
-        replace_substring ~needle:("\t" ^ name ^ "(") ~by:("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
-      body ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
+    (* One pass for every registration call. No replacement can create or hide
+       another needle: each starts with a tab and a lower-case name and ends at
+       its parenthesis, and a replacement starts with an upper-case package. *)
+    let names = ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
             "registerCompiledRowPhysicalHistory"; "registerCompiledRowContractHistory"] in
+    let needles = List.map (fun name -> "\t" ^ name ^ "(","\tteslrt." ^ String.capitalize_ascii name ^ "(") names in
+    let body =
+      let length = String.length body in
+      let buffer = Buffer.create (length + 256) in
+      let at position (needle,_) =
+        position + String.length needle <= length && String.sub body position (String.length needle) = needle in
+      let rec copy start from =
+        match String.index_from_opt body from '\t' with
+        | None -> Buffer.add_substring buffer body start (length - start)
+        | Some position ->
+          match List.find_opt (at position) needles with
+          | Some (needle,by) ->
+            Buffer.add_substring buffer body start (position - start);
+            Buffer.add_string buffer by;
+            let next = position + String.length needle in copy next next
+          | None -> copy start (position + 1) in
+      if length = 0 then body else (copy 0 0; Buffer.contents buffer) in
     let relocated = { path = "internal/teslhistory/migration_history_generated.go";
       contents = "package teslhistory\n\nimport teslrt " ^ go_quote (project_path ^ "/internal/teslrt") ^ "\n" ^ body } in
+    (* The first line starting with "package ", found without splitting the file. *)
     let package_clause contents =
-      let first = List.find_opt (fun line -> String.starts_with ~prefix:"package " line) (String.split_on_char '\n' contents) in
-      Option.map (fun line -> String.trim (String.sub line 8 (String.length line - 8))) first in
+      let start = if String.starts_with ~prefix:"package " contents then Some 0
+        else Option.map (fun index -> index + 1) (find_substring contents "\npackage ") in
+      Option.map (fun start ->
+        let stop = Option.value (String.index_from_opt contents start '\n') ~default:(String.length contents) in
+        let line = String.sub contents start (stop - start) in
+        String.trim (String.sub line 8 (String.length line - 8))) start in
     let packages = List.filter_map (fun (a : artifact) ->
         match String.split_on_char '/' a.path with
         | ["internal"; dir; file] when dir <> "teslrt" && dir <> "teslhistory"
