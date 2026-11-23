@@ -11136,6 +11136,37 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
   in
   go env indent expr
 
+(* The [needles] that [contains_go_code haystack] finds, in one scan. *)
+let go_code_needles haystack needles =
+  let length = String.length haystack in
+  let found = Array.make (List.length needles) false in
+  let needles = Array.of_list needles in
+  let rec at needle index offset =
+    offset = String.length needle ||
+    (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && at needle index (offset + 1)) in
+  let first = Array.make 256 false in
+  Array.iter (fun needle -> if needle <> "" then first.(Char.code needle.[0]) <- true) needles;
+  let check index =
+    if Array.unsafe_get first (Char.code (String.unsafe_get haystack index)) then
+    Array.iteri (fun k needle ->
+      if not found.(k) && index + String.length needle <= length && at needle index 0 then found.(k) <- true) needles in
+  let rec loop index in_string escaped in_comment =
+    if index >= length then ()
+    else if in_comment then
+      if haystack.[index] = '\n' then loop (index + 1) false false false
+      else loop (index + 1) false false true
+    else if in_string then
+      if escaped then loop (index + 1) true false false
+      else if haystack.[index] = '\\' then loop (index + 1) true true false
+      else if haystack.[index] = '"' then loop (index + 1) false false false
+      else loop (index + 1) true false false
+    else if haystack.[index] = '"' then loop (index + 1) true false false
+    else if haystack.[index] = '/' && index + 1 < length && haystack.[index + 1] = '/' then
+      loop (index + 2) false false true
+    else (check index; loop (index + 1) false false false) in
+  loop 0 false false false;
+  List.filteri (fun k _ -> found.(k)) (Array.to_list needles)
+
 let contains_go_code haystack needle =
   let length = String.length haystack and needle_length = String.length needle in
   (* Compare in place: this scan runs over every emitted Go file, including the
@@ -18639,17 +18670,17 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
           and whose entry point is another got the pgx runtime files with a go.mod requiring
           nothing, which does not build.  They are rebuilt here from the union of what the
           emitted tree actually references. *)
-       let references marker =
-         List.exists (fun (artifact : artifact) ->
-           let is_go = Filename.check_suffix artifact.path ".go" in
-           is_go && contains_go_code artifact.contents marker) deduped
-       in
-       let needs_password =
-         List.exists references
-           [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
-             "teslrt.PasswordHash" ] in
-        let needs_postgres = queue_conversions<>[] ||
-          List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+       let password_markers = [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
+             "teslrt.PasswordHash" ]
+       and postgres_markers = [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+       (* Every marker the emitted Go code references, one scan per file. *)
+       let referenced = List.fold_left (fun found (artifact : artifact) ->
+         let pending = List.filter (fun marker -> not (List.mem marker found)) (password_markers @ postgres_markers) in
+         if pending = [] || not (Filename.check_suffix artifact.path ".go") then found
+         else go_code_needles artifact.contents pending @ found) [] deduped in
+       let references marker = List.mem marker referenced in
+       let needs_password = List.exists references password_markers in
+        let needs_postgres = queue_conversions<>[] || List.exists references postgres_markers in
        let needs_debug = List.exists (fun (a : artifact) ->
          a.path = "internal/teslrt/debug_file_windows.go") deduped in
        let requires =
