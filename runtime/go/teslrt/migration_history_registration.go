@@ -458,6 +458,13 @@ type pgLinkedSourceDatabase struct {
 	current                     int
 	versions                    []string // raw element text, index = version-1
 	retirements                 []PgRowRetirementDescriptor
+	nodesText                   string // raw canonical node table text
+	nodes                       pgMemo[*pgCanonicalNodes]
+}
+
+// canonicalNodes decodes the database's node table once per process.
+func (d *pgLinkedSourceDatabase) canonicalNodes() (*pgCanonicalNodes, error) {
+	return d.nodes.get(func() (*pgCanonicalNodes, error) { return pgReadCanonicalNodes(d.nodesText) })
 }
 
 var pgLinkedSources = struct {
@@ -519,8 +526,11 @@ func (source *pgLinkedSource) readHeaderNow() (*pgLinkedSourceHeader, error) {
 	if err := pgJSONIntegrity(payload); err != nil {
 		return nil, err
 	}
-	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	root, err := pgJSONObject(payload, "version", "kind", "contractEncoding", "compilerAbi", "storedValueCompatibility", "databases")
 	if err != nil {
+		return nil, err
+	}
+	if err := pgCanonicalEncodingCheck(root["contractEncoding"]); err != nil {
 		return nil, err
 	}
 	format, err := pgJSONValue[int](root["version"])
@@ -550,7 +560,7 @@ func (source *pgLinkedSource) readHeaderNow() (*pgLinkedSourceHeader, error) {
 	header := &pgLinkedSourceHeader{format: format, digest: pgHistoryDigest(payload), databases: map[string]*pgLinkedSourceDatabase{}}
 	last := ""
 	for _, raw := range entries {
-		keys := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
+		keys := []string{"database", "family", "namespace", "currentVersion", "versions", "origins", "canonicalNodes"}
 		if format == 5 {
 			keys = append(keys, "retirements")
 		}
@@ -558,7 +568,7 @@ func (source *pgLinkedSource) readHeaderNow() (*pgLinkedSourceHeader, error) {
 		if err != nil {
 			return nil, err
 		}
-		d := &pgLinkedSourceDatabase{}
+		d := &pgLinkedSourceDatabase{nodesText: fields["canonicalNodes"]}
 		if d.database, err = pgJSONValue[string](fields["database"]); err != nil {
 			return nil, err
 		}
@@ -676,7 +686,11 @@ func (source *pgLinkedSource) version(family string, k int) (PgRowSourceVersion,
 		if err := pgMigrationCheckJSON(raw); err != nil {
 			return PgRowSourceVersion{}, err
 		}
-		r := &pgMigrationWireReader{}
+		nodes, err := d.canonicalNodes()
+		if err != nil {
+			return PgRowSourceVersion{}, err
+		}
+		r := &pgMigrationWireReader{nodes: nodes}
 		version := pgReadRowSourceVersion(r, json.RawMessage(raw), family, source.history.SourceCompilerABI, source.history.StoredValueCompatibility)
 		if r.err == nil && version.Version != k {
 			r.fail("row versions must be consecutive")

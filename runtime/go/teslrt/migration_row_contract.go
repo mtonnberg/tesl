@@ -342,8 +342,9 @@ func registerCompiledRowContractHistory(payload string) {
 		}
 	}
 	must(pgJSONIntegrity(payload))
-	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "databases")
+	root, err := pgJSONObject(payload, "version", "kind", "contractEncoding", "compilerAbi", "databases")
 	must(err)
+	must(pgCanonicalEncodingCheck(root["contractEncoding"]))
 	format, err := pgJSONValue[int](root["version"])
 	must(err)
 	kind, err := pgJSONValue[string](root["kind"])
@@ -358,7 +359,9 @@ func registerCompiledRowContractHistory(payload string) {
 	pending := map[*pgCompiledRowHistory]map[int]*pgRowContract{}
 	histories := map[*pgCompiledRowHistory]*pgRowContractHistory{}
 	for _, raw := range entries {
-		entry, err := pgJSONObject(raw, "database", "family", "namespace", "contracts")
+		entry, err := pgJSONObject(raw, "database", "family", "namespace", "contracts", "canonicalNodes")
+		must(err)
+		nodes, err := pgReadCanonicalNodes(entry["canonicalNodes"])
 		must(err)
 		family, err := pgJSONValue[string](entry["family"])
 		must(err)
@@ -382,10 +385,16 @@ func registerCompiledRowContractHistory(payload string) {
 			must(err)
 			var text pgRowContractText
 			for _, field := range []struct {
-				name   string
-				target *string
-			}{{"contract", &text.contract}, {"hash", &text.hash}, {"settled", &text.settled}, {"settledHash", &text.settledHash}} {
-				value, err := pgJSONValue[string](c[field.name])
+				name     string
+				target   *string
+				contract bool
+			}{{"contract", &text.contract, true}, {"hash", &text.hash, false}, {"settled", &text.settled, true}, {"settledHash", &text.settledHash, false}} {
+				var value string
+				if field.contract {
+					value, err = pgCanonicalReference(nodes, c[field.name])
+				} else {
+					value, err = pgJSONValue[string](c[field.name])
+				}
 				must(err)
 				*field.target = value
 			}

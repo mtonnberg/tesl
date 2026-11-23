@@ -24,7 +24,7 @@ func rowTestJSON(t *testing.T, v any) string {
 	if e != nil {
 		t.Fatal(e)
 	}
-	return string(b)
+	return pgTestCompactHistoryJSON(t, string(b))
 }
 func rowTestFixture(t *testing.T) (PgCompiledMigrationHistory, map[string]any, map[string]any) {
 	t.Helper()

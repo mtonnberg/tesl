@@ -86,6 +86,9 @@ let seal_edge root path =
 let emit file = match Compile.compile_row_source_artifacts ~storage:true file (Source_input.read file) with
  | Compile.GoSuccess a -> a | Compile.GoFailure d -> fail (describe d)
 let artifact path values=(List.find (fun (a:Emit_go.artifact) -> a.path=path) values).contents
+(* Helpers for injected runtime tests that edit contracts in a generated history. *)
+let canonical_nodes_test () = "internal/teslrt/canonical_nodes_test.go",
+ Source_input.read (Filename.concat (Option.get (Sys.getenv_opt "TESL_REPO_ROOT")) "compiler/test/fixtures/canonical-nodes/nodes_test.go")
 let native ?source_root ?(extra_tests=[]) ?(test="") ?(expected_tests=[]) artifacts =
  let root=Filename.temp_dir "tesl-row-native-" "" in
  Fun.protect ~finally:(fun () -> if Sys.getenv_opt "TESL_KEEP_LEGACY_NATIVE_TEST"=None then remove root else Printf.printf "Retained native fixture: %s\n%!" root) (fun () ->
@@ -343,7 +346,6 @@ test "new writes have the exact immediately previous representation" {
 let proof_nullable () =
  let binding_test={|package teslrt
 import (
- "encoding/hex"
  "encoding/json"
  "strings"
  "testing"
@@ -358,15 +360,16 @@ func TestActualTwoWriteBackSemanticBijection(t *testing.T) {
   t.Run([]string{"duplicate-first-omit-second","duplicate-second-omit-first"}[duplicate],func(t *testing.T){
    var envelope map[string]any
    if err:=json.Unmarshal([]byte(teslGeneratedRowHistoryJSON),&envelope);err!=nil{t.Fatal(err)}
-   descriptor:=envelope["databases"].([]any)[0].(map[string]any)["transforms"].([]any)[0].(map[string]any)
-   document,_,err:=pgReadRowCanonical(descriptor["transformContract"].(string));if err!=nil{t.Fatal(err)}
+   database:=envelope["databases"].([]any)[0].(map[string]any)
+   descriptor:=database["transforms"].([]any)[0].(map[string]any)
+   document,_,err:=pgReadRowCanonical(testCanonicalHex(t,database,descriptor["transformContract"]));if err!=nil{t.Fatal(err)}
    writes:=&document.children[3].children[3].children[0].children[6].children[2]
    if len(writes.children)!=2||writes.children[0].children[1].value==writes.children[1].children[1].value{t.Fatal("test requires two distinct checked endpoints")}
    writes.children[1-duplicate]=writes.children[duplicate]
    // Update both bytes and hash so refusal must come from the endpoint
    // inventory check, never stale canonical digest validation.
-   raw,hash:=pgRowBaselineDocument(document.children[3])
-   descriptor["transformContract"],descriptor["transformContractHash"]=hex.EncodeToString([]byte(raw)),hash
+   _,hash:=pgRowBaselineDocument(document.children[3])
+   descriptor["transformContract"],descriptor["transformContractHash"]=testCanonicalAppend(database,document),hash
    payload,err:=json.Marshal(envelope);if err!=nil{t.Fatal(err)}
    _,err=pgReadRowCompanion(history,string(payload))
    if err==nil||!strings.Contains(err.Error(),"WriteBack semantic closure endpoints are not a bijection") {
@@ -446,7 +449,7 @@ fn backOptional(row: Schema.Notes.VCurrent.Note) -> Maybe Schema.Notes.V1.Metada
   |> replace {|readback.Metadata.Text!="new-write"|} {|readback.Metadata.Text!="new-write"||readback.OptionalMetadata.Tag!=rt.MaybeSomething||readback.OptionalMetadata.SomethingValue.Text!="second-write"|} in
  project ~before ~after (fun root save path -> reseal root path body;
   let file=save "app.tesl" app in accepts file (Source_input.read file);
-  native ~source_root:root ~test ~extra_tests:["internal/teslrt/migration_writeback_bijection_test.go",binding_test] (emit file))
+  native ~source_root:root ~test ~extra_tests:["internal/teslrt/migration_writeback_bijection_test.go",binding_test;canonical_nodes_test ()] (emit file))
 let writeback_registration ()=project (fun root save path ->
  seal_edge root path;let file=save "app.tesl" app in
  let artifacts=emit file |> List.map (fun (a:Emit_go.artifact) ->
@@ -572,7 +575,7 @@ let unary_reverse_copy () =
   reseal root path body; let file=save "app.tesl" app in
   accepts file (Source_input.read file); native ~source_root:root (emit file))
 let legacy_wire_tests={|package teslrt
-import("encoding/hex";"encoding/json";"strings";"testing")
+import("encoding/json";"strings";"testing")
 func TestLegacyDescriptorAndSemanticAuthority(t *testing.T){
  history:=compiledRowHistories["Schema.Notes"].history
  if _,err:=pgReadRowCompanion(history,teslGeneratedRowHistoryJSON);err!=nil{t.Fatal("original checked legacy descriptor",err)}
@@ -593,18 +596,19 @@ func TestLegacyDescriptorAndSemanticAuthority(t *testing.T){
  mutate("unknown","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"unknown"}})
  mutate("duplicate","invalid Legacy",func(_,d map[string]any){d["legacyWrites"]=[]any{"metadata","metadata"}})
  mutate("older-format-is-closed","unexpected",func(root,_ map[string]any){root["version"]=3})
- semantic:=func(d map[string]any,fn func(*pgRowCanonical)){
-  document,_,err:=pgReadRowCanonical(d["transformContract"].(string));if err!=nil{t.Fatal(err)}
+ semantic:=func(root,d map[string]any,fn func(*pgRowCanonical)){
+  database:=root["databases"].([]any)[0].(map[string]any)
+  document,_,err:=pgReadRowCanonical(testCanonicalHex(t,database,d["transformContract"]));if err!=nil{t.Fatal(err)}
   writes:=&document.children[3].children[3].children[0].children[6].children[2]
   if len(writes.children)!=1||!writes.children[0].children[0].isAtom("legacy-with"){t.Fatal("expected exact original LegacyWith closure")}
   fn(&writes.children[0])
-  raw,digest:=pgRowBaselineDocument(document.children[3])
-  d["transformContract"],d["transformContractHash"]=hex.EncodeToString([]byte(raw)),digest
+  _,digest:=pgRowBaselineDocument(document.children[3])
+  d["transformContract"],d["transformContractHash"]=testCanonicalAppend(database,document),digest
  }
- mutate("fresh-hash-foreign-endpoint","legacy semantic endpoints",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[1]=pgRowAtom("title")})})
- mutate("fresh-hash-wrong-literal-carrier","Legacy literal differs",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[0]=pgRowAtom("legacy");w.children[2]=pgRowList(pgRowAtom("string"),pgRowAtom("not-jsonb"))})})
- mutate("fresh-hash-legacy-as-empty-writeback","WriteBack semantic closure endpoints",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){*w=pgRowList(pgRowAtom("write-back"),w.children[1],pgRowAtom(""),w.children[2])})})
- mutate("fresh-hash-missing-function","closure",func(_,d map[string]any){semantic(d,func(w *pgRowCanonical){w.children[2]=pgRowList()})})
+ mutate("fresh-hash-foreign-endpoint","legacy semantic endpoints",func(root,d map[string]any){semantic(root,d,func(w *pgRowCanonical){w.children[1]=pgRowAtom("title")})})
+ mutate("fresh-hash-wrong-literal-carrier","Legacy literal differs",func(root,d map[string]any){semantic(root,d,func(w *pgRowCanonical){w.children[0]=pgRowAtom("legacy");w.children[2]=pgRowList(pgRowAtom("string"),pgRowAtom("not-jsonb"))})})
+ mutate("fresh-hash-legacy-as-empty-writeback","WriteBack semantic closure endpoints",func(root,d map[string]any){semantic(root,d,func(w *pgRowCanonical){*w=pgRowList(pgRowAtom("write-back"),w.children[1],pgRowAtom(""),w.children[2])})})
+ mutate("fresh-hash-missing-function","closure",func(root,d map[string]any){semantic(root,d,func(w *pgRowCanonical){w.children[2]=pgRowList()})})
 }
 |}
 
@@ -639,7 +643,7 @@ func TestActualLegacyJSONBCodec(t *testing.T) {
  if metadata["oldText"]!="new-row"||len(metadata)!=1{t.Fatal("legacy value used wrong codec",metadata)}
 }
 |} in
-  native ~source_root:root ~test ~extra_tests:["internal/teslrt/legacy_wire_test.go",legacy_wire_tests] artifacts)
+  native ~source_root:root ~test ~extra_tests:["internal/teslrt/legacy_wire_test.go",legacy_wire_tests;canonical_nodes_test ()] artifacts)
 
 let legacy_constants () =
  let before={|module Schema.Notes.V1 exposing [Note]

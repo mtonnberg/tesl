@@ -293,14 +293,21 @@ let array f xs = "[" ^ String.concat "," (List.map f xs) ^ "]"
 let column_json ~quote c =
   Printf.sprintf {|{"field":%s,"name":%s,"type":%s,"nullable":%b,"primaryKey":%b}|}
     (quote c.field) (quote c.column) (quote c.scalar) c.nullable c.primary_key
-let version_json ~quote ~go_type (v:version) =
+(* [contract] renders a contract field from its hexadecimal canonical bytes
+   (Migration_canonical_nodes.reference over the document's table). Renderers
+   call it in field order, so a node table's entries follow the document. *)
+let version_json ~quote ~contract ~go_type (v:version) =
   let entity e =
     let package,name=go_type v.version e in
+    let type_contract=contract e.type_contract in
     Printf.sprintf {|{"entity":%s,"table":%s,"generation":%d,"typeContract":%s,"typeContractHash":%s,"columns":%s,"goTypePackage":%s,"goTypeName":%s}|}
-      (quote e.identity) (quote e.table) e.generation (quote e.type_contract) (quote e.type_hash)
+      (quote e.identity) (quote e.table) e.generation type_contract (quote e.type_hash)
       (array (column_json ~quote) e.columns) (quote package) (quote name) in
+  let schema_contract=contract v.schema_contract in
+  let storage_contract=contract v.storage_contract in
+  let entities=array entity v.entities in
   Printf.sprintf {|{"version":%d,"schemaContract":%s,"schemaSnapshotHash":%s,"storageContract":%s,"storageSnapshotHash":%s,"entities":%s}|}
-    v.version (quote v.schema_contract) (quote v.schema_hash) (quote v.storage_contract) (quote v.storage_hash) (array entity v.entities)
+    v.version schema_contract (quote v.schema_hash) storage_contract (quote v.storage_hash) entities
 let field_json ~quote f =
   let nullable=Option.fold ~none:"null" ~some:quote in
   let enforcement=if f.kind="revalidate" then ",\"proofEnforcement\":\"runtime-only\"" else "" in
@@ -308,18 +315,20 @@ let field_json ~quote f =
     (quote f.target) (quote f.kind) (nullable f.source) (nullable f.constant) enforcement
 (* [extra] carries the projection and write fields the caller derives from its
    emitted adapters and live flags. *)
-let transform_json ~quote ~extra x =
+let transform_json ~quote ~contract ~extra x =
   let fields=List.sort compare (List.map (fun f -> f.target,field_json ~quote f) x.fields) in
   Printf.sprintf {|{"migrationVersion":%d,"entity":%s,"table":%s,"mode":%s,"previousGeneration":%d,"targetGeneration":%d,"fromSchemaSnapshot":%s,"toSchemaSnapshot":%s,"fromStorageSnapshot":%s,"toStorageSnapshot":%s,"fromTypeContractHash":%s,"toTypeContractHash":%s,"sourceSchemaColumns":%s,"targetSchemaColumns":%s,"fieldMapping":%s,"transformContractFormat":"tesl-row-transform-v1","transformContract":%s,"transformContractHash":%s%s}|}
     x.migration_version (quote x.current.identity) (quote x.current.table) (quote x.mode) x.previous.generation x.current.generation
     (quote x.from_schema) (quote x.to_schema) (quote x.from_storage) (quote x.to_storage)
     (quote x.previous.type_hash) (quote x.current.type_hash) (array (column_json ~quote) x.previous.columns)
     (array (column_json ~quote) x.current.columns) (array snd fields)
-    (quote x.transform_contract) (quote x.transform_hash) extra
-let physical_json ~quote p = Printf.sprintf {|{"contract":%s,"hash":%s}|} (quote p.physical_contract) (quote p.physical_hash)
-let contract_json ~quote c =
+    (contract x.transform_contract) (quote x.transform_hash) extra
+let physical_json ~quote ~contract p = Printf.sprintf {|{"contract":%s,"hash":%s}|} (contract p.physical_contract) (quote p.physical_hash)
+let contract_json ~quote ~contract c =
+  let encoded=contract c.encoded in
+  let settled=contract c.settled in
   Printf.sprintf {|{"contract":%s,"hash":%s,"settled":%s,"settledHash":%s}|}
-    (quote c.encoded) (quote c.digest) (quote c.settled) (quote c.settled_hash)
+    encoded (quote c.digest) settled (quote c.settled_hash)
 let queue_version_json ~quote (v:queue_version) =
   let payload p=Printf.sprintf {|{"job":%s,"contractFormat":"tesl-queue-payload-v1","contract":%s,"contractHash":%s}|}
     (quote p.job) (quote p.contract) (quote p.contract_hash) in

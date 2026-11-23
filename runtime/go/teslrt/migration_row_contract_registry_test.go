@@ -25,7 +25,10 @@ func TestRowContractMalformedEnvelopeCannotPublish(t *testing.T) {
 			}
 			pgMigrationRegistrations.Unlock()
 			rejected := false
-			func() { defer func() { rejected = recover() != nil }(); registerCompiledRowContractHistory(payload) }()
+			func() {
+				defer func() { rejected = recover() != nil }()
+				registerCompiledRowContractHistory(pgTestCompactHistoryJSON(t, payload))
+			}()
 			if !rejected {
 				t.Fatal("malformed compiler envelope was accepted")
 			}
@@ -68,7 +71,7 @@ func TestRowContractCompleteEnvelopeRefusesPartialPublication(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(raw)
+		return pgTestCompactHistoryJSON(t, string(raw))
 	}
 	for _, entries := range [][]any{{}, {entry, entry}, {entry, map[string]any{"database": "Foreign.Main", "family": "Foreign.Schema", "namespace": "foreign", "contracts": []any{}}}} {
 		failed := false
