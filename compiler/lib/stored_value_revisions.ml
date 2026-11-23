@@ -47,7 +47,7 @@ type family = {
 let families = [
   {name="proof-interpretation"; revision=5; files=[
     "compiler/lib/proof_kernel.ml","3cada1eb90e3954f2003019ed694c1e05971015a284ff630208d9a0c81d6a258";
-    "compiler/lib/proof_checker.ml","5982e9daba0926f4392a062c0f72e899cc9556173aff86a56aaa7f42cd7ca6e8";
+    "compiler/lib/proof_checker.ml","5eedb19a1114d186fe970e36a47d1654dc45208f6f4fd96959c6386dd84e56b4";
     "compiler/lib/proof_discharge.ml","f9f9f14492ffa01bb3bdc0a24dbbca8e5b0c881b21d28280cdc3867563af9917";
     "compiler/lib/validation_proof.ml","457f3c7ff53e09c89347541e87f6d0d48650c2afc619a43598adb3e06f841619";
   ]};
@@ -78,7 +78,7 @@ let families = [
     "runtime/go/teslrt/currency_data.go","c1ea387f03c36ec51cbe5866d72412013846bdd6908f953626626dd3e22bec40";
   ]};
   {name="text-and-patterns"; revision=1; files=[
-    "runtime/go/teslrt/string.go","7ff731f248c45597e277d672e11485e9fb049fe2c171c3afa0d0cf23b57396ae";
+    "runtime/go/teslrt/string.go","4556bdbd8361510bfaf533c6521027ec168853c864ede73fd9f1c2d3787eed79";
     "runtime/go/teslrt/regex.go","6b7a859cbbf6a7eeec53dfc8b9096054c16434f01a2677d74fb9c5c269fe4959";
   ]};
   {name="time"; revision=1; files=[
