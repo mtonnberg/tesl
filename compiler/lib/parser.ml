@@ -5980,34 +5980,45 @@ and parse_module_header_body s =
 (* Parsing depends only on filename and exact bytes. ASTs are immutable; unlike
    source resolution or checking, this cache needs no filesystem observations. *)
 let parse_module_uncached = parse_module
-type module_cache = { entries : ((string * string), module_form) Hashtbl.t; mutable weight : int }
+module Text_table = Hashtbl.Make (struct
+  type t = string * string
+  let equal (a, b) (c, d) = String.equal a c && String.equal b d
+  (* Length and both ends of the bytes: hashing every byte to find a parse
+     cost a sizable fraction of the parse. *)
+  let hash (file, bytes) =
+    let n = String.length bytes in
+    Hashtbl.hash (file, n, (if n <= 128 then bytes else String.sub bytes 0 64 ^ String.sub bytes (n - 64) 64))
+end)
+type module_cache = { entries : module_form Text_table.t; mutable weight : int }
 let active_module_cache : module_cache option ref = ref None
 let with_module_cache f = match !active_module_cache with
  | Some _ -> f ()
  | None ->
-   active_module_cache := Some {entries=Hashtbl.create 128;weight=0};
+   active_module_cache := Some {entries=Text_table.create 128;weight=0};
    Fun.protect ~finally:(fun () -> active_module_cache := None) f
 let parse_module filename source =
  match !active_module_cache with
  | None -> parse_module_uncached filename source
  | Some cache ->
    let key = filename,source in
-   match Hashtbl.find_opt cache.entries key with
+   match Text_table.find_opt cache.entries key with
    | Some m -> Ok m
    | None ->
      let result = parse_module_uncached filename source in
      (match result with
       | Err _ -> ()
       | Ok m ->
-        let size = String.length (Marshal.to_string (key,m) []) in
+        (* A bound on memory, not an exact size: an AST is a small multiple
+           of its source bytes. *)
+        let size = 16 * (String.length filename + String.length source) in
         (* A command over a long migration history parses every frozen
            revision several times; an entry bound below the history's module
            count would clear the cache on every pass. Weight alone bounds it. *)
         if size <= 128 * 1024 * 1024 then begin
-          if Hashtbl.length cache.entries >= 8192 || cache.weight + size > 128 * 1024 * 1024 then begin
-            Hashtbl.clear cache.entries; cache.weight <- 0
+          if Text_table.length cache.entries >= 8192 || cache.weight + size > 128 * 1024 * 1024 then begin
+            Text_table.clear cache.entries; cache.weight <- 0
           end;
-          Hashtbl.replace cache.entries key m; cache.weight <- cache.weight + size
+          Text_table.replace cache.entries key m; cache.weight <- cache.weight + size
         end);
      result
 

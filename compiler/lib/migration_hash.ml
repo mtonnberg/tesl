@@ -119,19 +119,37 @@ let compute_native source = let t = stream () in feed t source; finish t
    (lib/hash_native); every other build uses the OCaml rounds below. *)
 let native : (string -> string) option ref = ref None
 let install_native f = native := Some f
-let memo : (string, string) Hashtbl.t = Hashtbl.create 1024
+(* Keyed by length and both ends of the string: hashing the whole string to
+   find its digest cost as much as computing the digest. Equal keys still
+   compare the complete strings. *)
+let sampled_hash s =
+  let n = String.length s in
+  if n <= 128 then Hashtbl.hash s
+  else Hashtbl.hash (n, String.sub s 0 64, String.sub s (n - 64) 64)
+module Memo = Hashtbl.Make (struct
+  type t = string
+  let equal = String.equal
+  let hash = sampled_hash
+end)
+(* Tables keyed by a file name and its bytes, hashed as [Memo]. *)
+module Text_table = Hashtbl.Make (struct
+  type t = string * string
+  let equal (a, b) (c, d) = String.equal a c && String.equal b d
+  let hash (file, bytes) = Hashtbl.hash (Hashtbl.hash file, sampled_hash bytes)
+end)
+let memo : string Memo.t = Memo.create 1024
 let memo_bytes = ref 0
 let memo_limit = 256 * 1024 * 1024
 
 let rec digest source =
-  match Hashtbl.find_opt memo source with
+  match Memo.find_opt memo source with
   | Some result -> result
   | None ->
     let result = (match !native with Some f -> f source | None -> if Sys.int_size >= 63 then compute_native source else compute source) in
     if !memo_bytes + String.length source > memo_limit then begin
-      Hashtbl.reset memo; memo_bytes := 0
+      Memo.reset memo; memo_bytes := 0
     end;
-    Hashtbl.replace memo source result;
+    Memo.replace memo source result;
     memo_bytes := !memo_bytes + String.length source;
     result
 
