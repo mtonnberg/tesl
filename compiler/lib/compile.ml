@@ -2660,8 +2660,17 @@ let checked_migration_artifacts sources =
         collect rows (Option.fold ~none:queues ~some:(fun repair->repair::queues)repair) rest)) in
  collect [] [] sources
 
-let compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="") ~queue_conversions filename source =
+let rec compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="") ?(attempts=2) ~queue_conversions filename source =
  Migration_program.with_compilation_cache (fun () ->
+  (* Published only when no input read through the compilation's memoized
+     disk answers changed while it ran; otherwise compiled again from fresh
+     reads. *)
+  let result = compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source in
+  if attempts = 0 || not (Source_input.disk_changed ()) then result
+  else (Source_input.reset_disk_memo ();
+    compile_go_source_internal ~debug ~prechecked ~path ~attempts:(attempts - 1) ~queue_conversions filename source))
+and compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source =
+ (fun f -> f ()) (fun () ->
   let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
