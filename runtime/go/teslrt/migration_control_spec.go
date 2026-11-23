@@ -202,18 +202,30 @@ begin
    min_version = case when s.current = 0 then v else min_version end,
    compat_floor = case when s.current = 0 then v else compat_floor end where id = 1;
 end`},
+		// Every process registers under a fresh random instance id, so the table
+		// would otherwise grow by one row per process start forever. A new
+		// registration therefore removes a bounded batch of rows unseen for
+		// seven days. Every reader treats rows older than 30 seconds as dead,
+		// so pruning never changes liveness, close-epoch or retirement
+		// decisions. SKIP LOCKED keeps concurrent registrations from waiting
+		// on, or deadlocking with, each other.
 		{"tesl_heartbeat", "v integer, proto integer, seen_floor integer", "void", "volatile", `
-declare instance_id text := pg_catalog.current_setting('application_name',true); admitted_floor integer;
+declare instance_id text := pg_catalog.current_setting('application_name',true); admitted_floor integer; registering boolean;
 begin
  admitted_floor := ` + ns + `tesl_admit(v);
  if instance_id is null or instance_id !~ '^tesl-(app|exec):' or proto is distinct from 1 or
    seen_floor is null or seen_floor < 0 or seen_floor > admitted_floor then
    raise exception 'tesl: invalid registered instance heartbeat';
  end if;
+ registering := not exists(select 1 from ` + ns + `tesl_schema_instances where instance=instance_id);
  insert into ` + ns + `tesl_schema_instances(instance,version,protocol_level,last_seen,compat_floor_seen)
  values (instance_id,v,proto,pg_catalog.clock_timestamp(),seen_floor)
  on conflict (instance) do update set version=excluded.version, protocol_level=excluded.protocol_level,
    last_seen=excluded.last_seen, compat_floor_seen=greatest(tesl_schema_instances.compat_floor_seen,excluded.compat_floor_seen);
+ if registering then
+   delete from ` + ns + `tesl_schema_instances where instance in (select stale.instance from ` + ns + `tesl_schema_instances stale
+     where stale.last_seen<pg_catalog.clock_timestamp()-interval '7 days' limit 100 for update skip locked);
+ end if;
  update ` + ns + `tesl_schema_meta set max_observed_protocol=greatest(max_observed_protocol,proto) where id=1;
 end`},
 	}

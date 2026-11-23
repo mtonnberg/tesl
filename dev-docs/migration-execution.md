@@ -210,6 +210,9 @@ origin and never adopt pre-existing objects by name.
 The format-2 base contains the meta/state/version/instance tables, expansion
 intents and ordered object progress. Its five security-definer functions admit a
 version, begin an expansion, record an object, finalize expansion, and heartbeat.
+A heartbeat that registers a new instance id also deletes at most 100 instance
+rows unseen for seven days (`FOR UPDATE SKIP LOCKED`); every liveness reader uses
+a 30-second window, so pruning never changes their decisions.
 Their search path is empty and their references are qualified. PostgreSQL verifies
 each object identity and permits only an immutable consecutive prefix. Finalizing
 the baseline records `expanded`, `contracting` and `contracted` together; later

@@ -354,6 +354,30 @@ most that long while the in-flight ones finish. A transaction that stays open
 longer (an idle-in-transaction session, a long report) keeps the Worker waiting
 until it ends or the operation's deadline expires.
 
+## Instance heartbeats and retention
+
+Every application process and schema Worker registers one row in
+`<schema>.tesl_schema_instances` through the protected `tesl_heartbeat`
+function, under a fresh random instance id, and renews it every few seconds.
+Close-epoch, queue retirement, catch-up and `--schema deploy` only count rows
+renewed within the last 30 seconds as live.
+
+When a process registers a new instance id, `tesl_heartbeat` also deletes up to
+100 rows that have not been renewed for seven days. Renewals delete nothing, so
+a heartbeat stays one upsert. Rows that another registration is deleting at the
+same moment are skipped (`FOR UPDATE SKIP LOCKED`), so concurrent process starts
+neither wait for nor deadlock with each other. Each new process removes up to 100
+stale rows while adding one, so the table holds roughly the processes seen in
+the last seven days. `--schema status` lists the rows that remain; a process
+that stopped more than seven days ago may no longer appear there.
+
+This pruning changed the body of the protected `tesl_heartbeat` function. The
+runtime compares every installed protected function with the exact definition
+it expects, so a database installed by an earlier pre-release binary refuses
+this binary with `protected migration function <schema>.tesl_heartbeat differs
+from its definition, owner or execution grants` until it is reinstalled. There
+is no in-place upgrade for this change; recreate pre-release databases.
+
 ## Backups and restores
 
 Back up and restore the whole database, not a single schema. Tesl's bookkeeping
