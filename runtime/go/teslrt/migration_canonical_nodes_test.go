@@ -114,7 +114,7 @@ func pgTestCompactHistory(doc map[string]any) map[string]any {
 // pgTestCompactHistoryJSON converts an encoded test document.
 func pgTestCompactHistoryJSON(t testing.TB, payload string) string {
 	t.Helper()
-	var doc map[string]any
+	doc := map[string]any{}
 	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func pgTestExpandHistory(t testing.TB, doc map[string]any) map[string]any {
 // pgTestExpandHistoryJSON decodes a linked document into its test form.
 func pgTestExpandHistoryJSON(t testing.TB, payload string) map[string]any {
 	t.Helper()
-	var doc map[string]any
+	doc := map[string]any{}
 	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
 		t.Fatal(err)
 	}
