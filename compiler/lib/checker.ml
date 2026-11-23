@@ -6543,7 +6543,8 @@ let check_config_ctor_expr_positions (m : module_form) : type_error list =
     (via `import Tesl.X exposing [Pred]`) to be usable in proof annotations.
     A plain `import Tesl.X` (ImportAll) does NOT make these predicates available. *)
 let tesl_module_predicate_exports : (string * string list) list = [
-  ("Tesl.String",  ["IsTrimmed"; "IsUpperCase"; "IsLowerCase"; "IsNonNegative"; "IsNonEmpty"]);
+  ("Tesl.String",  ["IsTrimmed"; "IsUpperCase"; "IsLowerCase"; "IsNonNegative"; "IsNonEmpty";
+                    "IsBase64Url"; "IsHex"]);
   ("Tesl.List",    ["IsSorted"]);
   ("Tesl.Int",     ["IsNonNegative"; "IsNonZero"]);
   (* Int32 mints the SAME two predicates over its own nominal type; exposing

@@ -15126,6 +15126,12 @@ let compile_module_internal ?(seal=true) ?(stage_preparation=false) ?(migration_
       "String.lines",     [`Str], `StrList, "teslrt.StringLines";
       "String.toFloat",   [`Str], `MaybeFloat, "teslrt.ParseFloat";
       "String.fromFloat", [`Float], `Str,   "teslrt.FormatFloat";
+      "String.toBase64Url",    [`Str], `Str,      "teslrt.StringToBase64Url";
+      "String.parseBase64Url", [`Str], `MaybeStr, "teslrt.StringParseBase64Url";
+      "String.fromBase64Url",  [`Str], `Str,      "teslrt.StringFromBase64Url";
+      "String.toHex",          [`Str], `Str,      "teslrt.StringToHex";
+      "String.parseHex",       [`Str], `MaybeStr, "teslrt.StringParseHex";
+      "String.fromHex",        [`Str], `Str,      "teslrt.StringFromHex";
       (* `Tesl.Int` checks: `List.take`/`List.drop` are proof-total, so a caller
          needs `check Int.nonNegative n` before it can pass a count at all. *)
       "Int.nonZero",      [`Int], `CheckInt, "teslrt.IntNonZero";
@@ -15794,12 +15800,14 @@ let compile_module_internal ?(seal=true) ?(stage_preparation=false) ?(migration_
         List.iter (fun name ->
           if List.mem name string_leaf_names then begin
             string_imports := name :: !string_imports;
-            if name = "String.toInt" || name = "String.indexOf" then maybe_imported := true
+            if List.mem name ["String.toInt"; "String.indexOf";
+                              "String.parseBase64Url"; "String.parseHex"]
+            then maybe_imported := true
           end else match name with
             (* The proof predicates are compile-time only: they erase with every
                other proof, so importing one needs no runtime support. *)
             | "IsTrimmed" | "IsUpperCase" | "IsLowerCase" | "IsNonNegative"
-            | "IsNonEmpty" -> ()
+            | "IsNonEmpty" | "IsBase64Url" | "IsHex" -> ()
             | other -> unsupported import.loc
               "Go backend does not emit the `Tesl.String` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
@@ -16576,6 +16584,7 @@ let compile_module_internal ?(seal=true) ?(stage_preparation=false) ?(migration_
         | `CheckFloat -> TCheck TFloat
         | `Bool -> TBool
         | `MaybeInt -> maybe_int ()
+        | `MaybeStr -> maybe_of TString
         | `StrList -> TList TString
         | `CheckStr -> TCheck TString
         | `CheckInt -> TCheck TInt

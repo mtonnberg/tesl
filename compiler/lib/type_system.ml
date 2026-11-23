@@ -493,6 +493,15 @@ let stdlib_env : (string * scheme) list = [
   "String.indexOf",    mono (t_fun [t_string; t_string] (t_maybe t_int));
   (* check function: passes a non-empty string through, minting IsNonEmpty *)
   "String.requireNonEmpty", mono (t_fun [t_string] t_string);
+  (* Reversible encodings.  `to*` mint IsBase64Url / IsHex on the result,
+     `parse*` validate untrusted text into the same fact, and `from*` decode only
+     a proven value, so decoding cannot fail at runtime. *)
+  "String.toBase64Url",    mono (t_fun [t_string] t_string);
+  "String.parseBase64Url", mono (t_fun [t_string] (t_maybe t_string));
+  "String.fromBase64Url",  mono (t_fun [t_string] t_string);
+  "String.toHex",          mono (t_fun [t_string] t_string);
+  "String.parseHex",       mono (t_fun [t_string] (t_maybe t_string));
+  "String.fromHex",        mono (t_fun [t_string] t_string);
 
   (* ── Regex (LANGUAGE-SPEC.md §21.6) ──────────────────────────────────────
      The PATTERN is argument 1 of every function and must be a string LITERAL:
@@ -1474,7 +1483,10 @@ let tesl_module_exports : (string * string list) list = [
       "String.reverse"; "String.toInt"; "String.toFloat"; "String.fromInt";
       "String.fromFloat"; "String.lines"; "String.words";
       "String.padLeft"; "String.padRight"; "String.dropPrefix"; "String.dropSuffix";
-      "String.indexOf"; "String.requireNonEmpty" ] );
+      "String.indexOf"; "String.requireNonEmpty";
+      "IsBase64Url"; "IsHex";
+      "String.toBase64Url"; "String.parseBase64Url"; "String.fromBase64Url";
+      "String.toHex"; "String.parseHex"; "String.fromHex" ] );
   ( "Tesl.Regex",
     (* Pattern-literal-only regex over String — see LANGUAGE-SPEC.md §21.6.
        Pure: no capability.  The pattern is argument 1 everywhere. *)

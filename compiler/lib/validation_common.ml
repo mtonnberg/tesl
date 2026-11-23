@@ -2002,6 +2002,55 @@ let stdlib_func_infos : (string * func_info) list =
          entity_proof = Some (PredApp { pred = "IsTrimmed"; args = []; loc = g });
          other_proof = None; loc = g };
        fi_loc = g; fi_http_methods = [] });
+    (* Reversible encodings.  IsBase64Url s / IsHex s say: s is the CANONICAL
+       encoding (base64url without padding / lowercase hex) of the UTF-8 bytes of
+       some String.  Minted only by these four rows — `to*` on the encoder's
+       result, `parse*` on a validated `Something` — so `from*` can decode without
+       a failure path. *)
+    ("String.toBase64Url",
+     { fi_name = "String.toBase64Url"; fi_kind = FnKind;
+       fi_params = [ plain "s" "String" ];
+       fi_return = RetNamedPack {
+         ty = tname "String";
+         entity_proof = Some (PredApp { pred = "IsBase64Url"; args = []; loc = g });
+         other_proof = None; loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("String.toHex",
+     { fi_name = "String.toHex"; fi_kind = FnKind;
+       fi_params = [ plain "s" "String" ];
+       fi_return = RetNamedPack {
+         ty = tname "String";
+         entity_proof = Some (PredApp { pred = "IsHex"; args = []; loc = g });
+         other_proof = None; loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("String.parseBase64Url",
+     { fi_name = "String.parseBase64Url"; fi_kind = EstablishKind;
+       fi_params = [ plain "raw" "String" ];
+       fi_return = RetMaybeAttached {
+         outer_ty = None;
+         binding = { name = "s"; type_expr = tname "String";
+                     proof_ann = Some (PredApp { pred = "IsBase64Url"; args = ["s"]; loc = g });
+                     loc = g };
+         loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("String.parseHex",
+     { fi_name = "String.parseHex"; fi_kind = EstablishKind;
+       fi_params = [ plain "raw" "String" ];
+       fi_return = RetMaybeAttached {
+         outer_ty = None;
+         binding = { name = "s"; type_expr = tname "String";
+                     proof_ann = Some (PredApp { pred = "IsHex"; args = ["s"]; loc = g });
+                     loc = g };
+         loc = g };
+       fi_loc = g; fi_http_methods = [] });
+    ("String.fromBase64Url",
+     { fi_name = "String.fromBase64Url"; fi_kind = FnKind;
+       fi_params = [ with_proof "s" "String" "IsBase64Url" ];
+       fi_return = ret "String"; fi_loc = g; fi_http_methods = [] });
+    ("String.fromHex",
+     { fi_name = "String.fromHex"; fi_kind = FnKind;
+       fi_params = [ with_proof "s" "String" "IsHex" ];
+       fi_return = ret "String"; fi_loc = g; fi_http_methods = [] });
     (* String.toUpper / toLower *)
     ("String.toUpper",
      { fi_name = "String.toUpper"; fi_kind = FnKind;
