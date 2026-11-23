@@ -530,6 +530,9 @@ func TestMigrationNativeCompilerLifecycle(t *testing.T) {
 			t.Fatalf("missing write outcome: %+v", report)
 		}
 		for _, path := range report.Written {
+			if !strings.HasSuffix(path, ".tesl") {
+				continue // a frozen revision's generated checkpoint
+			}
 			relative, _ := filepath.Rel(app.Directory, path)
 			migrationCheck(t, app, relative, true)
 		}

@@ -24,7 +24,20 @@ func TestMigrationNativeResealReRecordsSeals(t *testing.T) {
 	if _, err := migrationRun(t, app, "generate", "app.tesl"); err != nil {
 		t.Fatal(err)
 	}
+	// Freeze V2 so the history has a completed revision with a checkpoint.
+	if _, err := migrationRun(t, app, "generate", "app.tesl", "--new-revision"); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, app.Directory, "schema/notes/v-current.tesl", strings.Replace(schema, "id: String }", "id: String, caption: Maybe String, summary: Maybe String }", 1))
+	if _, err := migrationRun(t, app, "generate", "app.tesl"); err != nil {
+		t.Fatal(err)
+	}
 	migrationCheck(t, app, "app.tesl", true)
+	checkpoint := filepath.Join(app.Directory, "migrations/notes/v2.checkpoint")
+	recorded, err := os.ReadFile(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The same stdlib with one more declaration: different stored-value semantics.
 	stdlib := t.TempDir()
@@ -56,6 +69,9 @@ func TestMigrationNativeResealReRecordsSeals(t *testing.T) {
 		t.Fatalf("reseal publication %v %s", err, app.Stdout)
 	}
 	migrationCheck(t, app, "app.tesl", true)
+	if resealed, err := os.ReadFile(checkpoint); err != nil || string(resealed) == string(recorded) {
+		t.Fatalf("the completed revision's checkpoint was not rewritten: %v", err)
+	}
 	if _, err := migrationRun(t, app, "reseal", "app.tesl"); err == nil {
 		t.Fatal("a second re-seal found something to re-record")
 	}
