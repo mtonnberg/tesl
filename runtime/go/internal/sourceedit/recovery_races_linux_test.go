@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,7 +58,7 @@ func TestSourcePreparationFailurePreservesSources(t *testing.T) {
 }
 func TestSourceApplyPreservesWriteThroughDisplacedFileHandle(t *testing.T) {
 	root, m := transactionFixture(t, true)
-	target := m.wire.Edits[0]
+	target := m.wire.Edits[firstSourceEdit(t, m)]
 	original, _ := hex.DecodeString(*target.BeforeHex)
 	user := append(bytes.Clone(original), []byte("# old editor file handle saved\n")...)
 	old, err := os.OpenFile(target.Path, os.O_WRONLY, 0)
@@ -91,7 +92,8 @@ func TestSourceApplyPreservesWriteThroughDisplacedFileHandle(t *testing.T) {
 func TestSourceInversePreservesSaveAfterLastComparison(t *testing.T) {
 	root, m := transactionFixture(t, true)
 	runSourceChild(t, root, m, "apply", "before-commit")
-	target := m.wire.Edits[0].Path
+	index := firstSourceEdit(t, m)
+	target := m.wire.Edits[index].Path
 	user := []byte("# saved immediately before inverse capture\n")
 	fired := false
 	report, err := recoverWithCheckpoint(context.Background(), root, func(point string) error {
@@ -104,7 +106,7 @@ func TestSourceInversePreservesSaveAfterLastComparison(t *testing.T) {
 	if !fired || err == nil || !report.RecoveryRequired {
 		t.Fatalf("inverse save: %+v %v", report, err)
 	}
-	for _, path := range []string{target, filepath.Join(root, transactionDirectory, "capture-000000")} {
+	for _, path := range []string{target, filepath.Join(root, transactionDirectory, fmt.Sprintf("capture-%06d", index))} {
 		actual, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(actual, user) {
 			t.Fatalf("inverse lost user bytes at %s: %v", path, err)
@@ -122,7 +124,7 @@ func TestSourceRecoveryRefusesRedirectedPublishedSource(t *testing.T) {
 	root, m := transactionFixture(t, true)
 	before := sourceSnapshot(t, root)
 	runSourceChild(t, root, m, "apply", "before-commit")
-	target := m.wire.Edits[0].Path
+	target := m.wire.Edits[firstSourceEdit(t, m)].Path
 	outside := filepath.Join(t.TempDir(), "user.txt")
 	if err := os.WriteFile(outside, []byte("outside user work"), 0600); err != nil {
 		t.Fatal(err)
@@ -147,7 +149,7 @@ func TestSourceRecoveryRefusesRedirectedPublishedSource(t *testing.T) {
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := hex.DecodeString(m.wire.Edits[0].AfterHex)
+	after, _ := hex.DecodeString(m.wire.Edits[firstSourceEdit(t, m)].AfterHex)
 	if err := os.WriteFile(target, after, 0600); err != nil {
 		t.Fatal(err)
 	}

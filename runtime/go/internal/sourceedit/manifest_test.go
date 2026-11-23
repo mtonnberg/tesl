@@ -363,3 +363,17 @@ func FuzzSourceManifestDecode(f *testing.F) {
 		}
 	})
 }
+
+// Revision manifests also write a generated checkpoint file, which sorts before
+// the source edits these tests were written against. Pick the first edit that
+// is not a checkpoint so each test keeps exercising the same source edit.
+func firstSourceEdit(t testing.TB, m *Manifest) int {
+	t.Helper()
+	for i, edit := range m.wire.Edits {
+		if !strings.HasSuffix(edit.Path, ".checkpoint") {
+			return i
+		}
+	}
+	t.Fatal("manifest has no source edit")
+	return -1
+}

@@ -216,7 +216,7 @@ func TestSourceApplyRollsBackEveryPublicationBoundary(t *testing.T) {
 }
 func TestSourceApplyPreservesPrepublicationSave(t *testing.T) {
 	root, m := transactionFixture(t, true)
-	existing := m.wire.Edits[0]
+	existing := m.wire.Edits[firstSourceEdit(t, m)]
 	if existing.BeforeHex == nil {
 		t.Fatal("fixture must first replace a completed migration")
 	}
@@ -242,7 +242,7 @@ func TestSourceApplyPreservesPrepublicationSave(t *testing.T) {
 }
 func TestSourceApplyDoesNotDeleteConcurrentCreation(t *testing.T) {
 	root, m := transactionFixture(t, false)
-	e := m.wire.Edits[0]
+	e := m.wire.Edits[firstSourceEdit(t, m)]
 	if e.BeforeHex != nil {
 		t.Fatal("new source expected")
 	}
@@ -272,7 +272,7 @@ func TestSourceApplyDoesNotDeleteConcurrentCreation(t *testing.T) {
 }
 func TestSourceApplyPreservesPostpublicationSave(t *testing.T) {
 	root, m := transactionFixture(t, true)
-	e := m.wire.Edits[0]
+	e := m.wire.Edits[firstSourceEdit(t, m)]
 	after, _ := hex.DecodeString(e.AfterHex)
 	user := append(bytes.Clone(after), []byte("# user edited the proposal\n")...)
 	report, err := m.apply(context.Background(), func(point string) error {
@@ -324,7 +324,7 @@ func TestSourceApplyCancellationRestoresChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	report, err := m.apply(ctx, func(point string) error {
-		if point == "written:"+m.wire.Edits[0].Path {
+		if point == "written:"+m.wire.Edits[firstSourceEdit(t, m)].Path {
 			cancel()
 		}
 		return nil
@@ -387,7 +387,7 @@ func TestSourceRecoveryAfterRealProcessExit(t *testing.T) {
 				before := sourceSnapshot(t, root)
 				stop := phase
 				if phase == "staged" || phase == "published" || phase == "written" {
-					stop += ":" + m.wire.Edits[0].Path
+					stop += ":" + m.wire.Edits[firstSourceEdit(t, m)].Path
 				}
 				runSourceChild(t, root, m, "apply", stop)
 				report, err := Recover(context.Background(), root)
@@ -412,7 +412,7 @@ func TestSourceRecoveryCanItselfBeInterrupted(t *testing.T) {
 			runSourceChild(t, root, m, "apply", "before-commit")
 			// Rollback traverses in reverse, so stop on the existing first edit after
 			// all new files have already been restored to absence.
-			runSourceChild(t, root, m, "recover", phase+":"+m.wire.Edits[0].Path)
+			runSourceChild(t, root, m, "recover", phase+":"+m.wire.Edits[firstSourceEdit(t, m)].Path)
 			if report, err := Recover(context.Background(), root); err != nil || report.RecoveryRequired {
 				t.Fatalf("second restart: %+v %v", report, err)
 			}
@@ -530,7 +530,7 @@ func TestSourceApplyPreservesModesAndRejectsModeRaces(t *testing.T) {
 	for _, race := range []bool{false, true} {
 		t.Run(fmt.Sprint(race), func(t *testing.T) {
 			root, m := transactionFixture(t, true)
-			e := m.wire.Edits[0]
+			e := m.wire.Edits[firstSourceEdit(t, m)]
 			if err := os.Chmod(e.Path, 0640); err != nil {
 				t.Fatal(err)
 			}
@@ -658,8 +658,9 @@ func TestSourceInverseDoesNotOverwriteConcurrentCapture(t *testing.T) {
 	root, m := transactionFixture(t, true)
 	before := sourceSnapshot(t, root)
 	runSourceChild(t, root, m, "apply", "before-commit")
-	target := m.wire.Edits[0].Path
-	capture := filepath.Join(root, transactionDirectory, "capture-000000")
+	index := firstSourceEdit(t, m)
+	target := m.wire.Edits[index].Path
+	capture := filepath.Join(root, transactionDirectory, fmt.Sprintf("capture-%06d", index))
 	fired := false
 	report, err := recoverWithCheckpoint(context.Background(), root, func(point string) error {
 		if point == "before-capture:"+target {
@@ -675,7 +676,7 @@ func TestSourceInverseDoesNotOverwriteConcurrentCapture(t *testing.T) {
 	if err != nil || string(data) != "concurrent recovery note" {
 		t.Fatalf("concurrent capture was overwritten: %q %v", data, err)
 	}
-	after, _ := hex.DecodeString(m.wire.Edits[0].AfterHex)
+	after, _ := hex.DecodeString(m.wire.Edits[index].AfterHex)
 	data, err = os.ReadFile(target)
 	if err != nil || !bytes.Equal(data, after) {
 		t.Fatal("failed no-replace capture changed published source")
