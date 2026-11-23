@@ -79,6 +79,21 @@ func DecodePreview(data []byte) (*Preview, error) {
 			}
 		}
 	}
+	// Re-sealing reports what the seals recorded and the stored-value identity
+	// it records instead. Advisory only; the manifest carries every edit.
+	_, storedValue := envelope["reseal"]
+	if storedValue {
+		keys = append(keys, "reseal")
+		report, err := object(envelope["reseal"], "recordedCompilerAbis", "recordedStoredValueIdentities", "storedValueIdentity", "storedValueFingerprint")
+		var abis, recorded []string
+		var identity, fingerprint string
+		if err != nil || json.Unmarshal(report["recordedCompilerAbis"], &abis) != nil || len(abis) == 0 ||
+			json.Unmarshal(report["recordedStoredValueIdentities"], &recorded) != nil ||
+			json.Unmarshal(report["storedValueIdentity"], &identity) != nil || identity == "" ||
+			json.Unmarshal(report["storedValueFingerprint"], &fingerprint) != nil || fingerprint == "" {
+			return nil, fmt.Errorf("invalid re-seal report")
+		}
+	}
 	fields, err := object(data, keys...)
 	if err != nil {
 		return nil, err
@@ -99,7 +114,7 @@ func DecodePreview(data []byte) (*Preview, error) {
 		return nil, err
 	}
 	const prefix = "tesl-source-abi-v1:"
-	if header.Version != 1 || header.Kind != "migration-source-preview" || header.OK == nil || !*header.OK || header.Compilable == nil || (header.Operation != "start" && header.Operation != "refresh" && header.Operation != "contract") || !strings.HasPrefix(header.CompilerABI, prefix) || len(header.CompilerABI) != len(prefix)+64 || !validHex(strings.TrimPrefix(header.CompilerABI, prefix)) {
+	if header.Version != 1 || header.Kind != "migration-source-preview" || header.OK == nil || !*header.OK || header.Compilable == nil || (header.Operation != "start" && header.Operation != "refresh" && header.Operation != "contract" && header.Operation != "reseal") || (header.Operation == "reseal") != storedValue || !strings.HasPrefix(header.CompilerABI, prefix) || len(header.CompilerABI) != len(prefix)+64 || !validHex(strings.TrimPrefix(header.CompilerABI, prefix)) {
 		return nil, fmt.Errorf("compiler did not return a successful supported migration source preview")
 	}
 	if _, err := object(fields["selection"], "entryFile", "databaseFile", "database", "family", "schemaRoot", "previousVersion", "revisionBefore", "revisionAfter"); err != nil {
