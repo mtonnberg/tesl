@@ -142,8 +142,10 @@ func buildUncachedMigrationCompilerVariants(t *testing.T, ctx context.Context, r
 	baseline := build("a")
 	edit("compiler_query.ml", "", "\n(* Compiler-upgrade regression: query-only build change. *)\n")
 	compatible := build("b")
-	edit("migration_abi.ml", `let stored_value_semantics_revision = "tesl-stored-value-semantics-5"`,
-		`let stored_value_semantics_revision = "tesl-stored-value-semantics-incompatible-test"`)
+	// A reviewed builtin behaviour change: bumping a revision changes the
+	// stored-value identity, which this variant must be refused for.
+	edit("stored_value_revisions.ml", `{name="proof-interpretation"; revision=5;`,
+		`{name="proof-interpretation"; revision=6;`)
 	incompatible := build("c")
 	return baseline, compatible, incompatible
 }

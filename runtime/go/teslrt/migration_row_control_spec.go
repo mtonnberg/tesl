@@ -186,6 +186,7 @@ func pgBuildRowControlFunctions(namespace string) []pgMigrationControlFunction {
 			body = pgRewriteMigrationSQL(body, namespace, " admitted_floor :=", ` if v is null or v<1 or v>2147483646 then raise exception 'tesl: invalid row heartbeat version'; end if;
  perform pg_catalog.pg_advisory_xact_lock_shared(-fence_ns,v) from `+ns+`tesl_schema_meta where id=1;
  admitted_floor :=`, 1)
+			body = pgPruneInstancesOnRegistration(body, namespace)
 		}
 		if fn.name == "tesl_begin_expansion" {
 			body = pgRewriteMigrationSQL(body, namespace, "ep is distinct from true", "(v=1 and ep is distinct from true)", 1)
@@ -251,4 +252,26 @@ end`
 		}
 	}
 	return functions
+}
+
+// pgPruneInstancesOnRegistration adds bounded pruning to a heartbeat body.
+// Every process registers under a fresh random instance id, so the table would
+// otherwise grow by one row per process start forever. A new registration
+// removes up to 100 rows unseen for seven days; a renewal removes nothing.
+// Every reader treats rows older than 30 seconds as dead, so pruning never
+// changes liveness, close-epoch or retirement decisions. SKIP LOCKED keeps
+// concurrent registrations from waiting on, or deadlocking with, each other.
+// Only the current row-control format prunes: the legacy format 2-4
+// definitions stay exactly as those catalogs were installed, so their
+// refusals and bridges are unchanged.
+func pgPruneInstancesOnRegistration(body, namespace string) string {
+	ns := quoteIdentifier(namespace) + "."
+	body = pgRewriteMigrationSQLExactlyOnce(body, namespace, " admitted_floor integer;", " admitted_floor integer; registering boolean;")
+	body = pgRewriteMigrationSQLExactlyOnce(body, namespace, " insert into "+ns+"tesl_schema_instances(",
+		" registering := not exists(select 1 from "+ns+"tesl_schema_instances where instance=instance_id);\n insert into "+ns+"tesl_schema_instances(")
+	return pgRewriteMigrationSQLExactlyOnce(body, namespace, " update "+ns+"tesl_schema_meta set max_observed_protocol", ` if registering then
+   delete from `+ns+`tesl_schema_instances where instance in (select stale.instance from `+ns+`tesl_schema_instances stale
+     where stale.last_seen<pg_catalog.clock_timestamp()-interval '7 days' limit 100 for update skip locked);
+ end if;
+ update `+ns+`tesl_schema_meta set max_observed_protocol`)
 }

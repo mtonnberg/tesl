@@ -587,6 +587,9 @@ func TestPgMigrationControlHeartbeatPrunesStaleInstances(t *testing.T) {
 	f.install(t, 1)
 	f.expand(t, 1)
 	ns := quoteIdentifier(f.namespace) + "."
+	// The row-control format installs this pruning; apply the same rewrite to
+	// this catalog's heartbeat so the shipped SQL fragment is what runs.
+	pgInstallPruningHeartbeat(t, f)
 	seed := func(prefix string, count int, age string) {
 		t.Helper()
 		if _, err := f.installer.Exec(f.ctx, "insert into "+ns+"tesl_schema_instances(instance,version,protocol_level,last_seen,compat_floor_seen) "+
@@ -642,8 +645,53 @@ func TestPgMigrationControlHeartbeatPrunesStaleInstances(t *testing.T) {
 	if after := liveness(); after != before {
 		t.Fatalf("pruning changed the liveness view: %q, want %q", after, before)
 	}
+	pgInstallHeartbeat(t, f, false) // restore this catalog's exact definition
 	status, err := InspectPgMigrationControl(f.ctx, f.worker, f.namespace, f.roles)
 	if err != nil || status.Current != 1 || status.MinVersion != 1 || status.CompatFloor != 1 {
 		t.Fatalf("pruning changed control state: %+v, %v", status, err)
+	}
+}
+
+func pgInstallPruningHeartbeat(t *testing.T, f *pgControlTestFixture) { pgInstallHeartbeat(t, f, true) }
+
+func pgInstallHeartbeat(t *testing.T, f *pgControlTestFixture, prune bool) {
+	t.Helper()
+	for _, fn := range pgMigrationControlFunctions(f.namespace) {
+		if fn.name != "tesl_heartbeat" {
+			continue
+		}
+		body := fn.body
+		if prune {
+			body = pgPruneInstancesOnRegistration(body, f.namespace)
+		}
+		sql := "create or replace function " + quoteIdentifier(f.namespace) + ".tesl_heartbeat(" + fn.arguments + ") returns " + fn.result +
+			" language plpgsql " + fn.volatility + " security definer set search_path = '' as $tesl$" + body + "$tesl$"
+		if _, err := f.installer.Exec(f.ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatal("control catalog has no tesl_heartbeat")
+}
+
+// Only the current row-control format prunes instance rows; legacy control
+// catalogs keep the exact definitions they were installed with.
+func TestHeartbeatPruningOnlyInRowControlFormat(t *testing.T) {
+	for _, fn := range pgMigrationControlFunctions("notes") {
+		if fn.name == "tesl_heartbeat" && strings.Contains(fn.body, "skip locked") {
+			t.Fatal("a legacy control catalog's heartbeat prunes")
+		}
+	}
+	found := false
+	for _, fn := range pgBuildRowControlFunctions("notes") {
+		if fn.name == "tesl_heartbeat" {
+			found = true
+			if !strings.Contains(fn.body, "interval '7 days' limit 100 for update skip locked") || !strings.Contains(fn.body, "registering := not exists") {
+				t.Fatal("the row-control heartbeat does not prune on registration")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("row-control catalog has no tesl_heartbeat")
 	}
 }

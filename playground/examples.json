@@ -132,7 +132,6 @@
     "name": "Query the fields your entity declares",
     "errors": [
       "T001",
-      "V001",
       "V001"
     ],
     "repair": [
