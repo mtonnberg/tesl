@@ -26,7 +26,17 @@ let padding_boundaries () =
       check string ("length " ^ length) expected (Migration_hash.digest source)
     | _ -> failf "bad vector %S" line) lines
 
+(* 64-bit builds hash with native integers, JavaScript builds with Int32; the
+   two implementations must agree on every length around the block padding. *)
+let portable_and_native_agree () =
+  for length = 0 to 300 do
+    let source = String.init length (fun i -> Char.chr ((i * 197 + length) mod 256)) in
+    check string ("length " ^ string_of_int length)
+      (Migration_hash.compute source) (Migration_hash.compute_native source)
+  done
+
 let () = run "migration-hash" ["SHA-256", [
+  test_case "portable and native implementations agree" `Quick portable_and_native_agree;
   test_case "published vectors" `Quick vectors;
   test_case "independent binary and padding corpus" `Quick padding_boundaries;
 ]]
