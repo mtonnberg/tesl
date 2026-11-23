@@ -7,18 +7,22 @@ module Exprs = Hashtbl.Make(struct
 end)
 type t = { originals:Ast.module_form list; modules:Ast.module_form list;
  entry:Ast.module_form; owners:(string * string) list;
- renamed:((string * string) * string) list; origins:Ast.expr Exprs.t }
+ renamed:((string * string) * string) list; origins:Ast.expr Exprs.t;
+ (* [owners] by name; built from it once, so a lookup does not scan it. *)
+ owner_index:(string,string) Hashtbl.t Lazy.t }
 let original_modules t = t.originals
 let modules t = t.modules
 let entry t = t.entry
-let owner t name = List.assoc_opt name t.owners
+let owner t name = Hashtbl.find_opt (Lazy.force t.owner_index) name
 let symbol t ~owner:source name = Option.map (fun target ->
  target,Option.value(List.assoc_opt (source,name) t.renamed) ~default:name) (owner t source)
 let original_expr t expression = Option.value (Exprs.find_opt t.origins expression) ~default:expression
 let function_binding t ~(owner:Ast.module_form) (declaration:Ast.func_decl) =
- match List.find_opt (fun (m:Ast.module_form)->m.module_name=owner.module_name && m=owner) t.originals,
+ (* Physical equality first: the same value is structurally equal, and the
+    structural comparison of a whole module is costly. *)
+ match List.find_opt (fun (m:Ast.module_form)->m.module_name=owner.module_name && (m==owner || m=owner)) t.originals,
        symbol t ~owner:owner.module_name declaration.name with
- | Some original,Some(target,name) when List.exists(function Ast.DFunc f -> f=declaration | _->false) original.decls ->
+ | Some original,Some(target,name) when List.exists(function Ast.DFunc f -> f==declaration || f=declaration | _->false) original.decls ->
    List.find_map(fun(m:Ast.module_form)->if m.module_name<>target then None else
     List.find_map(function Ast.DFunc f when f.name=name && f.loc=declaration.loc -> Some(m,f) | _->None)m.decls)t.modules
  | _ -> None
@@ -291,10 +295,10 @@ let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
 
 
 let lower ~(entry:Ast.module_form) originals =
- let duplicate=List.exists(fun(m:Ast.module_form)->
-  List.length(List.filter(fun(n:Ast.module_form)->n.module_name=m.module_name)originals)<>1)originals in
+ let duplicate=let seen=Hashtbl.create 64 in List.exists(fun(m:Ast.module_form)->
+  Hashtbl.mem seen m.module_name || (Hashtbl.add seen m.module_name (); false))originals in
  if duplicate then Error "Go graph contains duplicate original module owners" else
- if not(List.exists(fun(m:Ast.module_form)->m=entry)originals) then Error "Go graph lost its exact original entry" else
+ if not(List.exists(fun(m:Ast.module_form)->m==entry || m=entry)originals) then Error "Go graph lost its exact original entry" else
  let names=List.map(fun(m:Ast.module_form)->m.module_name)originals in
  let local_name name = if List.mem name names then Some name else
   if name="Tesl.CivilTime" && List.mem "CivilTime" names then Some "CivilTime" else None in
@@ -322,4 +326,7 @@ let lower ~(entry:Ast.module_form) originals =
  let modules=List.map(fun(m,_)->rewrite m)collapsed in
  let entry_owner=List.assoc entry.module_name owners in
  let entry=List.find(fun(m:Ast.module_form)->m.module_name=entry_owner)modules in
- Ok {originals;modules;entry;owners;renamed;origins}
+ let owner_index=lazy (let index=Hashtbl.create (List.length owners) in
+   (* assoc_opt answers the first binding of a name. *)
+   List.iter (fun (name,target) -> if not (Hashtbl.mem index name) then Hashtbl.add index name target) owners; index) in
+ Ok {originals;modules;entry;owners;renamed;origins;owner_index}

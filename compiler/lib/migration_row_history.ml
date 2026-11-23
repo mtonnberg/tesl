@@ -31,8 +31,13 @@ let link b = b.link
 let row b = b.row
 let hex text =
   let digits="0123456789abcdef" in
-  String.init (String.length text*2) (fun i ->
-    let byte=Char.code text.[i/2] in digits.[if i mod 2=0 then byte lsr 4 else byte land 15])
+  let out=Bytes.create (String.length text*2) in
+  for i=0 to String.length text-1 do
+    let byte=Char.code (String.unsafe_get text i) in
+    Bytes.unsafe_set out (2*i) (String.unsafe_get digits (byte lsr 4));
+    Bytes.unsafe_set out (2*i+1) (String.unsafe_get digits (byte land 15))
+  done;
+  Bytes.unsafe_to_string out
 let contract domain node =
   let encoded=C.encode (C.document domain node) in hex encoded,Migration_hash.digest encoded
 exception Invalid of S.error list

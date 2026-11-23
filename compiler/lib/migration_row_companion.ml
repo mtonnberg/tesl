@@ -1,19 +1,30 @@
+(* JSON string literal. Runs of bytes needing no escape are copied whole: the
+   generated histories are megabytes of hexadecimal contracts. *)
 let quote s =
-  let buf = Buffer.create (String.length s + 2) in
+  let length = String.length s in
+  let plain c = c <> '"' && c <> '\\' && Char.code c >= 0x20 in
+  if String.for_all plain s then "\"" ^ s ^ "\"" else begin
+  let buf = Buffer.create (length + 16) in
   Buffer.add_char buf '"';
-  String.iter (fun c ->
-    match c with
-    | '"'  -> Buffer.add_string buf "\\\""
-    | '\\' -> Buffer.add_string buf "\\\\"
-    | '\n' -> Buffer.add_string buf "\\n"
-    | '\r' -> Buffer.add_string buf "\\r"
-    | '\t' -> Buffer.add_string buf "\\t"
-    | c when Char.code c < 0x20 ->
-      Buffer.add_string buf (Printf.sprintf "\\u%04x" (Char.code c))
-    | c    -> Buffer.add_char buf c
-  ) s;
+  let start = ref 0 in
+  for i = 0 to length - 1 do
+    let c = String.unsafe_get s i in
+    if not (plain c) then begin
+      Buffer.add_substring buf s !start (i - !start);
+      start := i + 1;
+      match c with
+      | '"'  -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | c -> Buffer.add_string buf (Printf.sprintf "\\u%04x" (Char.code c))
+    end
+  done;
+  Buffer.add_substring buf s !start (length - !start);
   Buffer.add_char buf '"';
   Buffer.contents buf
+  end
 
 module P = Migration_program
 module RH = Migration_row_history

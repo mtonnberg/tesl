@@ -156,9 +156,7 @@ module D = Migration_declaration
 module H = Migration_history_sources
 let payload_contract node =
  let canonical = Migration_canonical.(encode (document Contract (Seq [Bytes "queue-payload-v1";node]))) in
- let digits="0123456789abcdef" in
- let hex=String.init (String.length canonical*2) (fun i -> let byte=Char.code canonical.[i/2] in digits.[if i mod 2=0 then byte lsr 4 else byte land 15]) in
- hex,Migration_hash.digest canonical
+ Migration_row_history.hex canonical,Migration_hash.digest canonical
 let queue_versions schemas edges =
  List.map (fun (schema:H.schema) ->
   let inventory=H.inventory schema in
@@ -190,7 +188,11 @@ let unhex text =
   let digit c = match c with
     | '0'..'9' -> Char.code c - 48 | 'a'..'f' -> Char.code c - 87
     | _ -> invalid_arg "contract is not lowercase hexadecimal" in
-  String.init (length / 2) (fun i -> Char.chr (digit text.[2*i] * 16 + digit text.[2*i+1]))
+  let out = Bytes.create (length / 2) in
+  for i = 0 to length / 2 - 1 do
+    Bytes.unsafe_set out i (Char.unsafe_chr (digit (String.unsafe_get text (2*i)) * 16 + digit (String.unsafe_get text (2*i+1))))
+  done;
+  Bytes.unsafe_to_string out
 let atom s = C.Bytes s
 let raw s = C.Bytes (unhex s)
 let int n = atom (string_of_int n)
