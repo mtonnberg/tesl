@@ -216,8 +216,13 @@ let registry : entry list = [
        the migration's adjacent schema references. Frozen source files, including \
        private helpers, must retain their recorded bytes and canonical paths. \
        Restore the recorded source and make a forward revision; do not rewrite \
-       deployed history. A compiler ABI mismatch is a separate judgment.";
-    manual = Some "best-practices#database-access" };
+       deployed history. When the message instead names two stored-value \
+       identities, the frozen bytes are intact but the compiler's stored-value \
+       semantics changed (it names the stdlib modules or builtin behaviour \
+       revisions): run `tesl migrate reseal <entry.tesl>`, which re-checks the \
+       complete history and re-records the seals only if it passes. Databases \
+       that store values under the old identity refuse binaries built afterwards.";
+    manual = Some "migration-guide#re-sealing-after-a-compiler-upgrade" };
 
   { code = "MIG015"; category = Migration;
     title = "application imports a historical schema";
@@ -319,6 +324,17 @@ let registry : entry list = [
        stop using it from handlers. After a supported Drop, generate and deploy its \
        Contract before the next transforming revision.";
     manual = Some "migration-guide#supported-changes-and-your-remaining-inputs" };
+
+  { code = "MIG033"; category = Migration;
+    title = "migration history was sealed by another compiler build";
+    explanation =
+      "The seals of the newest completed revision name another compiler ABI, \
+       so every build re-checks the completed revisions in full and cannot \
+       resume from their checkpoints. The stored-value identity is unchanged. \
+       Run `tesl migrate reseal <entry.tesl>` to re-check the complete history \
+       with this compiler and re-record the seals; this warning is a \
+       performance suggestion, not a compile error.";
+    manual = Some "migration-guide#re-sealing-after-a-compiler-upgrade" };
 
   (* ── Legacy Bool spelling (validation source, dedicated codes) ─────────── *)
   { code = "VBOOL001"; category = Type;

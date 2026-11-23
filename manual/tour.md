@@ -453,8 +453,11 @@ separate from a source edit. These checks also work with unsaved migration heade
 Production builds also check the compiler's stored-value compatibility contract.
 Completed additive history can survive a compiler build update when that contract,
 the unchanged source and the checked storage/proof definitions agree. Unfinished
-work remains pinned to the original build. A different contract requires explicit
-revalidation; editing recorded history is not a substitute.
+work remains pinned to the original build. A different stored-value identity
+(MIG013 names what changed) needs `tesl migrate reseal app.tesl`, which re-checks the
+complete history before re-recording its seals; editing recorded history is not a
+substitute. Databases that already store values under the old identity refuse the
+new binaries.
 
 The current implementation checks source ownership and history, plans physical
 storage, and runs supported additive and row transformations through the compiled

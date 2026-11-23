@@ -354,6 +354,41 @@ most that long while the in-flight ones finish. A transaction that stays open
 longer (an idle-in-transaction session, a long report) keeps the Worker waiting
 until it ends or the operation's deadline expires.
 
+## Stored-value identity
+
+Every migration version recorded in the database (`tesl_schema_versions`,
+`tesl_schema_expansions` and the row and queue control tables) stores the
+stored-value identity of the binary that wrote it, for example
+`tesl-stored-value-v1:9b2653…`. Two binaries with the same identity read, write and
+prove stored values the same way. Each binary compares its own identity with every
+recorded version before it changes anything; when they differ it refuses to start
+or migrate, naming both identities:
+
+```
+persisted stored-value compatibility differs at V2: the database stores values
+under stored-value identity tesl-stored-value-v1:9b26…, but this binary was built
+with tesl-stored-value-v1:cfa2…
+```
+
+The identity changes only when the stdlib's declarations or a builtin family's
+reviewed behaviour revision change (see
+[Re-sealing after a compiler upgrade](migration-guide.md#re-sealing-after-a-compiler-upgrade)).
+A compiler upgrade that only changes the compiler build keeps it, and so does
+`tesl migrate reseal` after such an upgrade.
+
+When the identity did change, `tesl migrate reseal` lets the new compiler build
+the application, but the database still holds rows written under the old
+semantics, and Tesl cannot yet re-check stored rows under new semantics. The
+supported options are:
+
+| Database | What to do |
+|---|---|
+| Rows must be kept (production) | keep deploying binaries built by a compiler with the recorded identity |
+| Rows can be discarded (development, CI, preview) | drop and reinstall the database with the new binary |
+
+The refusal happens before any write, so a wrongly deployed binary leaves the
+database unchanged.
+
 ## Backups and restores
 
 Back up and restore the whole database, not a single schema. Tesl's bookkeeping
