@@ -31,11 +31,61 @@ let with_path_memo f = match !path_memo with
   | None ->
     path_memo := Some (Hashtbl.create 64);
     Fun.protect ~finally:(fun () -> path_memo := None) f
+(* Inside [with_scope_path_memo] (one compilation), disk answers are also
+   memoized: a file's bytes, an lstat and a directory listing are read from
+   disk once per compilation and then shared by every source view (overlays and
+   pinned resources still take precedence). An edit made on disk while the
+   compilation runs is therefore not seen by its intermediate judgments; the
+   final guards observe disk anew ([with_fresh_path_memo], and the manifest's
+   direct disk verification) before anything is written or reported as
+   checked. *)
+let fresh_depth = ref 0
+let reset_presence = ref (fun () -> ())
+let presence_changed = ref (fun () -> false)
+let disk_bytes : (string, (string, exn) result) Hashtbl.t = Hashtbl.create 256
+let disk_text : (string, (string, exn) result) Hashtbl.t = Hashtbl.create 16
+let disk_lstat : (string, (Unix.stats, exn) result) Hashtbl.t = Hashtbl.create 256
+let disk_listing : (string, (string array, exn) result) Hashtbl.t = Hashtbl.create 16
+let disk_memo_active () = !scope_memo_active && !fresh_depth = 0
+let memo_disk table f path =
+  if not (disk_memo_active ()) then f path else
+  let result = match Hashtbl.find_opt table path with
+    | Some result -> result
+    | None ->
+      let result = try Ok (f path) with (Sys_error _ | Unix.Unix_error _) as error -> Error error in
+      Hashtbl.replace table path result; result in
+  match result with Ok value -> value | Error error -> raise error
+let lstat = memo_disk disk_lstat Unix.lstat
+(* Forget every memoized disk answer: the next observation reads disk anew. *)
+let reset_disk_memo () =
+  Hashtbl.reset disk_bytes; Hashtbl.reset disk_text; Hashtbl.reset disk_lstat; Hashtbl.reset disk_listing;
+  !reset_presence ()
+(* Whether any memoized disk answer differs from what disk answers now. A
+   command that publishes a result computed from memoized answers calls this
+   (its final guard) and, when it reports a change, forgets them and computes
+   again. *)
+let disk_changed () =
+  let fresh f path = try Ok (f path) with (Sys_error _ | Unix.Unix_error _) as error -> Error error in
+  let same_error a b = Printexc.to_string a = Printexc.to_string b in
+  let differs table f equal =
+    Hashtbl.fold (fun path recorded changed -> changed ||
+      match recorded, fresh f path with
+      | Ok a, Ok b -> not (equal a b)
+      | Error a, Error b -> not (same_error a b)
+      | _ -> true) table false in
+  let stat_equal (a : Unix.stats) (b : Unix.stats) =
+    a.st_kind = b.st_kind && a.st_ino = b.st_ino && a.st_dev = b.st_dev && a.st_size = b.st_size in
+  differs disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all) String.equal ||
+  differs disk_text (fun path -> In_channel.with_open_text path In_channel.input_all) String.equal ||
+  differs disk_lstat Unix.lstat stat_equal ||
+  differs disk_listing Sys.readdir (fun a b -> a = b) ||
+  !presence_changed ()
 let with_fresh_path_memo f =
   let previous = !path_memo in
   path_memo := Some (Hashtbl.create 64);
-  Fun.protect ~finally:(fun () -> path_memo := previous) f
-let scope_resets : (unit -> unit) list ref = ref []
+  incr fresh_depth;
+  Fun.protect ~finally:(fun () -> decr fresh_depth; path_memo := previous) f
+let scope_resets : (unit -> unit) list ref = ref [reset_disk_memo]
 let with_scope_path_memo f =
   if !scope_memo_active then f () else begin
     scope_memo_active := true;
@@ -56,7 +106,7 @@ let rec real path = match active_table () with
         let resolved =
           if Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then
             (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
-          else match Unix.lstat path with
+          else match lstat path with
             | { Unix.st_kind = Unix.S_LNK; _ } -> (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
             | _ -> (match real parent with
                 | resolved_parent -> Ok (Filename.concat resolved_parent name)
@@ -84,7 +134,7 @@ let rec proposed_path path =
 let canonical_path = proposed_path
 
 let rec validate_parent path =
-  match Unix.lstat path with
+  match lstat path with
   | info when info.Unix.st_kind = Unix.S_DIR && real path = path -> ()
   | _ -> invalid path "parent must be a canonical directory"
   | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
@@ -95,14 +145,14 @@ let rec validate_parent path =
 let validate_file path =
   let checked () =
     validate_parent (Filename.dirname path);
-    match Unix.lstat path with
+    match lstat path with
     | info when info.Unix.st_kind = Unix.S_REG && real path = path -> ()
     | _ -> invalid path "input must be a canonical regular file"
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> () in
   (* An existing regular file whose real path is its own spelling has a
      canonical directory parent; anything else takes the full check, which
      also reports which part failed. *)
-  match Unix.lstat path with
+  match lstat path with
   | info when info.Unix.st_kind = Unix.S_REG && real path = path -> ()
   | _ | exception Unix.Unix_error _ -> checked ()
 
@@ -151,6 +201,9 @@ let with_overlays ~project_root inputs f =
   active := Some view;
   Fun.protect ~finally:(fun () -> active := previous; Query_cache.clear ()) f
 
+(* A copy: callers may sort the array they receive. *)
+let listing path = Array.copy (memo_disk disk_listing Sys.readdir path)
+
 type entry = File of string | Directory
 
 let find_project path = match !active with
@@ -171,7 +224,7 @@ let find_project path = match !active with
          realpath walk. Import resolution probes many absent paths. *)
       let name = Filename.basename path in
       let unaliased () = name <> "." && name <> ".." &&
-        (match Unix.lstat path with
+        (match lstat path with
          | info -> info.Unix.st_kind <> Unix.S_LNK
          | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
          | exception Unix.Unix_error _ -> false) in
@@ -213,11 +266,16 @@ let read_using disk path =
     | None -> disk path in
   observe (fun () -> Read (path, contents));
   contents
-let read = read_using (fun path -> In_channel.with_open_bin path In_channel.input_all)
-let read_text = read_using (fun path -> In_channel.with_open_text path In_channel.input_all)
+let read = read_using (memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all))
+let read_text = read_using (memo_disk disk_text (fun path -> In_channel.with_open_text path In_channel.input_all))
 (* Disk existence answers share the canonical-spelling memo (see [real]). *)
+let disk_presence : (string, (bool, exn) result) Hashtbl.t = Hashtbl.create 256
+let () = reset_presence := (fun () -> Hashtbl.reset disk_presence);
+  presence_changed := (fun () -> Hashtbl.fold (fun path recorded changed -> changed ||
+    recorded <> Ok (Sys.file_exists path)) disk_presence false)
 let disk_exists path = match active_table () with
   | None -> Sys.file_exists path
+  | Some _ when disk_memo_active () -> memo_disk disk_presence Sys.file_exists path
   | Some memo ->
     let key = "\001" ^ path in
     match Hashtbl.find_opt memo key with
@@ -233,12 +291,12 @@ let kind_name = function
   | Unix.S_LNK -> "lnk" | Unix.S_FIFO -> "fifo" | Unix.S_SOCK -> "sock"
 let rec kind path = recorded kind_name path (fun path answer -> Kind (path, answer)) (fun () -> kind_unrecorded path)
 and kind_unrecorded path = match find path with
-  | None -> (Unix.lstat path).Unix.st_kind
+  | None -> (lstat path).Unix.st_kind
   | Some entry ->
     let virtual_kind = match entry with Directory -> Unix.S_DIR | File _ -> Unix.S_REG in
     (* This operation has lstat semantics. Reading a symlink alias may resolve
        a buffer, but that must never turn a symlink into a regular freeze target. *)
-    (match Unix.lstat path with
+    (match lstat path with
      | info when info.Unix.st_kind = Unix.S_LNK -> Unix.S_LNK
      | _ -> virtual_kind
      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> virtual_kind)
@@ -249,13 +307,13 @@ let realpath path = recorded Fun.id path (fun path answer -> Real (path, answer)
 let rec readdir path = recorded (fun names -> String.concat "\000" (Array.to_list names)) path
     (fun path answer -> Listing (path, answer)) (fun () -> readdir_unrecorded path)
 and readdir_unrecorded path = match !active, find path with
-  | None, _ | Some _, None -> Sys.readdir path
+  | None, _ | Some _, None -> listing path
   | Some _, Some (File _) -> raise (Sys_error (path ^ ": not a directory"))
   | Some view, Some Directory ->
     let canonical = proposed_path path in
     let disk =
-      match Unix.lstat canonical with
-      | _ -> Sys.readdir path
+      match lstat canonical with
+      | _ -> listing path
       | exception Unix.Unix_error (Unix.ENOENT, _, _) when Names.mem canonical view.directories -> [||] in
     let names = Array.fold_left (fun set name -> Names.add name set) Names.empty disk in
     Names.union names (Option.value ~default:Names.empty (Paths.find_opt canonical view.children))

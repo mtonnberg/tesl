@@ -64,3 +64,10 @@ val with_fresh_path_memo : (unit -> 'a) -> 'a
 (** Run [f] with one canonical-spelling table per source view for the whole
     scope (one compilation). [with_fresh_path_memo] still observes anew. *)
 val with_scope_path_memo : (unit -> 'a) -> 'a
+(** Inside [with_scope_path_memo], disk answers (file bytes, lstat, directory
+    listings, existence) are read from disk once and shared by every source view
+    of the scope; [with_fresh_path_memo] observes disk anew. A command that
+    publishes a result computed from them checks [disk_changed] first (its final
+    guard) and, on a change, calls [reset_disk_memo] and computes again. *)
+val disk_changed : unit -> bool
+val reset_disk_memo : unit -> unit
