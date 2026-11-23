@@ -78,7 +78,14 @@ let disk_changed () =
   differs disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all) String.equal ||
   differs disk_text (fun path -> In_channel.with_open_text path In_channel.input_all) String.equal ||
   differs disk_lstat Unix.lstat stat_equal ||
-  differs disk_listing Sys.readdir (fun a b -> a = b) ||
+  (* Listings are compared on the entries the compiler can read (sources,
+     checkpoints and extensionless directories); unrelated files appearing in a
+     shared directory (a temporary directory, an editor's swap files) do not
+     invalidate the answer. *)
+  let relevant names = Array.to_list names |> List.filter (fun name ->
+    Filename.check_suffix name ".tesl" || Filename.check_suffix name ".checkpoint" ||
+    not (String.contains name '.')) |> List.sort String.compare in
+  differs disk_listing Sys.readdir (fun a b -> relevant a = relevant b) ||
   !presence_changed ()
 let with_fresh_path_memo f =
   let previous = !path_memo in

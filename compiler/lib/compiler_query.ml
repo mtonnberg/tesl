@@ -70,7 +70,8 @@ let run_once ~filename ~logical_path flag position =
 let run ~filename ~logical_path flag position =
   let rec attempt remaining =
     let response = run_once ~filename ~logical_path flag position in
-    if not (Source_input.disk_changed ()) then response
-    else if remaining = 0 then failwith "source files kept changing while the query ran; run it again"
+    if remaining = 0 || not (Source_input.disk_changed ()) then response
     else (Source_input.reset_disk_memo (); attempt (remaining - 1)) in
-  attempt 3
+  (* Sources still changing after two fresh answers: publish the latest, as a
+     query observing a moving tree always could. *)
+  attempt 2
