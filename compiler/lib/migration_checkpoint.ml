@@ -211,7 +211,7 @@ let load_records ~project_root ~family ~namespace (completed : H.migration_sourc
 let records_for ~family ~namespace ~through ~rows ~plan ~contracts ~queue_versions =
   let low = if through=2 then 1 else through in
   if not (Migration_records.storable ~low ~high:through rows) then None else
-  if Migration_records.prerequisites ~family ~namespace ~low plan (List.map snd contracts) <> [] then None else
+  if Migration_records.prerequisites ~family ~namespace ~low ~high:through plan (List.map snd contracts) <> [] then None else
   let contracts = List.map fst contracts in
   let versions=List.filter_map (fun (q:Migration_records.queue_version) -> if q.version>=low && q.version<=through then Some q.version else None) queue_versions in
   if versions<>List.init (through-low+1) (fun i -> low+i) then None else

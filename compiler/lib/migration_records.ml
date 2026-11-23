@@ -343,12 +343,13 @@ let access_fields x = List.filter_map (fun f -> match f.kind with
   | "copy" | "rename" | "revalidate" -> Some f.target | _ -> None) x.fields
 
 (* A transforming revision that relies on its predecessor's settled shape needs
-   that predecessor's exact checked Contract. Checked for versions >= [low]:
+   that predecessor's exact checked Contract. Checked for versions in
+   [low..high]:
    a resumed build checks its later revisions, and Start checks each revision
    before storing its records. *)
 type prerequisite = Missing of string | Plan_errors of Migration_sparse.error list
-let prerequisites ~family ~namespace ~low plan contracts =
-  RS.versions plan |> List.filter (fun (v:RS.version) -> v.version>=low) |> List.concat_map (fun (version:RS.version) ->
+let prerequisites ~family ~namespace ~low ?(high=max_int) plan contracts =
+  RS.versions plan |> List.filter (fun (v:RS.version) -> v.version>=low && v.version<=high) |> List.concat_map (fun (version:RS.version) ->
     match version.requires_contract_version with
     | None -> []
     | Some required ->
