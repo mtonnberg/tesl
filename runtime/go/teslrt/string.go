@@ -1,6 +1,8 @@
 package teslrt
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"unicode"
@@ -227,4 +229,69 @@ func StringLines(s string) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+// Reversible encodings. `IsBase64Url s` / `IsHex s` state that s is the CANONICAL
+// encoding of the UTF-8 bytes of a string: base64url (RFC 4648 section 5 alphabet) with
+// no padding, or lowercase hex. "Canonical" means exactly the text the encoder below
+// produces, so each decoded string has exactly one proven encoding and two proven values
+// are equal exactly when their decoded strings are.
+//
+// A Tesl String is Unicode text. A Go string can still carry invalid UTF-8 bytes (for
+// example from an unvalidated HTTP source), so the encoders first replace each invalid
+// run with U+FFFD: the result therefore always decodes to valid UTF-8, which is what
+// the fact promises and what lets the decoders be total.
+
+// StringToBase64Url is Tesl's `String.toBase64Url`.
+func StringToBase64Url(s string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strings.ToValidUTF8(s, "\uFFFD")))
+}
+
+// StringParseBase64Url is Tesl's `String.parseBase64Url`: Something exactly when raw is
+// the canonical encoding of valid UTF-8. Comparing against a re-encoding rejects every
+// non-canonical spelling at once — `=` padding, the standard `+`/`/` alphabet, embedded
+// newlines (which Go's decoder would otherwise skip), and non-zero trailing bits.
+func StringParseBase64Url(raw string) Maybe[string] {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || !utf8.Valid(decoded) || base64.RawURLEncoding.EncodeToString(decoded) != raw {
+		return Nothing[string]()
+	}
+	return Something(raw)
+}
+
+// StringFromBase64Url is Tesl's `String.fromBase64Url`. Its argument carries
+// IsBase64Url, which only the two functions above mint, so the failure branch is
+// unreachable for checked code; it panics like other proof-total stdlib functions.
+func StringFromBase64Url(s string) string {
+	decoded, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil || !utf8.Valid(decoded) {
+		panic("String.fromBase64Url: argument is not canonical base64url of UTF-8 text — " +
+			"obtain it from String.toBase64Url or String.parseBase64Url")
+	}
+	return string(decoded)
+}
+
+// StringToHex is Tesl's `String.toHex`: lowercase hex of the UTF-8 bytes.
+func StringToHex(s string) string {
+	return hex.EncodeToString([]byte(strings.ToValidUTF8(s, "\uFFFD")))
+}
+
+// StringParseHex is Tesl's `String.parseHex`: Something exactly when raw is lowercase
+// hex of valid UTF-8. Uppercase digits are rejected so the proven form stays canonical.
+func StringParseHex(raw string) Maybe[string] {
+	decoded, err := hex.DecodeString(raw)
+	if err != nil || !utf8.Valid(decoded) || hex.EncodeToString(decoded) != raw {
+		return Nothing[string]()
+	}
+	return Something(raw)
+}
+
+// StringFromHex is Tesl's `String.fromHex`; see StringFromBase64Url for the panic.
+func StringFromHex(s string) string {
+	decoded, err := hex.DecodeString(s)
+	if err != nil || !utf8.Valid(decoded) {
+		panic("String.fromHex: argument is not canonical hex of UTF-8 text — " +
+			"obtain it from String.toHex or String.parseHex")
+	}
+	return string(decoded)
 }
