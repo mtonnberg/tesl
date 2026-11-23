@@ -199,7 +199,9 @@ let mismatch_message ~recorded =
     recorded current
     (match changes with [] -> "" | changes -> " (" ^ String.concat "; " changes ^ ")")
     reseal_command
-let verify expected = match Input.without_pinned_files current with
+(* A guard: it re-reads the ABI sources from disk, never the compilation's
+   shared disk answers, so a compiler resource edited mid-command is refused. *)
+let verify expected = match Input.with_fresh_path_memo (fun () -> Input.without_pinned_files current) with
   | Error error -> Error error
   | Ok actual when actual.id=expected.id -> Ok ()
   | Ok _ -> Error {path="<compiler>";message="compiler or lifted stdlib ABI changed after source generation began"}

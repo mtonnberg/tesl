@@ -342,11 +342,14 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         ([],seen) m.imports in
       with_lifted (captured @ List.rev additions) (rest @ List.rev additions) seen in
    let captured_modules=with_lifted captured_modules captured_modules [] in
-   let validate () =
+   (* The full pre-publication guard: it observes disk anew rather than the
+      compilation's shared disk answers, so an edit made after capture (an
+      application file or a compiler ABI source) is refused. *)
+   let validate () = Source_input.with_fresh_path_memo (fun () ->
     abi (A.verify context);
     List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate capture))) integrity;
     Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards);
-    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories in
+    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories) in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate;
      resumed= !resumed_any;records= !records;resumed_through= !resumed_through} in
    let result=f (Some value) in
