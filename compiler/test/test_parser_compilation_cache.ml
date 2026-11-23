@@ -25,7 +25,8 @@ let exception_and_eviction () =
  Parser.with_module_cache (fun () ->
   let first = get "one.tesl" source in
   check bool "exception ends reuse" false (Option.get !escaped == first);
-  for index = 1 to 257 do ignore (get (Printf.sprintf "input-%d.tesl" index) source) done;
+  (* The command cache holds at most 8192 modules (or 128 MB). *)
+  for index = 1 to 8193 do ignore (get (Printf.sprintf "input-%d.tesl" index) source) done;
   let after = get "one.tesl" source in
   check bool "eviction recomputes AST" false (first == after);
   check bool "eviction retains exact parsed structure" true (first = after))

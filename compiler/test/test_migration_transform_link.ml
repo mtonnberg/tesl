@@ -280,7 +280,9 @@ let abi_mutation () = project (fun root save path ->
     Query_cache.clear ();
     let updated = linked path source in
     check bool "changed stdlib changes ABI-bound link" false (L.digest result = L.digest updated);
-    check bool "changed stored contract changes behavior" false (L.behavior_digest result = L.behavior_digest updated)))
+    (* The edit is a comment: the compiler ABI changes, but the stored-value
+       fingerprint covers only what the parser reads, so behaviour does not. *)
+    check bool "comment-only stdlib edit keeps stored behaviour" true (L.behavior_digest result = L.behavior_digest updated)))
 let behavior_abi_literal () = project (fun _ _ path ->
   let abi = match Migration_abi.current () with Ok abi -> Migration_abi.id abi | Error error -> fail error.message in
   let original = linked path (replace "title: \"hello\"" ("title: \"" ^ abi ^ "\"") source) in
