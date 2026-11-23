@@ -12,7 +12,7 @@
    decode differently, satisfy a check differently, or be written differently.
    Do not bump it for a refactor, a performance change, an error message or a
    new builtin that no existing value can reach: a bump changes the identity of
-   every project and requires `tesl migrate revalidate` for each sealed
+   every project and requires `tesl migrate reseal` for each sealed
    history, and databases written under the old identity refuse the new
    binaries.
 

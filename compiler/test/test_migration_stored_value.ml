@@ -171,7 +171,7 @@ let breaking name source = if name = "list.tesl" then
 
 let identity () = Migration_abi.stored_value_compatibility (Result.get_ok (Migration_abi.current ()))
 let revalidate root entry = Migration_program.with_compilation_cache (fun () ->
-  Migration_preview.generate_revalidate ~project_root:root ~entry_file:entry ~database:None ~documents:[])
+  Migration_preview.generate_reseal ~project_root:root ~entry_file:entry ~database:None ~documents:[])
 let snapshot path = List.map (fun name -> name,read (path name))
   ["migrations/scale/v2.tesl";"migrations/scale/v3.tesl";"migrations/scale/v4.tesl";"migrations/scale/v5.tesl";
    "migrations/scale/v2.checkpoint";"migrations/scale/v3.checkpoint";"migrations/scale/v4.checkpoint"]
@@ -194,16 +194,16 @@ let revalidates () = with_history (fun root path entry ->
     let diagnostics = check_file entry in
     check bool ("ordinary checking reports MIG013:\n" ^ diagnostics) true (contains diagnostics "MIG013");
     check bool "it names the module that changed" true (contains diagnostics "stdlib module either.tesl changed declarations");
-    check bool "it names the command" true (contains diagnostics "tesl migrate revalidate");
+    check bool "it names the command" true (contains diagnostics "tesl migrate reseal");
     let built = emit entry in
     check bool ("the production build refuses:\n" ^ built) true
-      (String.starts_with ~prefix:"failed\n" built && contains built "tesl migrate revalidate");
+      (String.starts_with ~prefix:"failed\n" built && contains built "tesl migrate reseal");
     let before = snapshot path in
     let preview = match revalidate root entry with
       | Ok preview -> preview | Error errors -> fail (preview_errors errors) in
     check bool "revalidation is a preview" true (before = snapshot path);
     let json = Migration_preview.to_json preview in
-    check bool "the preview reports the operation" true (contains json "\"operation\":\"revalidate\"");
+    check bool "the preview reports the operation" true (contains json "\"operation\":\"reseal\"");
     check bool "the preview names both identities" true (contains json baseline && contains json changed);
     let edited = List.map (fun (e:Migration_manifest.edit) -> Filename.basename e.path)
       (Migration_manifest.edits (Migration_preview.manifest preview)) |> List.sort compare in
@@ -220,9 +220,9 @@ let revalidates () = with_history (fun root path entry ->
       check bool ("the build succeeds again:\n" ^ built) true (String.starts_with ~prefix:"ok\n" built)) [true;false];
     match revalidate root entry with
     | Ok _ -> fail "a second revalidation proposed edits"
-    | Error errors -> check bool "nothing left to revalidate" true (contains (preview_errors errors) "nothing to revalidate"));
+    | Error errors -> check bool "nothing left to revalidate" true (contains (preview_errors errors) "nothing to re-seal"));
   (* Back on the original stdlib, the re-recorded seals are now the foreign ones. *)
-  check bool "the original compiler now needs revalidation in turn" true (contains (check_file entry) "tesl migrate revalidate"))
+  check bool "the original compiler now needs revalidation in turn" true (contains (check_file entry) "tesl migrate reseal"))
 
 let refuses_failing_history () = with_history (fun root path entry ->
   with_stdlib breaking (fun () ->
@@ -246,19 +246,52 @@ let refuses_edited_source () = with_history (fun root path entry ->
 
 let command_line () = with_history (fun _ _ entry ->
   let run args = Migration_command.run args in
-  let refused = run ["revalidate";entry;"--manifest-json";"--new-revision"] in
+  let refused = run ["reseal";entry;"--manifest-json";"--new-revision"] in
   check int "revalidate refuses unrelated options" 1 refused.exit_code;
-  let help = run ["revalidate";"--help"] in
-  check bool "usage names revalidate" true (contains help.stdout "tesl migrate revalidate");
+  let help = run ["reseal";"--help"] in
+  check bool "usage names revalidate" true (contains help.stdout "tesl migrate reseal");
   with_stdlib semantic (fun () ->
-    let result = run ["revalidate";entry;"--manifest-json"] in
+    let result = run ["reseal";entry;"--manifest-json"] in
     check int ("the compiler verb previews:\n" ^ result.stdout) 0 result.exit_code;
-    check bool "it reports the stored-value identities" true (contains result.stdout "\"storedValue\"")))
+    check bool "it reports the stored-value identities" true (contains result.stdout "\"reseal\"")))
+
+let trusted entry =
+  Migration_trust.reset_trusted_roots ();
+  let built = with_full_history false (fun () -> emit entry) in
+  check bool ("the build succeeds:\n" ^ built) true (String.starts_with ~prefix:"ok\n" built);
+  List.sort_uniq compare (Migration_trust.trusted_roots ())
+
+(* A compiler upgrade that keeps the stored-value identity (here: a comment-only
+   stdlib edit, which changes the compiler ABI) leaves old seals untrusted until
+   they are re-sealed; the result equals what a fresh freeze would record. *)
+let reseal_after_abi_change () =
+  let fresh = with_stdlib comment (fun () -> with_history (fun _ path _ -> snapshot path)) in
+  with_history (fun root path entry ->
+    let completed = ["Schema.Scale.Migrate.V2";"Schema.Scale.Migrate.V3";"Schema.Scale.Migrate.V4"] in
+    check (list string) "the sealing compiler trusts its history" completed (trusted entry);
+    with_stdlib comment (fun () ->
+      check (list string) "another compiler build trusts nothing" [] (trusted entry);
+      let diagnostics = check_file entry in
+      check bool ("ordinary checking suggests re-sealing:\n" ^ diagnostics) true
+        (contains diagnostics "warning MIG033" && contains diagnostics "tesl migrate reseal");
+      check bool "it is not an error" false (contains diagnostics " error ");
+      let preview = match revalidate root entry with
+        | Ok preview -> preview | Error errors -> fail (preview_errors errors) in
+      List.iter (fun (e:Migration_manifest.edit) -> write e.path e.after) (Migration_manifest.edits (Migration_preview.manifest preview));
+      check (list string) "re-sealed revisions are trusted again" completed (trusted entry);
+      check bool "the suggestion is gone" false (contains (check_file entry) "MIG033");
+      List.iter2 (fun (name,expected) (_,actual) ->
+        check string (name ^ " equals a fresh freeze under this compiler") expected actual) fresh (snapshot path);
+      (* Tampering is still caught after re-sealing. *)
+      let frozen = path "schema/scale/v3.tesl" in
+      write frozen (read frozen ^ "# edited after re-sealing\n");
+      check bool "an edited frozen byte fails the build" true (contains (emit entry) "MIG013")))
 
 let () = run "Stored-value revalidation" [
   "identity", [ test_case "a comment-only stdlib edit needs no revalidation" `Slow comment_only ];
-  "revalidate", [ test_case "a semantic edit is revalidated and re-sealed" `Slow revalidates;
+  "reseal", [ test_case "a semantic edit is revalidated and re-sealed" `Slow revalidates;
                   test_case "a history that no longer checks is refused" `Slow refuses_failing_history;
                   test_case "an edited frozen source is never re-sealed" `Slow refuses_edited_source;
                   test_case "compiler command line" `Slow command_line ];
+  "compiler-abi", [ test_case "a new compiler ABI is re-sealed and trusted again" `Slow reseal_after_abi_change ];
 ]

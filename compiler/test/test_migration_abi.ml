@@ -100,7 +100,7 @@ let baseline_identity () =
   | Some k -> check string "a known fingerprint uses its recorded identity" k.identity (A.stored_value_compatibility t)
   | None -> fail (Printf.sprintf
       "this compiler's stored-value fingerprint is not recorded. Its stdlib or builtin behaviour revisions changed, \
-       which changes the identity of every sealed project (they need `tesl migrate revalidate`). If that is \
+       which changes the identity of every sealed project (they need `tesl migrate reseal`). If that is \
        intended, add this entry to known_identities in compiler/lib/migration_abi.ml:\n\
        {identity=%S;\n known_fingerprint=%S;\n stdlib=[%s];\n builtins=[%s]};"
       (A.derived_identity (A.fingerprint t)) (A.fingerprint t)
@@ -266,7 +266,7 @@ let check_reports_foreign_seal () = with_sources (fun root sources ->
   check bool "it names the recorded identity" true
     (mentions "tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30");
   check bool "it names what changed" true (mentions "stdlib module either.tesl changed declarations");
-  check bool "it names the command" true (mentions "tesl migrate revalidate"))
+  check bool "it names the command" true (mentions "tesl migrate reseal"))
 let () = run "Compiler migration ABI" ["build and active sources",List.map (fun (name,f) -> test_case name `Quick f)
   ["stable actual identity",stable;"relocated stdlib resources",relocated;"each lifted source changes ABI",changed_source;
    "guarded input hashes",guarded_hashes;"additional source participates",extra_source;"missing required sources refuse",missing_sources;

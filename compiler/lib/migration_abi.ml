@@ -133,7 +133,7 @@ let explain_difference t ~recorded =
     | [] -> ["the semantic fingerprint differs although no recorded component did"]
     | changes -> changes
 
-let revalidate_command = "tesl migrate revalidate <entry.tesl>"
+let reseal_command = "tesl migrate reseal <entry.tesl>"
 
 let lifted_source t module_name =
  Option.bind (V.lifted_stdlib_basename module_name) (fun name ->
@@ -198,7 +198,7 @@ let mismatch_message ~recorded =
     refuses binaries built after revalidation; see manual/migration-operations.md \"Stored-value identity\""
     recorded current
     (match changes with [] -> "" | changes -> " (" ^ String.concat "; " changes ^ ")")
-    revalidate_command
+    reseal_command
 let verify expected = match Input.without_pinned_files current with
   | Error error -> Error error
   | Ok actual when actual.id=expected.id -> Ok ()

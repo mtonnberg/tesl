@@ -1,20 +1,20 @@
 module A = Migration_abi
 module T = Migration_target
 module M = Migration_manifest
-type operation = Start | Refresh | Contract | Revalidate
+type operation = Start | Refresh | Contract | Reseal
 type error = {loc:Location.loc;message:string;candidates:T.candidate list}
 type cleanup = {version:int;file:string;present:bool}
 type t = {operation:operation;selection:T.selection;revision_after:int;abi:A.t;
           manifest:M.t;diagnostics:Compile.diagnostic list;decisions:Migration_generate.decision list;
           cleanup:cleanup list;contract_version:int option;
           revalidation:revalidation option}
-(* The identities the seals recorded and the one revalidation records. *)
-and revalidation = {recorded:string list;identity:string;fingerprint:string}
+(* What the seals recorded and what re-sealing records instead. *)
+and revalidation = {recorded:string list;recorded_abis:string list;identity:string;fingerprint:string}
 let operation p = p.operation
 let selection p = p.selection
 let revision_after p = p.revision_after
 let compiler_abi p = A.id p.abi
-let operation_name = function Start->"start" | Refresh->"refresh" | Contract->"contract" | Revalidate->"revalidate"
+let operation_name = function Start->"start" | Refresh->"refresh" | Contract->"contract" | Reseal->"reseal"
 let input_digest p =
   let s=p.selection in
   Migration_hash.digest(Migration_canonical.encode(Migration_canonical.Seq(
@@ -163,7 +163,7 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
    of the selected family under this compiler's identity, re-check the complete
    history under those proposed sources with trust disabled, and offer the
    rewritten seals only when that check reports no error. *)
-let generate_revalidate ~project_root ~entry_file ~database ~documents = protect entry_file (fun () ->
+let generate_reseal ~project_root ~entry_file ~database ~documents = protect entry_file (fun () ->
   let context = abi (A.current ()) in
   let identity = A.stored_value_compatibility context in
   let checked = function Ok value -> value | Error errors ->
@@ -192,9 +192,9 @@ let generate_revalidate ~project_root ~entry_file ~database ~documents = protect
     let edits = source_guard (M.create ~project_root ~reads:proposal.reads
       ~directories:[selection.migration_directory] ~imports:[] ~documents ~writes:proposal.writes) in
     let manifest = source_guard (M.combine (T.source_guard target_) edits ~documents) in
-    {operation=Revalidate;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;
+    {operation=Reseal;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;
      decisions=[];cleanup;contract_version=None;
-     revalidation=Some {recorded=proposal.recorded_identities;identity;fingerprint=A.fingerprint context}}))) in
+     revalidation=Some {recorded=proposal.recorded_identities;recorded_abis=proposal.recorded_abis;identity;fingerprint=A.fingerprint context}}))) in
   (match verify result ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   result)
 let quote = Compile.json_encode_string
@@ -210,8 +210,9 @@ let to_json p =
     (String.concat "," (List.map option d.options)) in
   let revalidation = match p.revalidation with
     | None -> ""
-    | Some r -> Printf.sprintf {|,"storedValue":{"recorded":[%s],"identity":%s,"fingerprint":%s}|}
-        (String.concat "," (List.map quote r.recorded)) (quote r.identity) (quote r.fingerprint) in
+    | Some r -> Printf.sprintf {|,"reseal":{"recordedCompilerAbis":[%s],"recordedStoredValueIdentities":[%s],"storedValueIdentity":%s,"storedValueFingerprint":%s}|}
+        (String.concat "," (List.map quote r.recorded_abis)) (String.concat "," (List.map quote r.recorded))
+        (quote r.identity) (quote r.fingerprint) in
   Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"inputDigest":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s,"contractVersion":%s,"cleanup":[%s]%s}|}
     (quote (operation_name p.operation))
     (quote (compiler_abi p)) (quote(input_digest p)) (compilable p) (quote s.entry_file) (quote s.database_file)

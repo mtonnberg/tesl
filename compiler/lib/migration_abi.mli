@@ -33,7 +33,7 @@ val known_identities : known list
     for MIG013 diagnostics. *)
 val explain_difference : t -> recorded:string -> string list
 (** The command that re-checks a sealed history under new semantics. *)
-val revalidate_command : string
+val reseal_command : string
 (** Verify that mutable stdlib resources still have the same identity. This does
     not attest a database's processing ABI or authorize an ABI drift override. *)
 val verify : t -> (unit,error) result

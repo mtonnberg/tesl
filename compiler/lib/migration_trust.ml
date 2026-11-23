@@ -21,7 +21,7 @@
    - a seal recorded under another compiler ABI with the same stored-value
      contract (re-checked under the current compiler, as before trust existed);
    - a different stored-value identity (refused with MIG013, naming what
-     changed and `tesl migrate revalidate`, which re-checks the complete
+     changed and `tesl migrate reseal`, which re-checks the complete
      history under the new semantics and re-records the seals);
    - the current step (target VCurrent), which has no completed seal.
 

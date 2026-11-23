@@ -1,15 +1,18 @@
-(* Re-recording the stored-value identity of a sealed migration history.
+(* Re-sealing a migration history under the running compiler.
 
-   When this compiler's stored-value identity differs from the one a history was
-   sealed under (Migration_abi), every seal of the family is recomputed: the two
+   Seals record the compiler ABI and the stored-value identity they were
+   checked under. After a compiler upgrade the seals no longer match: with a
+   new ABI only, completed steps are re-checked on every build (no trust, no
+   checkpoints); with a new stored-value identity the build refuses (MIG013).
+   Re-sealing recomputes every seal of the family: the two
    snapshot seals in each migration header (new identity, compiler ABI and
    snapshot digest), then each completed migration's frozen-source block (its
    root digest covers the header) and its checkpoint. Nothing else is
    rewritten, and no seal is recomputed unless every recorded byte it covers
-   still matches: revalidation never blesses an edited frozen source.
+   still matches: re-sealing never blesses an edited frozen source.
 
    This module only computes proposed file contents. The caller
-   (Migration_preview.generate_revalidate) re-checks the complete history under
+   (Migration_preview.generate_reseal) re-checks the complete history under
    the new identity with trust disabled before it offers them as a guarded
    manifest. *)
 module A = Migration_abi
@@ -43,6 +46,7 @@ type proposal = {
   writes : (string * string) list;   (* migration roots, then checkpoints *)
   reads : string list;
   recorded_identities : string list; (* identities the seals recorded, deduplicated *)
+  recorded_abis : string list;       (* compiler ABIs the seals recorded, deduplicated *)
   identity : string;                 (* the identity now recorded *)
 }
 
@@ -75,13 +79,14 @@ let seals_and_closures ~context ~project_root:root ~family =
   let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some identity)
     ~compiler_abi:abi ~project_root:root ~family) in
   let edges = recorded ~project_root:root ~family h in
-  if edges = [] then fail ~code:"MIG020" root "this database has no migration history yet; there are no seals to revalidate";
+  if edges = [] then fail ~code:"MIG020" root "this database has no migration history yet; there are no seals to re-record";
   let recorded_identities = List.concat_map (fun e ->
     List.filter_map S.stored_value_compatibility [e.previous_seal;e.current_seal]) edges
     |> List.sort_uniq compare in
-  if recorded_identities = [identity] then
-    fail ~code:"MIG020" root ("every seal already records this compiler's stored-value identity " ^ identity ^
-      "; there is nothing to revalidate");
+  let recorded_abis = List.concat_map (fun e -> [S.compiler_abi e.previous_seal;S.compiler_abi e.current_seal]) edges
+    |> List.sort_uniq compare in
+  if recorded_identities = [identity] && recorded_abis = [abi] then
+    fail ~code:"MIG020" root "every seal already records this compiler's ABI and stored-value identity; there is nothing to re-seal";
   let schemas = H.frozen h @ [H.current h] in
   let fresh recorded_seal =
     let root_module = S.root_module recorded_seal in
@@ -101,11 +106,11 @@ let seals_and_closures ~context ~project_root:root ~family =
     let closure = Closure.with_checkpoint closure None in
     e,sparse (Closure.attach ~file:e.migration.path ~source closure),Some closure) headers) in
   let reads = List.map fst (H.source_inputs h) in
-  closed,reads,recorded_identities,identity,h)
+  closed,reads,(recorded_identities,recorded_abis),identity,h)
 
 (* Add the recomputed checkpoints. [derive] returns None when the prefix no
    longer checks; the caller has already reported the full diagnostics. *)
-let with_checkpoints ~context ~project_root:root ~family (closed,reads,recorded_identities,identity,_) =
+let with_checkpoints ~context ~project_root:root ~family (closed,reads,(recorded_identities,recorded_abis),identity,_) =
   protect (fun () ->
   let abi = A.id context in
   let roots = List.map (fun (e,source,_) -> e.migration.path,source) closed in
@@ -124,6 +129,6 @@ let with_checkpoints ~context ~project_root:root ~family (closed,reads,recorded_
           Closure.checkpoint_file e.migration.path,text])
     | _ -> [e.migration.path,source]) closed |> List.concat in
   let roots,checkpoints = List.partition (fun (file,_) -> Filename.check_suffix file ".tesl") finished in
-  {writes=roots @ checkpoints;reads;recorded_identities;identity})
+  {writes=roots @ checkpoints;reads;recorded_identities;recorded_abis;identity})
 
 let unchecked_writes (closed,_,_,_,_) = List.map (fun (e,source,_) -> e.migration.path,source) closed

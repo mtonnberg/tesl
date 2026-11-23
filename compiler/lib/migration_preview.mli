@@ -1,6 +1,6 @@
 (** Source generation using the actual compiler context and complete application
     diagnostics. This is not a physical database plan and executes no operations. *)
-type operation = Start | Refresh | Contract | Revalidate
+type operation = Start | Refresh | Contract | Reseal
 type t
 type error = {loc:Location.loc;message:string;candidates:Migration_target.candidate list}
 val generate : project_root:string -> entry_file:string -> database:string option ->
@@ -32,5 +32,5 @@ val generate_contract : project_root:string -> entry_file:string -> database:str
     proposed seals with trust disabled, and the preview is refused unless that
     check reports no error. Writes only seal headers, frozen-source blocks and
     checkpoints, through the same guarded manifest as other previews. *)
-val generate_revalidate : project_root:string -> entry_file:string -> database:string option ->
+val generate_reseal : project_root:string -> entry_file:string -> database:string option ->
  documents:Migration_manifest.document list -> (t,error list) result

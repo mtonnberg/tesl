@@ -24,7 +24,7 @@ let reviewed () =
       "%s changed. It implements the builtin family %S (revision %d), which can affect stored values, \
        codecs or proof results. If this change can make an existing stored value decode, compare, \
        write or prove differently, bump that family's revision in compiler/lib/stored_value_revisions.ml \
-       (every sealed project then needs `tesl migrate revalidate`). Otherwise confirm that it has no \
+       (every sealed project then needs `tesl migrate reseal`). Otherwise confirm that it has no \
        stored-value effect. In both cases record the reviewed digest:\n    %S,%S;"
       path family.name family.revision path actual) stale))
 

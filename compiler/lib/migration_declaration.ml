@@ -486,7 +486,7 @@ let diagnostics_of_errors errors =
     end) errors
 
 
-let diagnostics source (m : module_form) =
+let rec diagnostics source (m : module_form) =
   (* This judgment compares sources freshly compiled in this invocation. It is
      intentionally not the persisted execution ABI, which the sealed plan must
      obtain from the build's compiler/runtime semantics identity. *)
@@ -506,6 +506,37 @@ let diagnostics source (m : module_form) =
     | Ok _ when !escapes = [] -> Ok ()
     | Ok _ -> Error (List.rev !escapes)
     | Error errors -> Error (errors @ List.rev !escapes) in
-  match result with
+  (match result with
   | Ok _ -> []
-  | Error errors -> diagnostics_of_errors errors
+  | Error errors -> diagnostics_of_errors errors) @ reseal_suggestion source m
+
+(* A completed history whose seals another compiler build recorded is checked
+   in full on every build and cannot resume from its checkpoint. Suggest
+   re-sealing once per family, on its newest completed migration, and only when
+   the stored-value identity is unchanged (otherwise MIG013 already applies). *)
+and reseal_suggestion source (m : module_form) =
+  match Migration_header.read ~file:m.source_file source,Migration_abi.current () with
+  | Ok (Some located),Ok abi ->
+    let previous,current = Migration_header.recorded_seals located in
+    let seals = [previous;current] in
+    let identity = Migration_abi.stored_value_compatibility abi in
+    let target = Migration_seal.root_module current in
+    let project_root = Filename.dirname (Filename.dirname (Filename.dirname m.source_file)) in
+    let newest_completed = match Validation_common.schema_module_parts target with
+      | Some (family,revision,[]) when revision <> "VCurrent" ->
+        let next = Printf.sprintf "%s.V%d" family (int_of_string (String.sub revision 1 (String.length revision - 1)) + 1) in
+        (match Validation_common.schema_module_relative_path next with
+         | Some relative -> not (Source_input.exists (Filename.concat project_root relative))
+         | None -> false)
+      | _ -> false in
+    if newest_completed &&
+       List.for_all (fun seal -> Migration_seal.stored_value_compatibility seal = Some identity) seals &&
+       List.exists (fun seal -> Migration_seal.compiler_abi seal <> Migration_abi.id abi) seals then
+      List.map (fun (d : Frontend_check.diagnostic) -> {d with severity="warning"})
+        (diagnostics_of_errors [{S.code="MIG033";loc=Migration_header.header_loc located;related=[];
+          message="this history was sealed by another compiler build, so every build re-checks its completed \
+            migrations in full and cannot resume from their checkpoints. Run `" ^ Migration_abi.reseal_command ^
+            "` to re-check the complete history with this compiler and, if it passes, re-record the seals"}])
+    else []
+  | _ -> []
+  | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _) -> []

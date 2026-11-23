@@ -11,6 +11,8 @@ val roots : located -> string * string
 (** Decoded metadata, with no source or semantic evidence. Refresh verifies the
     frozen predecessor independently before replacing a stale current target. *)
 val recorded_seals : located -> Migration_seal.t * Migration_seal.t
+(** The location of the header block, for diagnostics. *)
+val header_loc : located -> Location.loc
 val module_name : located -> string
 val mentions_file : project_root:string -> file:string -> located -> bool
 val replace : file:string -> source:string -> t -> (string, Migration_sparse.error list) result
