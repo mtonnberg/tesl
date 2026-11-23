@@ -145,6 +145,7 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
     def test_download_retries_are_bounded_and_http_refusals_are_not_retried(self):
         for error, attempts in ((TimeoutError("read timed out"), 3),
                                 (HTTPError("https://example.test", 503, "unavailable", {}, None), 3),
+                                (HTTPError("https://example.test", 403, "forbidden", {}, None), 3),
                                 (HTTPError("https://example.test", 404, "missing", {}, None), 1)):
             with self.subTest(error=error), patch.object(distribution, "urlopen", side_effect=error) as opened, \
                  patch.object(distribution.time, "sleep") as sleep:

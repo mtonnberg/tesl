@@ -60,7 +60,9 @@ def verify_checkout(plan, root, environment):
 
 def transient_download_error(error):
     if isinstance(error, HTTPError):
-        return error.code in (408, 429, 500, 502, 503, 504)
+        # 403 included: vendor CDNs intermittently refuse CI runner addresses.
+        # Retrying is safe because the pinned digest authenticates the bytes.
+        return error.code in (403, 408, 429, 500, 502, 503, 504)
     if isinstance(error, URLError):
         return transient_download_error(error.reason)
     return isinstance(error, TimeoutError) or (isinstance(error, OSError) and error.errno in
