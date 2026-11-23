@@ -1245,6 +1245,10 @@ let stdlib_predicates : string list =
   @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
     ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero"
     ; "FloatNonNegative"
+    (* Encoding predicates, owned by Tesl.String; minted only by the
+       String.toBase64Url/parseBase64Url/toHex/parseHex rows in
+       Validation_common.stdlib_func_infos. *)
+    ; "IsBase64Url"; "IsHex"
     (* Money (First-Class Units) predicates, owned by Tesl.Money *)
     ; "SameCurrency"; "NonNegativeMoney"; "RateFor"
     (* Crypto predicates, owned by Tesl.Crypto.  Deliberately NOT in

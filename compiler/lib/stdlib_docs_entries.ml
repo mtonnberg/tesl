@@ -444,6 +444,23 @@ let string_ : entry list = [
   e "String.requireNonEmpty" ~m:"Tesl.String"
     ~kind:(KSyntax "check String.requireNonEmpty(s: String) -> s: String ::: IsNonEmpty s")
     ~doc:"Check function: passes non-empty strings, minting IsNonEmpty.";
+  (* Reversible encodings: the fact on the encoded value is what makes decoding total. *)
+  e "IsBase64Url" ~m:"Tesl.String" ~kind:(KFact "fact IsBase64Url (s: String)")
+    ~doc:"s is the canonical base64url encoding (RFC 4648 URL-safe alphabet A-Z a-z 0-9 - _, no = padding, zero trailing bits) of a UTF-8 string; minted by String.toBase64Url and String.parseBase64Url, required by String.fromBase64Url.";
+  e "IsHex" ~m:"Tesl.String" ~kind:(KFact "fact IsHex (s: String)")
+    ~doc:"s is the canonical lowercase hex encoding of a UTF-8 string; minted by String.toHex and String.parseHex, required by String.fromHex.";
+  f "String.toBase64Url" [ "s" ] ~m:"Tesl.String"
+    ~doc:"Returns String ? IsBase64Url. Encodes the UTF-8 bytes of s as URL-safe base64 without padding — safe in a URL path, query or cookie, e.g. an opaque pagination cursor. Reversible with String.fromBase64Url. This is an encoding, not encryption: anyone can decode it.";
+  f "String.parseBase64Url" [ "raw" ] ~m:"Tesl.String"
+    ~doc:"Returns Maybe (s: String ::: IsBase64Url s). Validates untrusted text (a cursor from a request) as base64url. Something only for the exact text String.toBase64Url produces for some string: = padding, + or /, whitespace, non-zero trailing bits and bytes that are not valid UTF-8 all give Nothing.";
+  f "String.fromBase64Url" [ "s" ] ~m:"Tesl.String"
+    ~doc:"Requires s: String ::: IsBase64Url s. Decodes a proven base64url value back to the original string. Total: the IsBase64Url proof rules out malformed input, so there is no failure case to handle.";
+  f "String.toHex" [ "s" ] ~m:"Tesl.String"
+    ~doc:"Returns String ? IsHex. Encodes the UTF-8 bytes of s as lowercase hex (two digits per byte). Reversible with String.fromHex.";
+  f "String.parseHex" [ "raw" ] ~m:"Tesl.String"
+    ~doc:"Returns Maybe (s: String ::: IsHex s). Validates untrusted text as hex. Something only for lowercase hex of valid UTF-8 (the form String.toHex produces); uppercase digits, odd length, prefixes like 0x and non-UTF-8 bytes give Nothing.";
+  f "String.fromHex" [ "s" ] ~m:"Tesl.String"
+    ~doc:"Requires s: String ::: IsHex s. Decodes a proven hex value back to the original string. Total: the IsHex proof rules out malformed input.";
 ]
 
 (* ── Tesl.Regex ────────────────────────────────────────────────────────────── *)
