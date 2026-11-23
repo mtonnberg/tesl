@@ -90,18 +90,21 @@ The supported carrier/history restrictions and explicit deferrals in the scoped
 register remain in effect. This local pass does not claim hosted matrix execution
 or complete implementation of every historical-roadmap paragraph.
 
-## Rolling deployment evidence (2026-10-19)
+## Rolling deployment evidence (2026-11-23)
 
-The latest compiled Kubernetes rolling example passed on `70e37b9`:
-722 successful samples (zero HTTP failures), with at least two Ready application pods in every
-snapshot and both V1/V2 and V2/V3 overlaps observed. It verified 81 conversion
-receipts and 118 exact deliveries (110 submitted jobs plus eight seeds), retained
-note values, and final current/minimum/compatibility floors all equal to V3.
-Every release used `worker --install` and completed post-deployment retirement.
-Health p95 was 38.9ms and maximum 519.8ms in the sampled window. Evidence:
-`.tesl-stuff/rolling-final-20261019-183052/`, including `audit-summary.json` and
-full binary hashes. The owned cluster and processes were removed. The host's
-user-raised inotify limit remains 256; this run did not change it.
+The maintainer-accepted compiled Kubernetes rolling example passed on `5b959fc`:
+805 successful samples (zero HTTP failures), with at least two Ready application
+pods in every snapshot and both V1/V2 and V2/V3 overlaps observed. It verified 93
+conversion receipts and 133 exact deliveries. Each release installed through a
+one-off Helm pre-install/pre-upgrade Job holding the Installer credentials; the
+long-running Worker pod held only Worker credentials and ran `--schema worker`.
+Every install Job completed before its Worker rolled, no pod restarted, and each
+release completed post-deployment retirement. Evidence:
+`.tesl-stuff/rolling-install-job/`, including `result.json` and `availability.json`.
+The owned cluster and private PostgreSQL were removed afterwards.
+
+The previous accepted run (2026-10-19, `70e37b9`, 722 samples, `worker --install`
+in the long-running pod) is superseded.
 
 ## Earlier full-gate attempts and fixes
 
