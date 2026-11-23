@@ -1,17 +1,20 @@
 module A = Migration_abi
 module T = Migration_target
 module M = Migration_manifest
-type operation = Start | Refresh | Contract
+type operation = Start | Refresh | Contract | Reseal
 type error = {loc:Location.loc;message:string;candidates:T.candidate list}
 type cleanup = {version:int;file:string;present:bool}
 type t = {operation:operation;selection:T.selection;revision_after:int;abi:A.t;
           manifest:M.t;diagnostics:Compile.diagnostic list;decisions:Migration_generate.decision list;
-          cleanup:cleanup list;contract_version:int option}
+          cleanup:cleanup list;contract_version:int option;
+          revalidation:revalidation option}
+(* What the seals recorded and what re-sealing records instead. *)
+and revalidation = {recorded:string list;recorded_abis:string list;identity:string;fingerprint:string}
 let operation p = p.operation
 let selection p = p.selection
 let revision_after p = p.revision_after
 let compiler_abi p = A.id p.abi
-let operation_name = function Start->"start" | Refresh->"refresh" | Contract->"contract"
+let operation_name = function Start->"start" | Refresh->"refresh" | Contract->"contract" | Reseal->"reseal"
 let input_digest p =
   let s=p.selection in
   Migration_hash.digest(Migration_canonical.encode(Migration_canonical.Seq(
@@ -57,14 +60,13 @@ let cleanup_for (selection:T.selection) diagnostics =
  match Parser.parse_module selection.entry_file source with
  | Err _->[],diagnostics
  | Ok entry->
-   let result=Migration_program.with_source_history ~entry ~source(function
+   let result=Migration_program.with_source_history ~resume:true ~entry ~source(function
     | None->Ok []
     | Some history->match List.assoc_opt selection.database_name(Migration_program.row_histories history)with
       | None->Ok []
-      | Some rows->Result.map(fun plan->Migration_retained_storage.versions plan |>List.filter_map(fun(v:Migration_retained_storage.version)->
-        if v.windows=[] && v.retirements=[] && v.promotions=[]then None else
-        let file=Filename.concat selection.migration_directory(Printf.sprintf "v%d-contract.tesl" v.version)in
-        Some{version=v.version;file;present=Source_input.exists file})) (Migration_retained_storage.plan rows)) |> Result.join in
+      | Some rows->Result.map(fun plan->Migration_retained_storage.cleanup_versions plan |>List.map(fun version->
+        let file=Filename.concat selection.migration_directory(Printf.sprintf "v%d-contract.tesl" version)in
+        {version;file;present=Source_input.exists file})) (Migration_retained_storage.plan rows)) |> Result.join in
    match result with Ok cleanup->cleanup,diagnostics|Error errors->[],diagnostics @ Migration_declaration.diagnostics_of_errors errors
 let verify p ~documents = protect p.selection.entry_file (fun () ->
   abi (A.verify p.abi);
@@ -97,7 +99,7 @@ let generate ~project_root ~entry_file ~database ~new_revision ~documents = prot
     let cleanup,diagnostics = Source_input.with_overlays
       ~project_root:(Option.value (Source_input.project_root ()) ~default:project_root)
       (M.overlays manifest) (fun () -> cleanup_for selected (authoring_diagnostics entry_file)) in
-    {operation;selection=selected;revision_after;abi=context;manifest;diagnostics;decisions;cleanup;contract_version=None})) in
+    {operation;selection=selected;revision_after;abi=context;manifest;diagnostics;decisions;cleanup;contract_version=None;revalidation=None})) in
   (match verify preview ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
   preview)
 let generate_choice ~project_root ~entry_file ~database ~documents ~decision ~option_ ~expected_input_digest =
@@ -122,7 +124,7 @@ let generate_choice ~project_root ~entry_file ~database ~documents ~decision ~op
       ~project_root:(Option.value(Source_input.project_root())~default:project_root)
       (M.overlays p.manifest)(fun()->cleanup_for selection (authoring_diagnostics entry_file))in
     {operation=Refresh;selection;revision_after=p.current_version;abi=reviewed.abi;
-      manifest=p.manifest;diagnostics;decisions=p.decisions;cleanup;contract_version=None}))in
+      manifest=p.manifest;diagnostics;decisions=p.decisions;cleanup;contract_version=None;revalidation=None}))in
   (match verify reviewed ~documents with Ok()->()|Error errors->raise(Invalid errors));
   (match verify chosen ~documents with Ok()->()|Error errors->raise(Invalid errors));chosen)
 let generate_contract ~project_root ~entry_file ~database ~version ~documents = protect entry_file (fun () ->
@@ -141,7 +143,7 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
    | exception Unix.Unix_error(Unix.ENOENT,_,_) -> ());
   let source=Source_input.read entry_file in
   let entry=match Parser.parse_module entry_file source with Ok m -> m | Err e -> raise(Invalid[{loc=e.loc;message=e.msg;candidates=[]}]) in
-  let contents=checked(Migration_program.with_source_history ~entry ~source(function
+  let contents=checked(Migration_program.with_source_history ~resume:(version=selection.current_version) ~entry ~source(function
    | None -> raise(Invalid[{loc=Location.dummy_loc entry_file;message="contract generation requires a PostgreSQL database history";candidates=[]}])
    | Some history ->
      let rows=match List.assoc_opt selection.database_name (Migration_program.row_histories history) with
@@ -155,8 +157,46 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
    (match List.find_opt(fun(d:Compile.diagnostic)->d.severity="error")diagnostics with
     | Some d->raise(Invalid[{loc=Location.make_loc d.file d.start_line d.start_col d.end_line d.end_col;message=d.message;candidates=[]}])
     | None->());
-   {operation=Contract;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;decisions=[];cleanup;contract_version=Some version})) in
+   {operation=Contract;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;decisions=[];cleanup;contract_version=Some version;revalidation=None})) in
  (match verify result ~documents with Ok () -> () | Error errors -> raise(Invalid errors));result)
+(* Revalidation after a change of stored-value semantics: recompute every seal
+   of the selected family under this compiler's identity, re-check the complete
+   history under those proposed sources with trust disabled, and offer the
+   rewritten seals only when that check reports no error. *)
+let generate_reseal ~project_root ~entry_file ~database ~documents = protect entry_file (fun () ->
+  let context = abi (A.current ()) in
+  let identity = A.stored_value_compatibility context in
+  let checked = function Ok value -> value | Error errors ->
+    raise (Invalid (List.map (fun (e : Migration_sparse.error) -> {loc=e.loc;message=e.message;candidates=[]}) errors)) in
+  let first_error diagnostics = match List.find_opt (fun (d : Compile.diagnostic) -> d.severity="error") diagnostics with
+    | Some d -> raise (Invalid [{loc=Location.make_loc d.file d.start_line d.start_col d.end_line d.end_col;
+        message="the migration history does not check under the new stored-value semantics, so its seals \
+          were not re-recorded: " ^ d.code ^ " " ^ d.message;candidates=[]}])
+    | None -> () in
+  let result = abi (A.with_snapshot context (fun () -> Migration_trust.with_full_history (fun () ->
+    let target_ = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some identity)
+      ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
+    let selection = T.selection target_ in
+    let overlay writes f = Source_input.with_overlays
+      ~project_root:(Option.value (Source_input.project_root ()) ~default:project_root) writes f in
+    let full_check writes = overlay writes (fun () ->
+      Migration_program.with_compilation_cache (fun () ->
+        ignore (target (T.resolve_with_compatibility ~stored_value_compatibility:(Some identity)
+          ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents));
+        let cleanup,diagnostics = cleanup_for selection (authoring_diagnostics entry_file) in
+        first_error diagnostics; cleanup,diagnostics)) in
+    let staged = checked (Migration_reseal.seals_and_closures ~context ~project_root ~family:selection.family) in
+    ignore (full_check (Migration_reseal.unchecked_writes staged));
+    let proposal = checked (Migration_reseal.with_checkpoints ?namespace:(T.namespace target_) ~context ~project_root ~family:selection.family staged) in
+    let cleanup,diagnostics = full_check proposal.writes in
+    let edits = source_guard (M.create ~project_root ~reads:proposal.reads
+      ~directories:[selection.migration_directory] ~imports:[] ~documents ~writes:proposal.writes) in
+    let manifest = source_guard (M.combine (T.source_guard target_) edits ~documents) in
+    {operation=Reseal;selection;revision_after=selection.current_version;abi=context;manifest;diagnostics;
+     decisions=[];cleanup;contract_version=None;
+     revalidation=Some {recorded=proposal.recorded_identities;recorded_abis=proposal.recorded_abis;identity;fingerprint=A.fingerprint context}}))) in
+  (match verify result ~documents with Ok () -> () | Error errors -> raise (Invalid errors));
+  result)
 let quote = Compile.json_encode_string
 let option_int = function None -> "null" | Some n -> string_of_int n
 let to_json p =
@@ -168,13 +208,19 @@ let to_json p =
     {|{"id":%s,"entity":%s,"file":%s,"line":%d,"col":%d,"reason":%s,"options":[%s]}|}
     (quote d.id) (quote d.entity) (quote d.file) d.line d.col (quote d.reason)
     (String.concat "," (List.map option d.options)) in
-  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"inputDigest":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s,"contractVersion":%s,"cleanup":[%s]}|}
-    (quote (match p.operation with Start -> "start" | Refresh -> "refresh" | Contract -> "contract"))
+  let revalidation = match p.revalidation with
+    | None -> ""
+    | Some r -> Printf.sprintf {|,"reseal":{"recordedCompilerAbis":[%s],"recordedStoredValueIdentities":[%s],"storedValueIdentity":%s,"storedValueFingerprint":%s}|}
+        (String.concat "," (List.map quote r.recorded_abis)) (String.concat "," (List.map quote r.recorded))
+        (quote r.identity) (quote r.fingerprint) in
+  Printf.sprintf {|{"version":1,"kind":"migration-source-preview","ok":true,"operation":%s,"compilerAbi":%s,"inputDigest":%s,"compilable":%b,"selection":{"entryFile":%s,"databaseFile":%s,"database":%s,"family":%s,"schemaRoot":%s,"previousVersion":%s,"revisionBefore":%d,"revisionAfter":%d},"diagnostics":%s,"decisions":[%s],"manifest":%s,"contractVersion":%s,"cleanup":[%s]%s}|}
+    (quote (operation_name p.operation))
     (quote (compiler_abi p)) (quote(input_digest p)) (compilable p) (quote s.entry_file) (quote s.database_file)
     (quote s.database_name) (quote s.family) (quote s.schema_root) (option_int s.previous_version)
     s.current_version p.revision_after (Compile.diagnostics_to_json p.diagnostics)
     (String.concat "," (List.map decision p.decisions)) (M.to_json p.manifest) (option_int p.contract_version)
     (String.concat ","(List.map(fun item->Printf.sprintf {|{"version":%d,"file":%s,"present":%b}|} item.version (quote item.file) item.present)p.cleanup))
+    revalidation
 let errors_to_json errors =
   let candidate (c : T.candidate) = Printf.sprintf {|{"database":%s,"file":%s}|} (quote c.database_name) (quote c.database_file) in
   let error (e : error) = Printf.sprintf {|{"file":%s,"line":%d,"col":%d,"message":%s,"candidates":[%s]%s}|}

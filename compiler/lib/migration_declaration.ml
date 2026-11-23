@@ -329,12 +329,10 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
           | Ok abi ->
             let current = Migration_abi.stored_value_compatibility abi in
             let before,after = Migration_header.seals header in
-            if List.exists (fun seal -> match Migration_seal.stored_value_compatibility seal with
-                | Some recorded -> recorded <> current | None -> false) [before;after] then
-                reject "MIG013" declaration.loc
-                  "this migration history was sealed under a different stored-value compatibility \
-                   contract (another compiler or stdlib version); the production build refuses \
-                   it. Build with the compiler and stdlib that sealed it") source_seals;
+            match List.find_map (fun seal -> match Migration_seal.stored_value_compatibility seal with
+                | Some recorded when recorded <> current -> Some recorded | _ -> None) [before;after] with
+            | Some recorded -> reject "MIG013" declaration.loc (Migration_abi.mismatch_message ~recorded)
+            | None -> ()) source_seals;
       let closure = checked (Migration_closure.read ~file:m.source_file source) in
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
@@ -353,7 +351,7 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
       if holes <> [] then raise (Invalid holes);
       let fixtures = match List.assoc_opt "fixtures" fields with
         | None -> [] | Some expression -> list "MIG020" expression in
-      let before = previous.H.inventory and after = current.H.inventory in
+      let before = H.inventory previous and after = H.inventory current in
       let source_graph=checked (T.capture ~before ~after ~source m) in
       checked (T.with_captured source_graph (fun () ->
       let queue_errors = Migration_queue.historical_capability ~before ~after (Option.map Migration_header.seals source_seals) in
@@ -446,7 +444,8 @@ let check_prepared prepared =
   let transforms=match prepared.ptransforms with
     | None -> Ok None
     | Some transforms -> (match prepared.ptrust with
-      | Some evidence -> Ok (Some (T.trusted evidence transforms))
+      | Some evidence when T.deferred_errors transforms=[] -> Ok (Some (T.trusted evidence transforms))
+      | Some _ -> Result.map Option.some (T.check_prepared transforms)
       | None -> Result.map Option.some (T.check_prepared transforms)) in
   Result.map (fun transforms -> {coverage=prepared.pcoverage;additive=prepared.padditive;
     transforms;queue_transforms=prepared.pqueue_transforms;queue_removal=prepared.pqueue_removal;version=prepared.pversion;source_seals=prepared.pseals}) transforms))
@@ -487,7 +486,7 @@ let diagnostics_of_errors errors =
     end) errors
 
 
-let diagnostics source (m : module_form) =
+let rec diagnostics source (m : module_form) =
   (* This judgment compares sources freshly compiled in this invocation. It is
      intentionally not the persisted execution ABI, which the sealed plan must
      obtain from the build's compiler/runtime semantics identity. *)
@@ -507,6 +506,37 @@ let diagnostics source (m : module_form) =
     | Ok _ when !escapes = [] -> Ok ()
     | Ok _ -> Error (List.rev !escapes)
     | Error errors -> Error (errors @ List.rev !escapes) in
-  match result with
+  (match result with
   | Ok _ -> []
-  | Error errors -> diagnostics_of_errors errors
+  | Error errors -> diagnostics_of_errors errors) @ reseal_suggestion source m
+
+(* A completed history whose seals another compiler build recorded is checked
+   in full on every build and cannot resume from its checkpoint. Suggest
+   re-sealing once per family, on its newest completed migration, and only when
+   the stored-value identity is unchanged (otherwise MIG013 already applies). *)
+and reseal_suggestion source (m : module_form) =
+  match Migration_header.read ~file:m.source_file source,Migration_abi.current () with
+  | Ok (Some located),Ok abi ->
+    let previous,current = Migration_header.recorded_seals located in
+    let seals = [previous;current] in
+    let identity = Migration_abi.stored_value_compatibility abi in
+    let target = Migration_seal.root_module current in
+    let project_root = Filename.dirname (Filename.dirname (Filename.dirname m.source_file)) in
+    let newest_completed = match Validation_common.schema_module_parts target with
+      | Some (family,revision,[]) when revision <> "VCurrent" ->
+        let next = Printf.sprintf "%s.V%d" family (int_of_string (String.sub revision 1 (String.length revision - 1)) + 1) in
+        (match Validation_common.schema_module_relative_path next with
+         | Some relative -> not (Source_input.exists (Filename.concat project_root relative))
+         | None -> false)
+      | _ -> false in
+    if newest_completed &&
+       List.for_all (fun seal -> Migration_seal.stored_value_compatibility seal = Some identity) seals &&
+       List.exists (fun seal -> Migration_seal.compiler_abi seal <> Migration_abi.id abi) seals then
+      List.map (fun (d : Frontend_check.diagnostic) -> {d with severity="warning"})
+        (diagnostics_of_errors [{S.code="MIG033";loc=Migration_header.header_loc located;related=[];
+          message="this history was sealed by another compiler build, so every build re-checks its completed \
+            migrations in full and cannot resume from their checkpoints. Run `" ^ Migration_abi.reseal_command ^
+            "` to re-check the complete history with this compiler and, if it passes, re-record the seals"}])
+    else []
+  | _ -> []
+  | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _) -> []

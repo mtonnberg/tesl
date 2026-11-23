@@ -18,7 +18,7 @@ let classes () =
  List.iter (fun code -> action_fields code "\"decision\"" true)
   ["MIG002";"MIG003";"MIG013";"MIG016";"MIG020";"MIG026";"MIG030"];
  List.iter (fun code -> action_fields code "\"suggested\"" false)
-  ["MIG004";"MIG008";"MIG009";"MIG017";"MIG018";"MIG019";"MIG021";"MIG022";"MIG023";"MIG031";"MIG032"];
+  ["MIG004";"MIG008";"MIG009";"MIG017";"MIG018";"MIG019";"MIG021";"MIG022";"MIG023";"MIG031";"MIG032";"MIG033"];
  List.iter (fun code -> action_fields code "null" false) ["MIG014";"MIG025";"MIG029"]
 let legacy () =
  let d = diagnostic "MIG003" in

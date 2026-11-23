@@ -793,6 +793,26 @@
  (libraries tesl_compiler_lib alcotest str unix))
 
 (test
+ (name test_migration_missing_fixture)
+ (modules test_migration_missing_fixture)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
  (name test_migration_seal_trust)
  (modules test_migration_seal_trust)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_migration_checkpoint)
+ (modules test_migration_checkpoint)
+ (libraries tesl_compiler_lib alcotest unix str))
+
+(test
+ (name test_stored_value_revisions)
+ (modules test_stored_value_revisions)
+ (libraries tesl_compiler_lib alcotest))
+
+(test
+ (name test_migration_stored_value)
+ (modules test_migration_stored_value)
  (libraries tesl_compiler_lib alcotest unix str))

@@ -21,6 +21,8 @@ let collapse_changed_current (diagnostics : diagnostic list) =
     | Some key when Hashtbl.mem seen key -> false
     | Some key -> Hashtbl.add seen key (); true) diagnostics
 
+(* Several migration checks (the entry's history, its migrations and their
+   Contract companions) can also report the same error; see drop_identical. *)
 let check_module ?skip_dep_body source m =
   Migration_program.with_compilation_cache (fun () ->
   match Migration_application.with_contexts ~source m (fun () ->
@@ -34,6 +36,7 @@ let check_module ?skip_dep_body source m =
        Migration_proof_context.without_context (fun () -> Frontend_check.check_module ?skip_dep_body source m))
   |> Migration_source_diagnostics.explain_holes ~source m
   |> collapse_changed_current
+  |> drop_identical
 
 
 let source_parse_diagnostics filename source error =

@@ -11,7 +11,7 @@ let migration ~code ~message ~related =
  let class_ = match code with
   | "MIG001" | "MIG010" | "MIG012" | "MIG015" | "MIG024" | "MIG027" -> Some Mechanical
   | "MIG004" | "MIG008" | "MIG009" | "MIG017" | "MIG018" | "MIG019"
-  | "MIG021" | "MIG022" | "MIG023" | "MIG031" | "MIG032" -> Some Suggested
+  | "MIG021" | "MIG022" | "MIG023" | "MIG031" | "MIG032" | "MIG033" -> Some Suggested
   | "MIG014" | "MIG025" | "MIG029" -> None
   (* MIG002 needs proven generator ownership before a mechanical action can be
      offered. MIG020/MIG026 also cover ambiguous malformed source/history; only

@@ -8,7 +8,9 @@ module Schema = Migration_schema
 module Input = Source_input
 module Hash = Migration_hash
 
-type t = {root:string;sources:(string * string) list}
+(* [checkpoint] is the SHA-256 of the root's generated v<n>.checkpoint, when one
+   was written. It sits inside this block, so the root digest never covers it. *)
+type t = {root:string;sources:(string * string) list;checkpoint:string option}
 type located = {seal:t;start_offset:int;end_offset:int;loc:Location.loc}
 exception Invalid of E.error list
 let reject file message = raise (Invalid [{E.code="MIG013";loc=Location.dummy_loc file;message;related=[]}])
@@ -31,8 +33,9 @@ let valid_hash value = String.length value=64 && String.for_all (function '0'..'
 let opening = "# tesl:frozen-migration:v1 "
 let closing = "# tesl:frozen-migration:end"
 let member = "# tesl:frozen-source "
+let checkpoint_member = "# tesl:frozen-checkpoint "
 let reserved line = List.exists (fun prefix -> String.starts_with ~prefix (String.trim line))
-  ["# tesl:frozen-migration";"# tesl:frozen-source"]
+  ["# tesl:frozen-migration";"# tesl:frozen-source";"# tesl:frozen-checkpoint"]
 type line = {text:string;offset:int;stop:int}
 let lines source =
   let offset = ref 0 in String.split_on_char '\n' source |> List.map (fun text ->
@@ -51,9 +54,14 @@ let read_raw ~file source =
     if not (String.starts_with ~prefix:opening first.text) then malformed ();
     let root = String.sub first.text (String.length opening) (String.length first.text - String.length opening) in
     if not (valid_root root) then malformed ();
+    let checkpoint = ref None in
     let rec entries result = function
       | [] -> malformed ()
       | line::rest when line.text=closing -> List.rev result,line,rest
+      | line::(next::_ as rest) when String.starts_with ~prefix:checkpoint_member line.text && next.text=closing && !checkpoint=None ->
+        let value = String.sub line.text (String.length checkpoint_member) (String.length line.text - String.length checkpoint_member) in
+        if not (valid_hash value) then malformed ();
+        checkpoint := Some value; entries result rest
       | line::rest when String.starts_with ~prefix:member line.text ->
         let value = String.sub line.text (String.length member) (String.length line.text - String.length member) in
         (match String.split_on_char ' ' value with
@@ -65,13 +73,17 @@ let read_raw ~file source =
     if sources=[] || List.map fst sources <> List.sort_uniq String.compare (List.map fst sources) || not (List.mem_assoc root sources) then malformed ();
     if List.exists (fun line -> reserved line.text) rest then malformed ();
     if last.stop=String.length source && not (String.ends_with ~suffix:"\n" source) then malformed ();
-    Some {seal={root;sources};start_offset=first.offset;end_offset=last.stop;loc=Location.dummy_loc file}
+    Some {seal={root;sources;checkpoint= !checkpoint};start_offset=first.offset;end_offset=last.stop;loc=Location.dummy_loc file}
 let read ~file source = protect file (fun () -> read_raw ~file source)
 let remove source located = String.sub source 0 located.start_offset ^ String.sub source located.end_offset (String.length source-located.end_offset)
 let without ~file source = match read_raw ~file source with None -> source | Some located -> remove source located
 let encode seal = opening ^ seal.root ^ "\n" ^
-  String.concat "" (List.map (fun (name,digest) -> member ^ name ^ " " ^ digest ^ "\n") seal.sources) ^ closing ^ "\n"
+  String.concat "" (List.map (fun (name,digest) -> member ^ name ^ " " ^ digest ^ "\n") seal.sources) ^
+  Option.fold ~none:"" ~some:(fun digest -> checkpoint_member ^ digest ^ "\n") seal.checkpoint ^ closing ^ "\n"
+let checkpoint_file root_file = Filename.chop_suffix root_file ".tesl" ^ ".checkpoint"
 let root located = located.seal.root
+let checkpoint located = located.seal.checkpoint
+let with_checkpoint seal digest = {seal with checkpoint=digest}
 let sources located = located.seal.sources
 let mentions_file ~project_root ~file located = List.exists (fun (name,_) -> path project_root name=file) located.seal.sources
 let regular file =
@@ -114,7 +126,7 @@ let collect ~project_root ~root_file ~source =
   let companion_file = path project_root companion in
   if Input.exists companion_file then
     visit companion companion_file (Input.read companion_file);
-  {root;sources=Hashtbl.to_seq found |> List.of_seq |> List.sort compare}
+  {root;sources=Hashtbl.to_seq found |> List.of_seq |> List.sort compare;checkpoint=None}
 let capture ~project_root ~root_file ~source = protect root_file (fun () ->
   collect ~project_root ~root_file ~source)
 let attach ~file ~source seal = protect file (fun () ->
@@ -130,5 +142,10 @@ let verify ~project_root ~root_file ~source located = protect root_file (fun () 
     let file = path project_root name in regular file;
     let contents = if file=root_file then without ~file source else Input.read file in
     if Hash.digest contents <> digest then reject file "recorded frozen migration source changed; restore it and make a forward revision") located.seal.sources;
+  Option.iter (fun digest ->
+    let file = checkpoint_file root_file in
+    regular file;
+    if Hash.digest (Input.read file) <> digest then
+      reject file "recorded migration checkpoint changed; restore it, or run the full-history check to find which bytes differ") located.seal.checkpoint;
   let actual = collect ~project_root ~root_file ~source in
-  if actual <> located.seal then reject root_file "frozen migration source or Contract companion closure changed; restore it and prepare the Contract before starting the next revision")
+  if {actual with checkpoint=located.seal.checkpoint} <> located.seal then reject root_file "frozen migration source or Contract companion closure changed; restore it and prepare the Contract before starting the next revision")

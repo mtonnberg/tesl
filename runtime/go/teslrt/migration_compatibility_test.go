@@ -227,6 +227,32 @@ func TestPgMigrationCompatibilityRequiresCompleteMatchingHistory(t *testing.T) {
 	}
 }
 
+// A binary built under other stored-value semantics names both identities and
+// the supported way forward instead of a bare mismatch.
+func TestPgMigrationStoredValueIdentityMismatchExplainsRefusal(t *testing.T) {
+	recorded := "tesl-stored-value-v1:" + strings.Repeat("d", 64)
+	for _, verify := range []func(PgMigrationControlState, PgMigrationExpansionPlan, map[int]*pgExpansionIntent) error{
+		pgVerifyExpansionHistory, pgVerifyExpansionObservation,
+	} {
+		state, plan, intents := pgCompatibilityTestState(t, 3)
+		plan.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
+		intent := intents[2]
+		if intent == nil {
+			t.Fatal("test state has no V2 expansion intent")
+		}
+		intent.StoredValueCompatibility = recorded
+		err := verify(state, plan, intents)
+		if err == nil {
+			t.Fatal("a database written under another stored-value identity was accepted")
+		}
+		for _, fragment := range []string{"at V2", recorded, plan.StoredValueCompatibility, "refuses the database", "Stored-value identity"} {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Fatalf("refusal omits %q: %v", fragment, err)
+			}
+		}
+	}
+}
+
 func TestPgMigrationCompatibilityPinsUnfinishedIntentsToActualABI(t *testing.T) {
 	for _, progress := range []string{"no objects", "partial objects", "all objects before lifecycle"} {
 		t.Run(progress, func(t *testing.T) {

@@ -28,6 +28,17 @@ func pgRewriteMigrationSQL(body, namespace, old, replacement string, count int) 
 	return strings.ReplaceAll(rewritten, token, prefix)
 }
 
+// pgRewriteMigrationSQLExactlyOnce rewrites a fragment that must occur exactly
+// once, so a later edit of the base definition cannot silently drop the rewrite.
+func pgRewriteMigrationSQLExactlyOnce(body, namespace, old, replacement string) string {
+	prefix := quoteIdentifier(namespace) + "."
+	const token = "\x00"
+	if strings.Count(strings.ReplaceAll(body, prefix, token), strings.ReplaceAll(old, prefix, token)) != 1 {
+		panic("migration SQL rewrite fragment must occur exactly once: " + old)
+	}
+	return pgRewriteMigrationSQL(body, namespace, old, replacement, 1)
+}
+
 // pgCutMigrationSQL locates an SQL fragment outside quoted namespace data.
 // Like rewriting, splitting must protect both the body and the sought fragment.
 func pgCutMigrationSQL(body, namespace, separator string) (string, string, bool) {

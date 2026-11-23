@@ -20,7 +20,9 @@
      reports the ordinary MIG013/MIG001 integrity diagnostic);
    - a seal recorded under another compiler ABI with the same stored-value
      contract (re-checked under the current compiler, as before trust existed);
-   - a different stored-value contract (refused with MIG013, unchanged);
+   - a different stored-value identity (refused with MIG013, naming what
+     changed and `tesl migrate reseal`, which re-checks the complete
+     history under the new semantics and re-records the seals);
    - the current step (target VCurrent), which has no completed seal.
 
    Trust only removes repeated per-step judgments. Cross-step history analysis
@@ -47,6 +49,13 @@ let request_full_history () =
      the same choice. *)
   Unix.putenv "TESL_FULL_HISTORY" "1"
 
+(* Disable trust for one scope of this process only (revalidation's complete
+   re-check); child processes are not affected. *)
+let with_full_history f =
+  let previous = !requested in
+  requested := true;
+  Fun.protect ~finally:(fun () -> requested := previous) f
+
 type evidence = { root : string }
 
 let root evidence = evidence.root
@@ -59,7 +68,8 @@ let reset_trusted_roots () = trusted_log := []
 (* Both snapshot seals of one completed edge were recorded by this exact
    compiler build. The ABI identity covers the compiler, its embedded runtime and
    the lifted stdlib bytes, so equal identities also mean an equal stored-value
-   contract; a seal without an explicit contract (legacy v1) is never trusted. *)
+   identity; a seal without an explicit identity (legacy seal format v1) is never
+   trusted. *)
 let same_compiler ~compiler_abi ~stored_value_compatibility seals =
   List.for_all (fun seal ->
     Migration_seal.compiler_abi seal = compiler_abi &&
@@ -91,7 +101,7 @@ let current_compiler () =
 (* Self-contained decision for a saved completed migration file reached only as
    history (not the module being queried). Any failure means "not trusted"; the
    caller then runs the full check, which reports the precise diagnostic. *)
-let edge ~project_root ~compiler ~file ~source =
+let edge_uncached ~project_root ~compiler ~file ~source =
   if full_history () then None
   else match compiler with
   | None -> None
@@ -112,6 +122,23 @@ let edge ~project_root ~compiler ~file ~source =
          | _ -> None)
       | _ -> None
     with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ | Not_found -> None
+
+(* One command asks about the same completed edge from discovery, the
+   checkpoint, the application check and the capture. A decision is reused only
+   under the identical source view (same overlays and pinned resources) in
+   which it re-hashed every recorded input; any other view decides again. *)
+let edge_memo : (string * string * string * (string * string) option,
+  Source_input.view_token * evidence option) Migration_analysis_cache.t =
+  Migration_analysis_cache.create ~limit:4096
+let edge ~project_root ~compiler ~file ~source =
+  if full_history () then None else
+  let key = project_root,file,Migration_hash.digest source,compiler in
+  let decide () = Source_input.view_token (),edge_uncached ~project_root ~compiler ~file ~source in
+  (* Trust re-hashes recorded bytes only; no proof scope shapes it. *)
+  let _,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
+    ~guard:(fun (token,_) -> Source_input.same_view token) decide in
+  Option.iter (fun e -> trusted_log := e.root :: !trusted_log) evidence;
+  evidence
 
 (* [edge] for a parsed captured module, deriving the project root from its
    canonical versioned path. A completed migration root, or the Contract

@@ -20,6 +20,7 @@ columns and tables are cleaned up by a separate, later step (the Contract).
 | `schema/<family>/vN.tesl` | Frozen copy of the schema at revision N | Generated, never edited |
 | `migrations/<family>/vN.tesl` | How rows move from revision N-1 to N | Generated, you fill the `todo` holes |
 | `migrations/<family>/vN-contract.tesl` | Cleanup of retired columns/tables after N | Generated, you review it |
+| `migrations/<family>/vN.checkpoint` | History state carried after revision N, so later builds need not re-derive V1..N; its hash is recorded in `vN.tesl` | Generated when N is frozen, never edited; commit it |
 
 The application imports entities from `Schema.<Family>.VCurrent`; its `database`
 declaration names `schema: Schema.<Family>.VCurrent` and
@@ -501,8 +502,10 @@ still rejects an inconsistent current schema or unresolved migration.
 
 `MIG013` is different: frozen history or its protected metadata no longer matches.
 Restore the exact historical file from version control and investigate the change.
-Do not dismiss it as an in-progress migration, change a stored digest to match,
-or reseal an already-deployed revision. If source publication was interrupted, use
+Do not dismiss it as an in-progress migration or change a stored digest to match.
+The one exception is a `MIG013` that names a different stored-value identity: the
+frozen bytes are intact, the compiler changed, and `tesl migrate reseal` is the
+supported path (see [Re-sealing after a compiler upgrade](#re-sealing-after-a-compiler-upgrade)). If source publication was interrupted, use
 the guarded recovery command named by the tool rather than manually completing a
 partial multi-file write.
 
@@ -514,7 +517,7 @@ check read: the two schema snapshots (`# tesl:snapshot-source` lines), the
 migration file itself, its private helpers and its Contract
 (`# tesl:frozen-source` lines). Each `# tesl:snapshot-seal` line also records the
 compiler ABI (an identity of the compiler build, its embedded Go runtime and the
-stdlib) that ran the check.
+stdlib) that ran the check, and the stored-value identity of its semantics.
 
 Later commands (`agent-context`, `--check-json`, Go emission, `tesl migrate`)
 re-hash those files instead of re-checking the revision. A frozen revision is
@@ -523,26 +526,104 @@ re-hash those files instead of re-checking the revision. A frozen revision is
 | Condition | If it fails |
 |---|---|
 | every recorded file still has its recorded hash | full check; it reports `MIG013` for the changed file |
-| both snapshot seals name the running compiler's ABI | full check under the running compiler (accepted when the stored-value contract matches) |
-| both seals name the running stored-value contract | `MIG013`, as before: build with the compiler that sealed it |
+| both snapshot seals name the running compiler's ABI | full check under the running compiler (accepted when the stored-value identity matches); `MIG033` suggests `tesl migrate reseal` |
+| both seals name the running stored-value identity | `MIG013`, naming what changed; run `tesl migrate reseal` |
 
 The current revision (the migration to `VCurrent`) is always checked completely,
-and so is any file you query directly. The history-wide checks (row generations,
-retained storage, Contracts, the expansion plan) and the older schema inventories
-the current revision needs are recomputed from the hash-verified files in every
-command. Trust removes only the repeated per-revision type and proof checks.
+and so is any file you query directly. Trust removes the repeated per-revision
+type and proof checks.
+
+**Checkpoints.** When `tesl migrate` freezes revision N it also writes
+`migrations/<family>/vN.checkpoint`. It holds what the history-wide checks carry
+from revision N to the next one: each entity's row generation, the retained
+PostgreSQL columns and indexes with their pending Contract, and the
+installation-origin refusal, plus the compiler ABI, the stored-value identity and
+the recorded root hash of every completed migration V2..N. Its SHA-256 is
+recorded in `vN.tesl` (`# tesl:frozen-checkpoint`), so an edited checkpoint
+byte fails with `MIG013` like any other frozen byte.
+
+`tesl migrate` previews and Contract checks continue from the newest checkpoint
+instead of re-deriving every revision, when:
+
+| Condition | If it fails |
+|---|---|
+| every completed revision is trusted (table above) | history is folded from V1, as before |
+| the checkpoint names the running compiler ABI and stored-value identity | it is ignored and history is folded from V1 |
+| its recorded migration hashes equal the files' recorded hashes | `MIG013`: restore the checkpoint written with this revision |
+
+Independently of checkpoints, a frozen schema snapshot covered by a trusted
+later revision is loaded only when a check needs it. Go emission still folds the complete history from V1 (the emitted program contains
+every revision). Histories that use table Drop, staged unique indexes, queue
+payload conversions or write-backs get no checkpoints and are always folded from
+V1; so are histories frozen before checkpoints existed.
 
 Upgrading the compiler changes its ABI. Revisions frozen by the older compiler are
-then checked completely by every build, as they were before seals were trusted;
-only revisions frozen by the new compiler are trusted. There is no command yet
-that re-seals old revisions under a new compiler.
+then checked completely by every build, as they were before seals were trusted,
+and their checkpoints are ignored, until you re-seal them (next section).
 
 The trade-off: someone who edits a frozen file *and* recomputes its recorded hashes
 is not caught by a normal build. To check every revision completely, set
 `TESL_FULL_HISTORY=1` or pass `--full-history` (for example
 `tesl --full-history --backend go app.tesl --out build`). Run that in CI on a
 schedule or before a release; when the history is intact its output is
-byte-for-byte the same as a normal build.
+byte-for-byte the same as a normal build. Full-history mode also recomputes every
+checkpoint written by the running compiler and refuses one that differs
+(`MIG013`), which catches a checkpoint edited together with its recorded hash.
+
+### Re-sealing after a compiler upgrade
+
+```
+tesl migrate reseal app.tesl            # check, then write through the guarded source writer
+tesl migrate reseal app.tesl --manifest-json   # preview only
+```
+
+`tesl migrate reseal` re-checks the complete history with the running compiler, as
+`TESL_FULL_HISTORY=1` would: every frozen revision's migration, converters,
+fixtures, row history, retained storage and Contracts. Only if that check reports
+no error does it rewrite, for every revision of the selected database: the two
+`# tesl:snapshot-seal` lines (compiler ABI, stored-value identity and snapshot
+digest), the `# tesl:frozen-source` block (its root hash covers those lines) and
+the `vN.checkpoint` files. The result is byte-for-byte what freezing the same
+sources under the running compiler would record. No schema, migration body,
+helper or Contract changes. It refuses, and writes nothing, when a recorded file
+no longer has its recorded hash (restore it), when the current revision has
+unsaved schema edits (finish it with `tesl migrate` first), when the history does
+not check, or when every seal already names the running compiler.
+
+Run it in two situations:
+
+| Diagnostic | What changed | After `tesl migrate reseal` |
+|---|---|---|
+| `MIG033` (warning) | only the compiler build (ABI) | builds trust the old revisions and resume from their checkpoints again |
+| `MIG013` naming two stored-value identities | how stored values are read, written or proved | builds succeed again; existing **databases refuse** the new binaries (below) |
+
+**Stored-value identity.** Each seal, compiled history and database records a
+`tesl-stored-value-v1:<hex>` identity. It is derived from a semantic fingerprint
+(`tesl-stored-value-fingerprint-v2:<hex>`) of:
+
+- the declarations of every stdlib module written in Tesl (`tesl/*.tesl`): their
+  tokens, with comments, blank lines, indentation width and `test` blocks left
+  out, so rewording a comment or reformatting the stdlib keeps the identity;
+- one reviewed revision number per builtin family implemented in OCaml or Go
+  (proof interpretation, canonical storage mapping, JSON codecs, database
+  values, numbers, text, time, credentials, URLs, collections, checks), listed in
+  `compiler/lib/stored_value_revisions.ml`. A test records the digest of each
+  implementation file and fails when one changes until a developer has decided
+  whether the family's revision must be bumped.
+
+Compiler changes outside those families (for example in Go code generation) are
+not part of the identity; they are reviewed like any other compiler change.
+
+Histories sealed and databases installed before fingerprints existed record the
+older byte-derived identity (`tesl-stored-value-v1:9b2653…`). A compiler whose
+fingerprint equals the fingerprint of that stdlib and those builtins keeps that
+identity, so those seals and databases keep working, including after comment-only
+stdlib edits. The first semantic change gives a new identity derived from the new
+fingerprint.
+
+A database written under one identity refuses binaries with another; re-sealing
+source does not change that rule. See
+[Operating a checked migration](migration-operations.md#stored-value-identity).
 
 ## Choose the deployment route
 
@@ -563,13 +644,14 @@ promise that every migration can run with every old application still serving.
 For a compatible adjacent Kubernetes rollout, the order is:
 
 ```text
-worker --install → worker ready → roll Request pods → old pods/claims drain → deploy/Contract
+install Job (or worker --install) → worker ready → roll Request pods → old pods/claims drain → deploy/Contract
 ```
 
 The finite `--schema deploy` command completes retirement. Running it as a
 pre-upgrade hook while the controller still keeps old pods alive can wait for
 those very pods. Use the [rolling example](../example/kubernetes-rolling/README.md)
-for that ordering. A stop → deploy → start pipeline is a useful finite deployment
+for that ordering; it runs `--schema install` as a separate one-off Job so the
+long-running Worker never holds the Installer credentials. A stop → deploy → start pipeline is a useful finite deployment
 route, but does not promise continuous availability.
 
 See [operating a migration](migration-operations.md) for credentials, blockers and

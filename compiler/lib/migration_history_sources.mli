@@ -5,8 +5,12 @@
 type schema = {
   version : int;
   root_file : string;
-  inventory : Migration_inventory.t;
+  loaded : Migration_inventory.t Lazy.t;
 }
+(** The schema's checked inventory. Discovery loads it eagerly unless a trusted
+    seal of a later completed migration covers its bytes (Migration_trust);
+    then it is loaded on first use. *)
+val inventory : schema -> Migration_inventory.t
 
 type migration_source = {
   version : int;

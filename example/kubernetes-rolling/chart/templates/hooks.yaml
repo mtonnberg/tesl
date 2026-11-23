@@ -44,3 +44,55 @@ spec:
             - secretRef:
                 name: {{ .Release.Name }}-schema-hook
 {{- end }}
+{{- if eq .Values.mode "migrator" }}
+{{- /*
+One-off Installer Job: it alone receives the admin Installer DSN. It creates or
+verifies Tesl's bookkeeping tables and functions and stages the checked history,
+then exits. Helm runs it to completion before the Worker Deployment changes, so
+the long-running Worker pod only ever holds Worker credentials.
+*/}}
+{{- $hook := "pre-install,pre-upgrade" }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-schema-install
+  annotations:
+    helm.sh/hook: {{ $hook | quote }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  {{- include "demo.env" (dict "root" . "role" "installer") | nindent 2 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-schema-install
+  annotations:
+    helm.sh/hook: {{ $hook | quote }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 540
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: schema-install
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          command: [/app]
+          args: [--schema, install, --worker, demo_worker, --request, demo_request, --json]
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}-schema-install
+{{- end }}

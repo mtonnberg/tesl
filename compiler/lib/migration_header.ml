@@ -12,6 +12,7 @@ let closing = "# tesl:migration-history:end"
 let seal_end = "# tesl:snapshot-end"
 let seals checked = checked.located.header.previous,checked.located.header.current
 let recorded_seals located = located.header.previous,located.header.current
+let header_loc located = located.loc
 let roots located = S.root_module located.header.previous,S.root_module located.header.current
 let mentions_file ~project_root ~file located =
   List.exists (fun seal -> List.exists (fun (name,_) ->

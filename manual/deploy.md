@@ -161,12 +161,13 @@ startup credentials.
 
 For an actual local Helm/OpenTofu rollout with old/new pod overlap, run the
 [kind rolling-migration example](../example/kubernetes-rolling/README.md). It uses
-separate ordered releases: database first, then the migrator's `/worker.sh`
-running `--schema worker --install`, then the application rolling update and a
-post-install/post-upgrade retirement Job running `--schema deploy`. There is no
-pre-install Installer Job. The migrator runtime Secret supplies both Worker DDL
-credentials and the Installer DSN; the app Request Secret contains no privileged
-credentials. Request pods start normally; schema Jobs/workers use the schema flags.
+separate ordered releases: database first, then a pre-install/pre-upgrade
+install Job running `--schema install` with the Installer credentials, then the
+migrator's `/worker.sh` running plain `--schema worker`, then the application
+rolling update and a post-install/post-upgrade retirement Job running
+`--schema deploy`. Only the two finite Jobs receive the Installer DSN; the Worker
+runtime Secret holds only Worker DDL credentials and the app Request Secret
+contains no privileged credentials. Request pods start normally; schema Jobs/workers use the schema flags.
 
 The example continuously checks database-backed HTTP reads/writes and queue
 submission, records Ready-pod overlap, and verifies retained rows and final job

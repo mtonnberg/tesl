@@ -72,7 +72,7 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -130,7 +130,7 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
           let _,checked = List.find (fun ((m:H.migration_source),_) -> m.path=migration.path) checked_edges in
           let _,recorded_target = Header.seals checked in
           S.inherit_queue_inventory ~from:recorded_target frozen_seal in
-      let current_seal = seal (S.create ~project_root:root current.inventory) in
+      let current_seal = seal (S.create ~project_root:root (H.inventory current)) in
       let rewrites = match existing,old_target with
         | Some migration,Some previous ->
           let source = List.assoc migration.path rewrites in
@@ -141,8 +141,8 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
         | _ -> assert false in
       let header = sparse (Header.create ~previous:frozen_seal ~current:current_seal) in
       let next_file = module_path root (family ^ ".Migrate.V" ^ string_of_int next) in
-      let next_source = mark_next next_file (Header.encode header ^ next_body family next before current.inventory)
-        ~previous:(I.root_module before) ~current:(I.root_module current.inventory) in
+      let next_source = mark_next next_file (Header.encode header ^ next_body family next before (H.inventory current))
+        ~previous:(I.root_module before) ~current:(I.root_module (H.inventory current)) in
       frozen @ rewrites @ [next_file,next_source],List.map fst (I.source_inputs before)) in
     (* Retarget every helper first, then seal the exact completed closure. The
        root hashes its schema header too, excluding only its own closure block. *)
@@ -152,8 +152,22 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
         let source = List.assoc migration.path writes in
         let closure = sparse (Migration_closure.capture ~project_root:root
           ~root_file:migration.path ~source) in
-        let source = sparse (Migration_closure.attach ~file:migration.path ~source closure) in
-        (migration.path,source) :: List.remove_assoc migration.path writes) in
+        let attached = sparse (Migration_closure.attach ~file:migration.path ~source closure) in
+        let others = List.remove_assoc migration.path writes in
+        (* The freshly completed revision's checkpoint: the carried history
+           state through V<n>, derived from exactly these proposed sources. Its
+           digest joins the frozen-source block, outside the root digest. *)
+        let checkpoint = overlay root ((migration.path,attached) :: others) (fun () ->
+          Migration_checkpoint.derive ?stored_value_compatibility ?namespace ~compiler_abi ~project_root:root ~family ~through:n
+            ~check_contract:(fun ~plan ~namespace ~file ~source ->
+              Result.map (fun c -> Migration_contract.record c,Migration_contract.view c)
+                (Migration_contract.check ~plan ~namespace ~file ~source)) ()) in
+        match checkpoint with
+        | None -> (migration.path,attached) :: others
+        | Some text ->
+          let sealed = Migration_closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
+          let source = sparse (Migration_closure.attach ~file:migration.path ~source sealed) in
+          (migration.path,source) :: (Migration_closure.checkpoint_file migration.path,text) :: others) in
     let original_reads = List.map fst (H.source_inputs h) in
     let reads = original_reads @ frozen_inputs in
     let imports = List.concat_map (fun file ->
@@ -164,7 +178,7 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
       ~directories:[Filename.dirname current.root_file;Filename.dirname (module_path root (family ^ ".Migrate.V1"))]
       ~imports ~documents ~writes) in
     overlay root (M.overlays source_manifest) (fun () ->
-      List.iter (fun (file,source) -> check file source) writes;
+      List.iter (fun (file,source) -> if Filename.check_suffix file ".tesl" then check file source) writes;
       ignore (history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family)));
     history (H.verify_unchanged h);
     manifest (M.verify_source source_manifest ~documents);
@@ -175,6 +189,7 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
+let start_with_compatibility = start_with_namespace ~namespace:None
 let start = start_with_compatibility ~stored_value_compatibility:None
 
 module Syntax = Migration_source_syntax
@@ -424,14 +439,14 @@ let retype_columns previous current migration =
        | [old] -> Some (entity,field.name,old) | _ -> None)
     | _ -> None) rules.elems
   | _ -> []) entities in
- let members=I.stored_entities current.H.inventory in
+ let members=I.stored_entities (H.inventory current) in
  let resolve name=List.filter (fun (e:I.stored_entity) ->
-  let relative=relative (I.root_module current.inventory) e.entity_name in
+  let relative=relative (I.root_module (H.inventory current)) e.entity_name in
   List.mem name [relative;e.entity_name;List.hd (List.rev (String.split_on_char '.' relative))]) members in
  let requested=List.filter_map (fun (entity,field,old) -> match resolve entity with
   | [entity] -> Some ((entity.I.entity_name,field),old) | _ -> None) requested |> List.sort_uniq compare in
- let previous_shapes=I.field_shapes previous.H.inventory in
- I.source_inputs current.inventory |> List.filter_map (fun (file,_) ->
+ let previous_shapes=I.field_shapes (H.inventory previous) in
+ I.source_inputs (H.inventory current) |> List.filter_map (fun (file,_) ->
   let view=source_result file (Syntax.read ~file ~source:(Source_input.read file)) in
   let owner=Syntax.module_ view in
   let edits=List.concat_map (function Ast.DEntity e -> List.filter_map (fun (f:Ast.field_def) ->
@@ -441,7 +456,7 @@ let retype_columns previous current migration =
     | Some old ->
       let name=Validation_common.sql_column_name f.name ^ "__v" ^ string_of_int current.version in
       let inherited=List.exists (fun shape ->
-        relative (I.root_module previous.inventory) shape.I.stored_field.entity = relative (I.root_module current.inventory) entity &&
+        relative (I.root_module (H.inventory previous)) shape.I.stored_field.entity = relative (I.root_module (H.inventory current)) entity &&
         shape.stored_field.name=old && shape.db_column=f.db_column) previous_shapes in
       (match f.db_column with
        | None ->
@@ -624,7 +639,7 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
     let _,initial = syntax migration.path migration.contents in
     let previous = match List.find_opt (fun (s : H.schema) -> s.version = version-1) (H.frozen h) with
       | Some previous -> previous | None -> reject migration.path "refresh requires an adjacent frozen predecessor" in
-    if initial.previous_root <> I.root_module previous.inventory || initial.current_root <> I.root_module current.inventory then
+    if initial.previous_root <> I.root_module (H.inventory previous) || initial.current_root <> I.root_module (H.inventory current) then
       reject migration.path "MIG020: refresh requires the current edge's adjacent frozen/current schema references";
     List.iter (fun (edge : H.migration_source) ->
       let header = match sparse (Header.read ~file:edge.path edge.contents) with
@@ -648,18 +663,18 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
       let target_inventory=inventory (I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file) in
       let target_seal = seal (S.create ~project_root:root target_inventory) in
       let header = sparse (Header.create ~previous:previous_seal ~current:target_seal) in
-      let source = refresh_same migration.path migration.contents previous.inventory target_inventory in
-       let source = refresh_entities migration.path source previous.inventory target_inventory in
-       let source = refresh_jobs migration.path source previous.inventory target_inventory in
+      let source = refresh_same migration.path migration.contents (H.inventory previous) target_inventory in
+       let source = refresh_entities migration.path source (H.inventory previous) target_inventory in
+       let source = refresh_jobs migration.path source (H.inventory previous) target_inventory in
       let source=sparse (Header.replace ~file:migration.path ~source header) in
-      source,decision_guidance migration.path source previous.inventory target_inventory) in
+      source,decision_guidance migration.path source (H.inventory previous) target_inventory) in
     let initial_source,initial_decisions=refreshed initial_column_writes migration in
     let column_writes,extra_writes,source,decisions=match choice with
       | None->initial_column_writes,[],initial_source,initial_decisions
       | Some choice->
         let chosen,extra=overlay root initial_column_writes(fun()->
           let after=inventory(I.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:current.root_file)in
-          choose_entry migration.path initial_source previous.inventory after choice)in
+          choose_entry migration.path initial_source (H.inventory previous) after choice)in
         let chosen_migration={migration with H.contents=chosen}in
         let columns=retype_columns previous current chosen_migration in
         let source,decisions=overlay root extra(fun()->refreshed columns chosen_migration)in columns,extra,source,decisions in

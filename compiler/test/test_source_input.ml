@@ -364,7 +364,7 @@ let differential () = with_project (fun root path -> with_project (fun saved sav
   overlay root (List.map (fun (file,source) -> path file,source) inputs) (fun () ->
     let preview = history root in
     check bool "fully virtual project matches saved compiler judgment" true
-      (I.snapshot (H.current actual).inventory = I.snapshot (H.current preview).inventory);
+      (I.snapshot (H.inventory (H.current actual)) = I.snapshot (H.inventory (H.current preview)));
     check (list string) "identical input byte hashes" (List.map snd (H.source_inputs actual))
       (List.map snd (H.source_inputs preview)))) )
 

@@ -224,7 +224,17 @@ let tamper name edit () = with_history (fun _ path entry ->
 (* (c) A seal recorded by another compiler ABI (same stored-value contract) is
    re-checked under this compiler instead of trusted, and still compiles. *)
 let hex s = String.concat "" (List.init (String.length s) (fun i -> Printf.sprintf "%02x" (Char.code s.[i])))
+(* Revisions frozen by an older compiler carry no checkpoints (and a checkpoint
+   records the history it was derived from), so drop them first. *)
+let drop_checkpoints path =
+  List.iter (fun version ->
+    let file = path (Printf.sprintf "migrations/scale/v%d.tesl" version) in
+    let checkpoint = path (Printf.sprintf "migrations/scale/v%d.checkpoint" version) in
+    if Sys.file_exists checkpoint then Sys.remove checkpoint;
+    write file (Str.global_replace (Str.regexp "# tesl:frozen-checkpoint [0-9a-f]+\n") "" (read file))) [2;3]
+
 let other_abi_is_rechecked () = with_history (fun root path entry ->
+  drop_checkpoints path;
   let file = path "migrations/scale/v2.tesl" in
   let abi = Migration_abi.id (Result.get_ok (Migration_abi.current ())) in
   check bool "the generated seal records this compiler" true (contains (read file) (hex abi));

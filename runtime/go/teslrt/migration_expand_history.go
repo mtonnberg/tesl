@@ -91,8 +91,11 @@ func pgVerifyExpansionHistoryMode(state PgMigrationControlState, plan PgMigratio
 		// Unknown future steps still describe values this older binary may read.
 		// A completed operation's creator ABI remains provenance; resuming an
 		// unfinished operation always requires that exact executable ABI.
-		if !pgStoredValueCompatibility(r.StoredValueCompatibility) || r.StoredValueCompatibility != plan.StoredValueCompatibility {
+		if !pgStoredValueCompatibility(r.StoredValueCompatibility) {
 			return fmt.Errorf("persisted stored-value compatibility differs at V%d", v)
+		}
+		if r.StoredValueCompatibility != plan.StoredValueCompatibility {
+			return pgStoredValueIdentityMismatch(v, r.StoredValueCompatibility, plan.StoredValueCompatibility)
 		}
 		if executor && v > last && r.SourceABI != plan.SourceCompilerABI {
 			return fmt.Errorf("unfinished migration compiler ABI differs at V%d", v)
@@ -155,4 +158,19 @@ func pgExpansionRecordedCatalog(plan PgMigrationExpansionPlan, intents map[int]*
 		}
 	}
 	return pgMigrationCatalogCopy(tables), nil
+}
+
+// A database records the stored-value identity of the compiler semantics that
+// wrote it, for every version. A binary with another identity may decode,
+// compare or prove those stored values differently, and Tesl cannot yet
+// re-check stored rows under new semantics, so the binary refuses the
+// database. Re-sealing source history under a new compiler (`tesl migrate
+// reseal`) does not change this rule.
+func pgStoredValueIdentityMismatch(version int, recorded, binary string) error {
+	return fmt.Errorf("persisted stored-value compatibility differs at V%d: the database stores values under "+
+		"stored-value identity %s, but this binary was built with %s. Its compiler reads, writes or proves stored "+
+		"values differently, so this binary refuses the database before changing it. Deploy a binary built by a "+
+		"compiler with the recorded identity, or recreate a database whose rows can be discarded; stored rows "+
+		"cannot yet be revalidated in place (manual/migration-operations.md, \"Stored-value identity\")",
+		version, recorded, binary)
 }

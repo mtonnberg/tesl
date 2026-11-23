@@ -31,6 +31,9 @@ name: Playground
 on:
   push:
     branches: [main]
+  # Pull requests run the same build and every check, so a green PR cannot
+  # fail main's deploy on a playground check. Only main deploys.
+  pull_request:
   # Manual re-publish, e.g. after a Pages settings change.
   workflow_dispatch:
 
@@ -38,11 +41,12 @@ on:
 permissions:
   contents: none
 
-# Pages allows one deployment at a time. Do NOT cancel in progress: a cancelled
-# deploy can leave the site mid-swap, and the run is cheap enough to let finish.
+# Pages allows one deployment at a time. Do NOT cancel a main run: a cancelled
+# deploy can leave the site mid-swap. A superseded pull request run is only a
+# check and is cancelled.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('playground-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -124,8 +128,9 @@ jobs:
           #    The lower bound is only a guard against a catastrophically truncated build.
           test "$bytes" -gt 200000 \
             || { echo "::error::artifact implausibly small ($bytes bytes) — truncated build?"; exit 1; }
-          test "$bytes" -lt 2000000 \
-            || { echo "::error::artifact is $bytes bytes (>2 MB). Something now references Embedded_docs, or another large module was linked in. See playground/README.md."; exit 1; }
+          ceiling=$(cat playground/checker-bundle-ceiling)
+          test "$bytes" -lt "$ceiling" \
+            || { echo "::error::artifact is $bytes bytes (ceiling $ceiling, playground/checker-bundle-ceiling). Something now references Embedded_docs, or another large module was linked in. See playground/README.md."; exit 1; }
 
       - name: Check native and browser parity
         run: nix develop --command bash scripts/playground-parity.sh --dist playground/dist
@@ -141,12 +146,15 @@ jobs:
       # build.sh because it is a GitHub-specific file and build.sh must stay
       # host-agnostic.
       - name: Add .nojekyll
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: touch playground/dist/.nojekyll
 
       - name: Configure Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: playground/dist
@@ -154,6 +162,8 @@ jobs:
   deploy:
     name: Deploy to Pages
     needs: build
+    # Only main deploys; pull requests stop after the checks above.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

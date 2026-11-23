@@ -6000,8 +6000,11 @@ let parse_module filename source =
       | Err _ -> ()
       | Ok m ->
         let size = String.length (Marshal.to_string (key,m) []) in
-        if size <= 32 * 1024 * 1024 then begin
-          if Hashtbl.length cache.entries >= 256 || cache.weight + size > 32 * 1024 * 1024 then begin
+        (* A command over a long migration history parses every frozen
+           revision several times; an entry bound below the history's module
+           count would clear the cache on every pass. Weight alone bounds it. *)
+        if size <= 128 * 1024 * 1024 then begin
+          if Hashtbl.length cache.entries >= 8192 || cache.weight + size > 128 * 1024 * 1024 then begin
             Hashtbl.clear cache.entries; cache.weight <- 0
           end;
           Hashtbl.replace cache.entries key m; cache.weight <- cache.weight + size

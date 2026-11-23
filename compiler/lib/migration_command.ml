@@ -7,6 +7,7 @@ let usage = {|Usage: tesl migrate generate <entry.tesl> --manifest-json [--datab
        [--decision ID --option ID --expected-input-digest HASH]
        tesl migrate contract <entry.tesl> --version N --manifest-json [--database D]
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N] [--project-root DIR]
+       tesl migrate reseal <entry.tesl> --manifest-json [--database D] [--project-root DIR]
 
 Return a guarded source preview without writing files or connecting to a database.
 Generation refreshes an existing revision; --new-revision freezes the current one.
@@ -14,6 +15,9 @@ The JSON reports complete application diagnostics and whether the proposal compi
 Editor overlays require --project-root and one saved contents file per open document.
 Use the native tesl CLI for guarded source writes and interrupted-source recovery.
 plan reports PostgreSQL expansion and retained storage across the checked history.
+reseal re-checks the complete frozen history with this compiler (trust disabled) and,
+only if it checks, re-records the seals under this compiler: its ABI and, when it
+changed, its stored-value identity (headers, frozen-source blocks and checkpoints).
 --initial-version selects the first installed revision (default 1), not the current floor.
 Database execution uses the compiled application's --schema commands; see manual/migration-operations.
 |}
@@ -46,7 +50,7 @@ let path spelling =
    (* After rejecting symlinks, resolve native aliases such as Windows 8.3
       directory names so selection and history checks share one spelling. *)
    Source_input.canonical_path (walk absolute)
-type options = {entry:string;database:string option;new_revision:bool;root:string option;plan:bool;initial_version:int;contract_version:int option;
+type options = {entry:string;database:string option;new_revision:bool;root:string option;plan:bool;revalidate:bool;initial_version:int;contract_version:int option;
                 overlays:(string * int * string) list;choice:(string * string * string) option}
 let parse args =
   let entry = ref None and database = ref None and root = ref None and initial_version = ref None in
@@ -80,11 +84,15 @@ let parse args =
    | "generate" :: rest -> loop rest; false
    | "plan" :: rest -> loop rest; true
    | "contract" :: rest -> loop rest; false
+   | "reseal" :: rest -> loop rest; false
    | file :: _ when Filename.check_suffix file ".tesl" ->
      reject file "the interactive migration wizard (`tesl migrate app.tesl`) is part of the installed tesl command \
        (runtime/go/cmd/tesl, or `nix profile install github:mtonnberg/tesl`); this compiler binary only \
        previews edits: tesl migrate generate|contract|plan <entry.tesl> --manifest-json"
-   | _ -> reject "" "expected migration verb generate, contract or plan" in
+   | _ -> reject "" "expected migration verb generate, contract, plan or reseal" in
+  let revalidate=match args with "reseal"::_ -> true | _ -> false in
+  if revalidate && (!new_revision || !contract_version<>None || !decision<>None || !option_<>None || !expected_digest<>None || !overlays<>[]) then
+    reject "" "reseal accepts only <entry.tesl>, --manifest-json, --database and --project-root";
   let contract=match args with "contract"::_ -> true | _ -> false in
   let choice=match !decision,!option_,!expected_digest with
     | None,None,None->None
@@ -110,7 +118,7 @@ let parse args =
   if not plan && not !json then reject "" "this compiler endpoint returns previews; use the native tesl CLI for source writes, or --manifest-json for a non-mutating preview";
   if !overlays<>[] && !root=None then reject "" "editor overlays require an explicit --project-root";
   let entry = match !entry with Some file -> file | None -> reject "" "an explicit application entry file is required" in
-  {entry;database = !database;new_revision = !new_revision;root = !root;plan;initial_version;contract_version;overlays=List.rev !overlays;choice}
+  {entry;database = !database;new_revision = !new_revision;root = !root;plan;revalidate;initial_version;contract_version;overlays=List.rev !overlays;choice}
 let generate opts =
   let root = Option.map path opts.root in
   let overlays = List.map (fun (file,version,contents) ->
@@ -132,6 +140,8 @@ let generate opts =
       match Migration_plan.generate ~project_root ~entry_file ~database:opts.database ~initial_version:opts.initial_version ~documents with
        | Ok p -> Migration_plan.to_json p
        | Error errors -> raise (Plan_invalid errors)
+     else if opts.revalidate then
+       P.to_json (preview (P.generate_reseal ~project_root ~entry_file ~database:opts.database ~documents))
      else match opts.contract_version with
      | Some version -> P.to_json(preview(P.generate_contract ~project_root ~entry_file ~database:opts.database ~version ~documents))
      | None -> P.to_json (preview (match opts.choice with
@@ -144,7 +154,7 @@ let generate opts =
       (List.map (fun (file,_,source) -> file,source) overlays) run
   | None -> run ()
 let run args =
-  if args=["--help"] || args=["-h"] || args=["generate";"--help"] || args=["plan";"--help"] || args=["contract";"--help"] then
+  if args=["--help"] || args=["-h"] || args=["generate";"--help"] || args=["plan";"--help"] || args=["contract";"--help"] || args=["reseal";"--help"] then
     {stdout=usage;stderr="";exit_code=0}
   else
     let result = try Ok (generate (parse args)) with

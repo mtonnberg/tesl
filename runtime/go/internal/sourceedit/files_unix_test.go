@@ -41,7 +41,7 @@ func TestCompilerManifestSavedGuards(t *testing.T) {
 			return func() { _ = os.WriteFile(app, original, 0600) }
 		}},
 		{"new output already exists", func() func() {
-			path := m.wire.Edits[0].Path
+			path := m.wire.Edits[firstSourceEdit(t, m)].Path
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
 			}

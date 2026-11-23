@@ -103,17 +103,22 @@ from retrieving startup credentials. PostgreSQL still checks the Worker login's
 permissions on its connection.
 
 For the [Kubernetes rolling example](../example/kubernetes-rolling/README.md),
-the order is database → migrator Worker ready → application rolling update →
-retirement Job. `/worker.sh` runs `--schema worker --install`; there is no separate
-pre-install Job. The migrator runtime Secret contains Worker DDL credentials and
-the Installer DSN, while the app Request Secret contains no privileged credentials.
-The remaining app post-install/post-upgrade hook runs finite `--schema deploy`:
-it catches up and completes the reviewed target Contract after old applications
-and their claims drain. Running that retirement command before rolling old pods
-can wait for pods that the deployment controller has not yet replaced.
+the order is database → install Job → migrator Worker ready → application
+rolling update → retirement Job. A Helm pre-install/pre-upgrade hook Job holds
+the Installer credentials, runs `app --schema install --worker demo_worker
+--request demo_request` and exits; Helm then creates or updates the Worker
+Deployment, whose `/worker.sh` runs plain `--schema worker`. The Worker runtime
+Secret contains only Worker DDL credentials and no Installer DSN, and the app
+Request Secret contains no privileged credentials. This keeps the Installer
+credential out of every long-running pod, at the cost of one more Job per
+release. The remaining app post-install/post-upgrade hook runs finite
+`--schema deploy`: it catches up and completes the reviewed target Contract
+after old applications and their claims drain. Running that retirement command
+before rolling old pods can wait for pods that the deployment controller has
+not yet replaced.
 
-The combined startup has a recorded local Kubernetes run: 731 successful samples,
-no failed samples, both application-version overlaps and 121 correct final job
+This ordering has a recorded local Kubernetes run: 805 successful samples, no
+failed samples, both application-version overlaps and 133 correct final job
 receipts. See the [example's evidence and limits](../example/kubernetes-rolling/README.md#files-and-evidence).
 This verifies those compatible adjacent changes in the sampled local workload;
 it is not a production availability guarantee for arbitrary migrations.
@@ -353,6 +358,65 @@ at most 150 ms per attempt: new requests of that version wait behind it for at
 most that long while the in-flight ones finish. A transaction that stays open
 longer (an idle-in-transaction session, a long report) keeps the Worker waiting
 until it ends or the operation's deadline expires.
+
+## Instance heartbeats and retention
+
+Every application process and schema Worker registers one row in
+`<schema>.tesl_schema_instances` through the protected `tesl_heartbeat`
+function, under a fresh random instance id, and renews it every few seconds.
+Close-epoch, queue retirement, catch-up and `--schema deploy` only count rows
+renewed within the last 30 seconds as live.
+
+When a process registers a new instance id, `tesl_heartbeat` also deletes up to
+100 rows that have not been renewed for seven days. Renewals delete nothing, so
+a heartbeat stays one upsert. Rows that another registration is deleting at the
+same moment are skipped (`FOR UPDATE SKIP LOCKED`), so concurrent process starts
+neither wait for nor deadlock with each other. Each new process removes up to 100
+stale rows while adding one, so the table holds roughly the processes seen in
+the last seven days. `--schema status` lists the rows that remain; a process
+that stopped more than seven days ago may no longer appear there.
+
+This pruning changed the body of the protected `tesl_heartbeat` function. The
+runtime compares every installed protected function with the exact definition
+it expects, so a database installed by an earlier pre-release binary refuses
+this binary with `protected migration function <schema>.tesl_heartbeat differs
+from its definition, owner or execution grants` until it is reinstalled. There
+is no in-place upgrade for this change; recreate pre-release databases.
+
+## Stored-value identity
+
+Every migration version recorded in the database (`tesl_schema_versions`,
+`tesl_schema_expansions` and the row and queue control tables) stores the
+stored-value identity of the binary that wrote it, for example
+`tesl-stored-value-v1:9b2653…`. Two binaries with the same identity read, write and
+prove stored values the same way. Each binary compares its own identity with every
+recorded version before it changes anything; when they differ it refuses to start
+or migrate, naming both identities:
+
+```
+persisted stored-value compatibility differs at V2: the database stores values
+under stored-value identity tesl-stored-value-v1:9b26…, but this binary was built
+with tesl-stored-value-v1:cfa2…
+```
+
+The identity changes only when the stdlib's declarations or a builtin family's
+reviewed behaviour revision change (see
+[Re-sealing after a compiler upgrade](migration-guide.md#re-sealing-after-a-compiler-upgrade)).
+A compiler upgrade that only changes the compiler build keeps it, and so does
+`tesl migrate reseal` after such an upgrade.
+
+When the identity did change, `tesl migrate reseal` lets the new compiler build
+the application, but the database still holds rows written under the old
+semantics, and Tesl cannot yet re-check stored rows under new semantics. The
+supported options are:
+
+| Database | What to do |
+|---|---|
+| Rows must be kept (production) | keep deploying binaries built by a compiler with the recorded identity |
+| Rows can be discarded (development, CI, preview) | drop and reinstall the database with the new binary |
+
+The refusal happens before any write, so a wrongly deployed binary leaves the
+database unchanged.
 
 ## Backups and restores
 

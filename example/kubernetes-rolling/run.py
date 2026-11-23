@@ -69,6 +69,8 @@ def main():
     for tool in ("docker", "kind", "kubectl", "tofu", "helm", "go"):
         if not shutil.which(tool):
             parser.error(f"{tool} is required; enter nix develop .#kubernetes")
+    # Credential scopes and hook order are checked before any cluster exists.
+    run([sys.executable, DEMO / "test_chart.py"], timeout=120)
     if args.cluster in run(["kind", "get", "clusters"]).splitlines():
         parser.error("the named cluster already exists; choose a new name or remove your old demo explicitly")
     with socket.socket() as available:
@@ -161,7 +163,7 @@ from demo.tesl_schema_state s;
             values = {"kubeconfig_path": str(kubeconfig), "namespace": namespace, "app_image": image,
                       "revision": version, "schema_version": version, "host_port": args.port}
             (output / "infra/demo.auto.tfvars.json").write_text(json.dumps(values, indent=2) + "\n")
-            print(f"Applying V{version}: worker --install -> ready -> rolling app -> retirement", flush=True)
+            print(f"Applying V{version}: install Job -> worker ready -> rolling app -> retirement", flush=True)
             run(["tofu", f"-chdir={output / 'infra'}", "apply", "-input=false", "-auto-approve"], env=env, timeout=1200, log=output / f"apply-v{version}.log")
             assert request(url, "/health")["release"] == version
             inspect(version)

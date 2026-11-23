@@ -578,3 +578,120 @@ func TestPgMigrationControlObjectProgressIsAnAtomicPrefix(t *testing.T) {
 	f.call(t, mark, 1, second)
 	f.call(t, "select notes_app.tesl_record_expanded(1)")
 }
+
+// A process start registers a fresh instance id and removes a bounded batch of
+// rows unseen for seven days. Rows inside the 30-second liveness window, and
+// recently dead rows, are never touched, and a renewal prunes nothing.
+func TestPgMigrationControlHeartbeatPrunesStaleInstances(t *testing.T) {
+	f := pgNewControlTest(t)
+	f.install(t, 1)
+	f.expand(t, 1)
+	ns := quoteIdentifier(f.namespace) + "."
+	// The row-control format installs this pruning; apply the same rewrite to
+	// this catalog's heartbeat so the shipped SQL fragment is what runs.
+	pgInstallPruningHeartbeat(t, f)
+	seed := func(prefix string, count int, age string) {
+		t.Helper()
+		if _, err := f.installer.Exec(f.ctx, "insert into "+ns+"tesl_schema_instances(instance,version,protocol_level,last_seen,compat_floor_seen) "+
+			"select $1||n,1,1,pg_catalog.clock_timestamp()-$2::interval,1 from pg_catalog.generate_series(1,$3::integer) n", prefix, age, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("tesl-app:stale-", 150, "8 days")
+	seed("tesl-app:boundary-", 3, "6 days 23 hours")
+	seed("tesl-app:dead-", 2, "1 hour")
+	seed("tesl-app:live-", 2, "1 second")
+	count := func(pattern string) int {
+		t.Helper()
+		var n int
+		if err := f.installer.QueryRow(f.ctx, "select count(*) from "+ns+"tesl_schema_instances where instance like $1", pattern).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	liveness := func() string {
+		t.Helper()
+		var live string
+		if err := f.installer.QueryRow(f.ctx, "select coalesce(string_agg(instance||':'||version||':'||compat_floor_seen,',' order by instance),'') from "+ns+
+			"tesl_schema_instances where version>=1 and version<2 and last_seen>pg_catalog.clock_timestamp()-interval '30 seconds' and instance not like 'tesl-app:new-%'").Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		return live
+	}
+	before := liveness()
+	if before != "tesl-app:live-1:1:1,tesl-app:live-2:1:1" {
+		t.Fatalf("seeded liveness view: %q", before)
+	}
+	heartbeat := func(instance string) {
+		t.Helper()
+		f.call(t, "select pg_catalog.set_config('application_name',$1,false)", instance)
+		f.call(t, "select "+ns+"tesl_heartbeat(1,1,1)")
+	}
+	heartbeat("tesl-app:new-1")
+	if stale := count("tesl-app:stale-%"); stale != 50 {
+		t.Fatalf("first registration pruned %d stale rows, want a batch of 100", 150-stale)
+	}
+	heartbeat("tesl-app:new-1")
+	if stale := count("tesl-app:stale-%"); stale != 50 {
+		t.Fatalf("renewal pruned stale rows: %d remain", stale)
+	}
+	heartbeat("tesl-app:new-2")
+	if stale := count("tesl-app:stale-%"); stale != 0 {
+		t.Fatalf("second registration left %d stale rows", stale)
+	}
+	if count("tesl-app:boundary-%") != 3 || count("tesl-app:dead-%") != 2 || count("tesl-app:live-%") != 2 || count("tesl-app:new-%") != 2 {
+		t.Fatal("pruning removed a row seen within the retention period")
+	}
+	if after := liveness(); after != before {
+		t.Fatalf("pruning changed the liveness view: %q, want %q", after, before)
+	}
+	pgInstallHeartbeat(t, f, false) // restore this catalog's exact definition
+	status, err := InspectPgMigrationControl(f.ctx, f.worker, f.namespace, f.roles)
+	if err != nil || status.Current != 1 || status.MinVersion != 1 || status.CompatFloor != 1 {
+		t.Fatalf("pruning changed control state: %+v, %v", status, err)
+	}
+}
+
+func pgInstallPruningHeartbeat(t *testing.T, f *pgControlTestFixture) { pgInstallHeartbeat(t, f, true) }
+
+func pgInstallHeartbeat(t *testing.T, f *pgControlTestFixture, prune bool) {
+	t.Helper()
+	for _, fn := range pgMigrationControlFunctions(f.namespace) {
+		if fn.name != "tesl_heartbeat" {
+			continue
+		}
+		body := fn.body
+		if prune {
+			body = pgPruneInstancesOnRegistration(body, f.namespace)
+		}
+		sql := "create or replace function " + quoteIdentifier(f.namespace) + ".tesl_heartbeat(" + fn.arguments + ") returns " + fn.result +
+			" language plpgsql " + fn.volatility + " security definer set search_path = '' as $tesl$" + body + "$tesl$"
+		if _, err := f.installer.Exec(f.ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatal("control catalog has no tesl_heartbeat")
+}
+
+// Only the current row-control format prunes instance rows; legacy control
+// catalogs keep the exact definitions they were installed with.
+func TestHeartbeatPruningOnlyInRowControlFormat(t *testing.T) {
+	for _, fn := range pgMigrationControlFunctions("notes") {
+		if fn.name == "tesl_heartbeat" && strings.Contains(fn.body, "skip locked") {
+			t.Fatal("a legacy control catalog's heartbeat prunes")
+		}
+	}
+	found := false
+	for _, fn := range pgBuildRowControlFunctions("notes") {
+		if fn.name == "tesl_heartbeat" {
+			found = true
+			if !strings.Contains(fn.body, "interval '7 days' limit 100 for update skip locked") || !strings.Contains(fn.body, "registering := not exists") {
+				t.Fatal("the row-control heartbeat does not prune on registration")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("row-control catalog has no tesl_heartbeat")
+	}
+}

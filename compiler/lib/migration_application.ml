@@ -69,7 +69,7 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
         let current = H.current history in
         let modules = List.filter_map (fun path -> if path=F.canonical_import_path entry.source_file then Some entry else F.parse_module_file path) (Lazy.force explicit) in
         let queue_diags = D.diagnostics_of_errors (Migration_queue.application_bindings
-          ~modules ~database_module:m ~database:d current.inventory) in
+          ~modules ~database_module:m ~database:d (H.inventory current)) in
         let missing = if current.version > 1 && H.current_migration history = None then
           failure "MIG001" d.loc
             (Printf.sprintf "database `%s` requires its current %s.Migrate.V%d migration before the application can compile"
@@ -77,7 +77,7 @@ let make ?(skip_dep_body=fun _ -> false) (entry : module_form) =
           else [] in
         let edges = H.completed_migrations history @ Option.to_list (H.current_migration history) in
         let compiler = lazy (Migration_trust.current_compiler ()) in
-        let queue_history_diags = if Migration_inventory.queue_contracts current.inventory=[] then [] else
+        let queue_history_diags = if Migration_inventory.queue_contracts (H.inventory current)=[] then [] else
           List.concat_map (fun (edge:H.migration_source) ->
             match Header.read ~file:edge.path edge.contents with
             | Ok (Some header) ->

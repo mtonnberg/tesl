@@ -67,3 +67,17 @@ val projection_entity : projection -> entity
     description grants no finality, floor or DDL authority. A checked contract
     and verified durable lifecycle must authorize its selection. *)
 val settled_version : t -> version:int -> (version, Migration_sparse.error list) result
+
+(** The carried planning state after version [through], as a canonical node
+    for [Migration_row_history.prefix]. [None] when [through] is not planned.
+    The caller must check that the row history is in the carried subset
+    through that version ([Migration_row_history.prefix_state]). *)
+val prefix_state : t -> through:int -> Migration_canonical.node option
+(** Every version, including carried ones, whose window, retirement or
+    promotion needs a reviewed Contract. *)
+val cleanup_versions : t -> int list
+(** A planned version or, for a resumed plan, its boundary (entities only). *)
+val find_version : t -> int -> version option
+(** The plan continues a checkpointed prefix: [versions] holds only later
+    revisions. *)
+val resumed : t -> bool

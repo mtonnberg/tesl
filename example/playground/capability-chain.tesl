@@ -26,6 +26,4 @@ fn publishNote(id: String, body: String) -> Note
   saveNote id body
 
 # Reading a note needs only read access to Note.
-fn noteCount() -> Int
-  requires [dbRead Note] =
-  selectCount n from Note
+fn noteCount() -> Int requires [dbRead Note] = selectCount n from Note

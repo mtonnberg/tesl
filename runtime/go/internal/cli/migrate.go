@@ -21,6 +21,7 @@ const migrationUsage = `Usage: tesl migrate <entry.tesl> [--database D] [--resum
        tesl migrate recover-source --project-root DIR
        tesl migrate contract <entry.tesl> --version N [--database D] [--manifest-json]
        tesl migrate plan <entry.tesl> [--database D] [--initial-version N]
+       tesl migrate reseal <entry.tesl> [--database D] [--manifest-json]
 
 The guided flow prepares a new revision, waits for your saved schema changes,
 then refreshes migration sources and checks the application until it compiles.
@@ -36,6 +37,10 @@ Explicit generation choices use the inputDigest from the preview you reviewed.
 recover-source restores an interrupted source write, or finishes committed cleanup.
 plan reports PostgreSQL expansion and retained storage across checked source history.
 --initial-version selects the first installed revision (default 1), not the current floor.
+reseal is for a compiler whose stored-value semantics changed (MIG013 names the
+change): it re-checks the complete frozen history and, only if everything passes,
+re-records the stored-value identity in the seals. Databases that stored values under
+the old identity refuse binaries built afterwards; see manual/migration-operations.md.
 These commands do not connect to a database or migrate stored rows.
 `
 
@@ -52,7 +57,7 @@ func (out *compilerOutput) Write(data []byte) (int, error) {
 }
 func (app *App) migrate(ctx context.Context, args []string) error {
 	rest := args[1:]
-	if len(rest) == 0 || slices.Equal(rest, []string{"--help"}) || slices.Equal(rest, []string{"-h"}) || slices.Equal(rest, []string{"generate", "--help"}) || slices.Equal(rest, []string{"recover-source", "--help"}) {
+	if len(rest) == 0 || slices.Equal(rest, []string{"--help"}) || slices.Equal(rest, []string{"-h"}) || slices.Equal(rest, []string{"generate", "--help"}) || slices.Equal(rest, []string{"recover-source", "--help"}) || slices.Equal(rest, []string{"reseal", "--help"}) {
 		_, err := fmt.Fprint(app.Stdout, migrationUsage)
 		return err
 	}
@@ -77,7 +82,7 @@ func (app *App) migrate(ctx context.Context, args []string) error {
 	if strings.HasSuffix(rest[0], ".tesl") || rest[0] == "--" {
 		return app.migrationWizard(ctx, rest)
 	}
-	if (rest[0] != "generate" && rest[0] != "contract") || slices.Contains(rest, "--manifest-json") {
+	if (rest[0] != "generate" && rest[0] != "contract" && rest[0] != "reseal") || slices.Contains(rest, "--manifest-json") {
 		return app.compiler(ctx, args...)
 	}
 	if rest[0] == "generate" && slices.Contains(rest, "--new-revision") {

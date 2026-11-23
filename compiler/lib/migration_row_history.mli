@@ -49,3 +49,19 @@ val next_generation : int -> (int,Migration_sparse.error list) result
 
 (** Exact checked adjacent declarations, including additive default judgments. *)
 val declarations : t -> Migration_declaration.t list
+
+(** A checkpointed prefix: the per-entity generations at its last version and
+    the retained-storage state (owned and decoded by Migration_retained_storage). *)
+type prefix = { through : int; generations : (string * int) list; retained : Migration_canonical.node }
+(** The prefix a resumed history started from; [None] for a fold from V1. A
+    resumed history's [versions] starts at [through] (rebuilt from that
+    version's inventory) and its bindings and declarations are later only. *)
+val prefix : t -> prefix option
+(** The state after [through], when the history only uses features a prefix
+    carries (no table Drop, staged index, queue conversion or reverse write). *)
+val prefix_state : t -> through:int -> retained:Migration_canonical.node -> prefix option
+(** Continue a prefix with [schemas] = [V<through>; ...] and their edges.
+    [None] when the continuation leaves the carried subset or fails; callers
+    then fold from V1, which reports the ordinary diagnostics. *)
+val resume : prefix:prefix -> schemas:Migration_inventory.t list ->
+  edges:Migration_declaration.t list -> t option

@@ -4,9 +4,9 @@ type origin = {
   initial_version : int;
   steps : (Migration_expansion.step list, Migration_sparse.error list) result;
 }
-type queue_payload = {job:string;contract:string;contract_hash:string}
-type queue_contract = {queue:string;payloads:queue_payload list}
-type queue_version = {version:int;storage_snapshot_hash:string;schema_snapshot_hash:string;
+type queue_payload = Migration_records.queue_payload = {job:string;contract:string;contract_hash:string}
+type queue_contract = Migration_records.queue_contract = {queue:string;payloads:queue_payload list}
+type queue_version = Migration_records.queue_version = {version:int;storage_snapshot_hash:string;schema_snapshot_hash:string;
  source_seal_inventory:string;contracts:queue_contract list}
 type queue_binding = {application_queue:string;database_identity:string;family:string;queue_identity:string;
  current_version:int;jobs:(string * string * string) list}
@@ -23,6 +23,9 @@ val databases : t -> database list
 (** Exact source-authorized contracts, bound separately for each application database. *)
 val contracts : t -> (string * Migration_contract.t list) list
 val compiler_abi : t -> string
+val resumed : t -> bool
+(** Raises Invalid_argument for a [resumed] program. *)
+val unresumed : t -> unit
 val stored_value_compatibility : t -> string
 (** Capture application/history guards before invoking compilation. The supplied
     entry bytes and active overlays are authoritative. Actual stdlib resources
@@ -47,11 +50,22 @@ val queue_codec_records : t -> string list
 (** Internal source-only capture. Unlike [with_history], retains unsupported
     expansion errors, but cannot produce an executable expansion history. *)
 type source_history
-val with_source_history : entry:Ast.module_form -> source:string ->
+(** [resume] (default false) lets the capture continue the newest usable
+    revision checkpoint (Migration_checkpoint) instead of re-deriving every
+    completed revision. Such a capture's program is [resumed]: it holds only
+    the revisions after the checkpoint, and every artifact emitter refuses it. *)
+val with_source_history : ?resume:bool -> entry:Ast.module_form -> source:string ->
   (source_history option -> 'a) -> ('a,Migration_sparse.error list) result
 val source_program : source_history -> t
 val source_modules : source_history -> (Ast.module_form * string) list
 val row_histories : source_history -> (string * Migration_row_history.t) list
+(** Every per-revision record the capture's artifacts publish for one database
+    (Migration_records): checkpoint records for a resumed prefix followed by
+    records computed for the later revisions. *)
+val records : source_history -> string -> Migration_records.t
+(** The checkpointed revision a publishing capture of this database continued
+    from (its [row_histories] then hold only that revision and later ones). *)
+val resumed_through : source_history -> string -> int option
 
 (** Must run inside the capture callback. Revalidates complete source/ABI guards
     and exact ownership-preserving lowered graph, including private helpers. *)

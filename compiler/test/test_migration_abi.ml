@@ -39,19 +39,73 @@ let relocated () =
       check string "resource installation path is not semantics" (A.id original) (A.id relocated);
       check string "compatibility is independent of resource installation path"
         (A.stored_value_compatibility original) (A.stored_value_compatibility relocated)))
+(* A semantic edit: one more declaration in the module. *)
+let semantic_edit source = source ^ "\nfn storedValueProbe(x: Int) -> Int = x\n"
 let changed_source () = with_sources (fun root sources ->
   let before = get (A.current ()) in
   List.iter (fun (name,source) ->
     let file = Filename.concat root name in
     write file (source ^ "\n# source ABI regression\n");
     ignore (Compile.agent_context_result_source file (read file));
-    check bool "each lifted source contributes" false (A.id before=A.id (get (A.current ())));
-    check bool "every lifted source contributes to stored-value compatibility" false
-      (A.stored_value_compatibility before=A.stored_value_compatibility (get (A.current ())));
+    let commented = get (A.current ()) in
+    check bool "each lifted source contributes" false (A.id before=A.id commented);
+    check string "a comment-only edit keeps the stored-value identity"
+      (A.stored_value_compatibility before) (A.stored_value_compatibility commented);
+    check string "a comment-only edit keeps the fingerprint" (A.fingerprint before) (A.fingerprint commented);
     ignore (refuse (A.verify before));
+    write file (semantic_edit source);
+    ignore (Compile.agent_context_result_source file (read file));
+    let changed = get (A.current ()) in
+    check bool "every lifted source contributes to stored-value compatibility" false
+      (A.stored_value_compatibility before=A.stored_value_compatibility changed);
+    check bool "the new identity is derived from the new fingerprint" true
+      (A.stored_value_compatibility changed = A.derived_identity (A.fingerprint changed));
     write file source;
     ignore (Compile.agent_context_result_source file source);
     get (A.verify before)) sources)
+(* Formatting, blank lines, comments and test blocks are not semantics; the
+   spacing the parser reads (`f -3` versus `f - 3`) and every token are. *)
+let canonical_form () =
+  let canonical = A.canonical_stdlib ~name:"probe.tesl" in
+  let base = "module Tesl.Probe exposing [f]\nimport Tesl.Prelude exposing [Int]\nfn f(x: Int) -> Int =\n  x - 3\n" in
+  let same label variant = check string label (canonical base) (canonical variant) in
+  let differs label variant = check bool label false (canonical base = canonical variant) in
+  same "comments" ("# header\n" ^ base ^ "# trailing\n");
+  same "blank lines" (Str.global_replace (Str.regexp_string "\nfn") "\n\n\nfn" base);
+  same "horizontal spacing" (Str.global_replace (Str.regexp_string "x: Int") "x:   Int" base);
+  same "indentation width" (Str.global_replace (Str.regexp_string "  x - 3") "      x - 3" base);
+  same "a test block" (base ^ "test \"probe\" {\n  expect f 4 == 1\n}\n");
+  differs "an operand" (Str.global_replace (Str.regexp_string "x - 3") "x - 4" base);
+  differs "a negative literal" (Str.global_replace (Str.regexp_string "x - 3") "x -3" base);
+  differs "a declaration" (base ^ "fn g() -> Int = 1\n");
+  check bool "string contents are semantics" false
+    (canonical (base ^ "fn g() -> String = \"a\"\n") = canonical (base ^ "fn g() -> String = \"b\"\n"))
+(* The v1 identity recorded by every existing seal and database stays valid
+   while the fingerprint equals the baseline; no other known identity may name
+   a byte-derived identity. *)
+let baseline_identity () =
+  let t = get (A.current ()) in
+  (match A.known_identities with
+   | baseline :: rest ->
+     check string "pinned v1 baseline identity"
+       "tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30" baseline.identity;
+     List.iter (fun (k : A.known) -> check string "later identities are derived" (A.derived_identity k.known_fingerprint) k.identity) rest;
+     List.iter (fun (k : A.known) ->
+       check string "a known entry records its fingerprint's components"
+         (A.derive_fingerprint ~stdlib_semantics:k.stdlib ~revisions:k.builtins) k.known_fingerprint) A.known_identities;
+     if A.legacy_stored_value_compatibility t = baseline.identity then
+       check string "baseline stdlib bytes give the baseline fingerprint" baseline.known_fingerprint (A.fingerprint t)
+   | [] -> fail "missing v1 baseline");
+  match List.find_opt (fun (k : A.known) -> k.known_fingerprint = A.fingerprint t) A.known_identities with
+  | Some k -> check string "a known fingerprint uses its recorded identity" k.identity (A.stored_value_compatibility t)
+  | None -> fail (Printf.sprintf
+      "this compiler's stored-value fingerprint is not recorded. Its stdlib or builtin behaviour revisions changed, \
+       which changes the identity of every sealed project (they need `tesl migrate reseal`). If that is \
+       intended, add this entry to known_identities in compiler/lib/migration_abi.ml:\n\
+       {identity=%S;\n known_fingerprint=%S;\n stdlib=[%s];\n builtins=[%s]};"
+      (A.derived_identity (A.fingerprint t)) (A.fingerprint t)
+      (String.concat ";" (List.map (fun (n,d) -> Printf.sprintf "%S,%S" n d) (A.stdlib_semantics t)))
+      (String.concat ";" (List.map (fun (n,r) -> Printf.sprintf "%S,%d" n r) (Stored_value_revisions.revisions ()))))
 let guarded_hashes () = with_sources (fun _ _ ->
   let snapshot = get (A.current ()) in
   List.iter (fun (file,digest) -> check string file (Migration_hash.digest (read file)) digest) (A.source_inputs snapshot))
@@ -200,13 +254,19 @@ let check_reports_foreign_seal () = with_sources (fun root sources ->
   let either = Filename.concat root "either.tesl" in
   write either (List.assoc "either.tesl" sources ^ "\n# a comment-only stdlib edit\n");
   let ds = Compile.check_source app (read app) in
+  check bool "a comment-only stdlib edit keeps the seal valid" false (List.exists foreign ds);
+  write either (semantic_edit (List.assoc "either.tesl" sources));
+  let ds = Compile.check_source app (read app) in
   let mismatches = List.filter foreign ds in
   check bool "a diagnostic names the foreign seal" true (mismatches <> []);
   let message = (List.hd mismatches).message in
   check bool "repeats are the same diagnostic" true
     (List.for_all (fun (d : Compile.diagnostic) -> d.message = message) mismatches);
-  check bool "it explains the stored-value contract" true
-    (Str.string_match (Str.regexp ".*different stored-value compatibility") message 0))
+  let mentions text = Compile.string_contains message text in
+  check bool "it names the recorded identity" true
+    (mentions "tesl-stored-value-v1:9b265343069c361d3879d623b69de5081f934ec0f2f8826dc0efeda951384a30");
+  check bool "it names what changed" true (mentions "stdlib module either.tesl changed declarations");
+  check bool "it names the command" true (mentions "tesl migrate reseal"))
 let () = run "Compiler migration ABI" ["build and active sources",List.map (fun (name,f) -> test_case name `Quick f)
   ["stable actual identity",stable;"relocated stdlib resources",relocated;"each lifted source changes ABI",changed_source;
    "guarded input hashes",guarded_hashes;"additional source participates",extra_source;"missing required sources refuse",missing_sources;
@@ -217,4 +277,5 @@ let () = run "Compiler migration ABI" ["build and active sources",List.map (fun 
    "stale snapshot never starts",snapshot_stale;"callback exception restores resources",snapshot_exception;
    "resource snapshot preserves application view",project_view;"nested resource edits refuse",nested_edit_refuses;
    "resource resolution remains fixed",snapshot_resolution;"nested different ABI refuses",nested_abi_refuses;
-   "ordinary checking reports a seal from another stdlib",check_reports_foreign_seal]]
+   "ordinary checking reports a seal from another stdlib",check_reports_foreign_seal;
+   "canonical stdlib form ignores formatting",canonical_form;"v1 baseline identity",baseline_identity]]
