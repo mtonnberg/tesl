@@ -44,7 +44,7 @@ func lazyHistoryJSON(t testing.TB, v any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return pgTestCompactHistoryJSON(t, string(b))
 }
 
 func lazyHistoryForget(h PgCompiledMigrationHistory) {

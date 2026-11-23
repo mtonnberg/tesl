@@ -62,7 +62,30 @@ let c_implementations_agree () =
   check string "installed parts" (Migration_hash.compute_native "abcdef")
     (Migration_hash.digest_parts ["ab"; "cd"; "ef"])
 
-let () = run "migration-hash" ["SHA-256", [
+(* History documents publish contracts as references into a per-database
+   table of hash-consed canonical list nodes. *)
+let canonical_node_tables () =
+  let module C = Migration_canonical in
+  let module N = Migration_canonical_nodes in
+  let doc payload = Migration_row_history.hex (C.encode (C.document C.Snapshot payload)) in
+  let shared = C.Seq [C.Bytes "field"; C.Bytes "id"; C.Seq [C.Bytes "none"]] in
+  let first = doc (C.Seq [shared; C.Bytes "one"]) in
+  let second = doc (C.Seq [shared; C.Bytes "\xff\xfe"; C.Seq []]) in
+  let render contracts =
+    let table = N.create ~quote:Migration_row_companion.quote in
+    let references = List.map (N.reference table) contracts in
+    references, N.length table, N.to_json table in
+  let references, length, json = render [first; second; first] in
+  check (list string) "repeated contract shares its root" ["3";"6";"3"] references;
+  check int "shared subtrees are written once" 7 length;
+  check string "bottom-up table in first-use order; non-UTF-8 atoms are hexadecimal"
+    {|[["none"],["field","id",0],[1,"one"],["tesl-migration-canonical","1","snapshot",2],[],[1,{"hex":"fffe"},4],["tesl-migration-canonical","1","snapshot",5]]|} json;
+  let _, _, again = render [first; second; first] in
+  check string "rendering is deterministic" json again
+
+let () = run "migration-hash" ["canonical nodes", [
+  test_case "canonical node tables" `Quick canonical_node_tables;
+]; "SHA-256", [
   test_case "C implementations agree" `Quick c_implementations_agree;
   test_case "pieces hash like their concatenation" `Quick parts_equal_concatenation;
   test_case "portable and native implementations agree" `Quick portable_and_native_agree;

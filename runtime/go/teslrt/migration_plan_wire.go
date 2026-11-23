@@ -109,7 +109,11 @@ func pgMigrationJSONUnicode(payload string) error {
 
 // Readers retain the first error, so callers cannot accidentally accept a zero
 // value after a malformed or missing field. Even a nullable field must be present.
-type pgMigrationWireReader struct{ err error }
+type pgMigrationWireReader struct {
+	err error
+	// nodes is the canonical node table of the database object being read.
+	nodes *pgCanonicalNodes
+}
 
 func (r *pgMigrationWireReader) fail(message string) {
 	if r.err == nil {

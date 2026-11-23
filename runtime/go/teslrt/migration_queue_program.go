@@ -421,8 +421,13 @@ func pgQueueSourceProjectionDecode(history PgCompiledMigrationHistory) ([]pgQueu
 		return nil, err
 	}
 	r := &pgMigrationWireReader{}
-	root := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	// Source histories (v4/v5) also carry their contract encoding; their
+	// complete reader checks the exact envelope.
+	root := pgMigrationRead[map[string]json.RawMessage](r, json.RawMessage(history.HistoryJSON))
 	format := pgMigrationRead[int](r, root["version"])
+	if r.err == nil && format != 4 && format != 5 {
+		r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	}
 	if r.err != nil {
 		return nil, r.err
 	}

@@ -56,11 +56,12 @@ let base_json ~quote ~go_type source =
     Printf.sprintf {|{"migrationVersion":%d,"entity":%s,"fromSchemaSnapshot":%s,"toSchemaSnapshot":%s}|}
      r.version (quote r.previous.identity) (quote (schema_hash (schema (r.version-1))))
      (quote (schema_hash (schema r.version)))) (RH.retirements rows) in
-  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"origins":%s%s}|}
+  let nodes=Migration_canonical_nodes.create ~quote in
+  let versions=array (Migration_records.version_json ~quote ~contract:(Migration_canonical_nodes.reference nodes) ~go_type:(go_type d.identity)) (P.records source d.identity).versions in
+  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"origins":%s%s,"canonicalNodes":%s}|}
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version
-   (array (Migration_records.version_json ~quote ~go_type:(go_type d.identity)) (P.records source d.identity).versions)
-   (array origin d.origins) retirements in
- Printf.sprintf {|{"version":%d,"kind":"compiled-migration-source-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
+   versions (array origin d.origins) retirements (Migration_canonical_nodes.to_json nodes) in
+ Printf.sprintf {|{"version":%d,"kind":"compiled-migration-source-history","contractEncoding":"tesl-canonical-nodes-v1","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
   (if has_retirements then 5 else 4) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
 (* Current codecs describe checked stored rows after an earlier transformation.
    They are not migration callbacks and carry no Same/conversion authority. The
@@ -82,7 +83,7 @@ let rows_json ?projection ~quote source =
  let has_legacies=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).legacies<>[]) (RH.bindings h)) (P.row_histories source) in
  let has_writebacks=List.exists (fun (_,h) -> List.exists (fun b -> (RH.row b).writebacks<>[]) (RH.bindings h)) (P.row_histories source) in
  if (has_writebacks || has_legacies) && projection=None then invalid_arg "WriteBack artifacts require checked typed row storage adapters";
- let transform database history (x:Migration_records.transform) =
+ let transform nodes database history (x:Migration_records.transform) =
   let live=List.find_opt (fun b -> RH.migration_version b=x.migration_version &&
     (RH.current b).identity=x.current.identity) (RH.bindings history) in
   let row=Option.map RH.row live in
@@ -97,7 +98,7 @@ let rows_json ?projection ~quote source =
      Printf.sprintf {|{"previous":%s,"current":%s}|} (quote w.mapping.previous.name) (quote w.mapping.current.name)) writebacks in
   let ordered=ordered ^ if not (has_current || has_legacies) then "" else
     ",\"legacyWrites\":" ^ array (fun (w:Migration_transform.legacy_binding) -> quote w.mapping.previous.name) legacies in
-  Migration_records.transform_json ~quote ~extra:ordered x in
+  Migration_records.transform_json ~quote ~contract:(Migration_canonical_nodes.reference nodes) ~extra:ordered x in
  let database (d:P.database)=
   let history=List.assoc d.identity (P.row_histories source) in
   let current=if not has_current then "" else
@@ -107,8 +108,10 @@ let rows_json ?projection ~quote source =
      version.version (quote entity.identity) entity.generation (quote (schema_hash version))
      (quote (S.digest version.storage)) (quote (type_hash entity))
      (array quote (project d.identity version.version (Migration_records.entity entity)))) (current_codecs history) in
-  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"transforms":%s%s}|}
+  let nodes=Migration_canonical_nodes.create ~quote in
+  let transforms=array (transform nodes d.identity history) (P.records source d.identity).transforms in
+  Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"transforms":%s%s,"canonicalNodes":%s}|}
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version
-   (array (transform d.identity history) (P.records source d.identity).transforms) current in
- Printf.sprintf {|{"version":%d,"kind":"compiled-row-transform-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
+   transforms current (Migration_canonical_nodes.to_json nodes) in
+ Printf.sprintf {|{"version":%d,"kind":"compiled-row-transform-history","contractEncoding":"tesl-canonical-nodes-v1","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
   (if has_current then 5 else if has_legacies then 4 else if has_writebacks then 3 else if Option.is_some projection then 2 else 1) (quote (P.compiler_abi p)) (quote (P.stored_value_compatibility p)) (array database (P.databases p))
