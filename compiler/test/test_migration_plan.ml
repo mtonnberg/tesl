@@ -188,8 +188,8 @@ let retained_index () = with_project ~initial:(replace "label: String }" "label:
 let catalog_collision () = with_project ~initial:(replace "label: String }" "label: String\n index [label] as \"notes_pkey\"\n}" (append_field schema "label: String"))
  (fun root _ -> match plan root with
   | Ok _ -> fail "implicit primary index collision accepted"
-  | Error errors -> check bool "public physical emitter rejects the exact relation collision" true
-    (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+  | Error errors -> check bool "the plan rejects the exact relation collision" true
+    (List.exists (fun (e:Migration_sparse.error) -> e.code="MIG016" &&
       e.message="retained PostgreSQL relation name cannot be reused: notes_pkey") errors))
 let origin_index_collision () =
  let initial = replace "active: Bool }" "active: Bool\n index [active] as \"later\"\n}" (append_field schema "active: Bool") in
@@ -253,8 +253,8 @@ let app_failure () = with_project (fun root path ->
 let invalid_defaults () = with_project (fun root path ->
  let rejected field = match plan root with
   | Ok _ -> fail ("unsupported PostgreSQL default accepted: " ^ field)
-  | Error errors -> check bool ("public physical emitter validates default carrier: " ^ field) true
-    (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+  | Error errors -> check bool ("the plan validates the default carrier: " ^ field) true
+    (List.exists (fun (e:Migration_sparse.error) -> e.code="MIG016" &&
       e.message="Default does not fit the supported PostgreSQL carrier for " ^ field) errors) in
  generate root;edit_schema path (fun s -> append_field s "rank: Int, label: String");generate root;
  set_entities path 2 ("{ Note: Additive [Default rank 42, Default label \"" ^ String.make 1 '\000' ^ "\"] }");
@@ -267,8 +267,8 @@ let index_key_limit () =
  with_project ~initial:(replace "id: String }" ("id: String, " ^ fields ^ "\n index [" ^ String.concat ", " names ^ "]\n}") schema)
   (fun root _ -> match plan root with
    | Ok _ -> fail "33-column B-tree index accepted"
-   | Error errors -> check bool "public physical emitter rejects the exact B-tree limit" true
-     (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+   | Error errors -> check bool "the plan rejects the exact B-tree limit" true
+     (List.exists (fun (e:Migration_sparse.error) -> e.code="MIG016" &&
        e.message="retained B-tree index requires 1 to 32 columns") errors))
 let overlays () = with_project (fun root path ->
  let file = path "schema/notes/v-current.tesl" in
@@ -291,8 +291,8 @@ let earlier_default_validation () = with_project (fun root path ->
     A fresh V2 would not install it, but must still reject the unusable history. *)
  match plan ~initial_version:2 root with
  | Ok _ -> fail "late installation accepted unusable earlier default"
- | Error errors -> check bool "public physical emitter still validates earlier defaults" true
-   (List.exists (fun (e:Migration_sparse.error) -> e.code="V001" &&
+ | Error errors -> check bool "the plan still validates earlier defaults" true
+   (List.exists (fun (e:Migration_sparse.error) -> e.code="MIG016" &&
      e.message="Default does not fit the supported PostgreSQL carrier for label") errors))
 let expansion_chain_boundary () = with_project (fun root path ->
  generate root;edit_schema path (fun s -> append_field s "caption: Maybe String");generate root;
