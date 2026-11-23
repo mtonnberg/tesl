@@ -236,7 +236,11 @@ func TestPgMigrationStoredValueIdentityMismatchExplainsRefusal(t *testing.T) {
 	} {
 		state, plan, intents := pgCompatibilityTestState(t, 3)
 		plan.SourceCompilerABI = "tesl-source-abi-v1:" + strings.Repeat("b", 64)
-		intents[2].StoredValueCompatibility = recorded
+		intent := intents[2]
+		if intent == nil {
+			t.Fatal("test state has no V2 expansion intent")
+		}
+		intent.StoredValueCompatibility = recorded
 		err := verify(state, plan, intents)
 		if err == nil {
 			t.Fatal("a database written under another stored-value identity was accepted")

@@ -399,7 +399,7 @@ func validate(w wireManifest) error {
 		g, ok := files[e.Path]
 		// The compiler also writes each frozen revision's generated checkpoint
 		// beside its migration root; its digest is sealed in that root.
-		if !ok || !(strings.HasSuffix(e.Path, ".tesl") || strings.HasSuffix(e.Path, ".checkpoint")) {
+		if !ok || (!strings.HasSuffix(e.Path, ".tesl") && !strings.HasSuffix(e.Path, ".checkpoint")) {
 			return fmt.Errorf("edit needs a guarded Tesl source: %s", e.Path)
 		}
 		if e.Path <= previous {
