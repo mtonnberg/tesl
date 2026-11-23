@@ -345,18 +345,21 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         ([],seen) m.imports in
       with_lifted (captured @ List.rev additions) (rest @ List.rev additions) seen in
    with_lifted captured_modules captured_modules []) in
-   (* The first validation of a capture reads and hashes every guarded input
-      anew; later ones within the same command are intermediate (lstat
-      identity, Migration_manifest), and the command's publication compares
-      every memoized disk answer with disk (Compile.compile_go_source). *)
+   (* The pre-publication guard observes disk anew rather than the
+      compilation's shared disk answers, so an edit made after capture (an
+      application file or a compiler ABI source) is refused. The first
+      validation of a capture reads and hashes every guarded input; later ones
+      within the same command compare lstat identity (Migration_manifest), and
+      a Go emit is published only when every memoized disk answer still
+      matches disk (Compile.compile_go_source). *)
    let validated = ref false in
-   let validate () =
+   let validate () = Source_input.with_fresh_path_memo (fun () ->
     let quick = !validated in
     abi (A.verify context);
     List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate ~quick capture))) integrity;
     Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk ~quick source_guard)) guards);
     List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
-    validated := true in
+    validated := true) in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate;
      resumed= !resumed_any;records= !records;resumed_through= !resumed_through} in
    let result=f (Some value) in
