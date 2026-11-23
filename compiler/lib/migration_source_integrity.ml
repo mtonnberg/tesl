@@ -15,8 +15,10 @@ let protect f = try Ok(f()) with
    Error [{S.code="MIG013";loc=Location.dummy_loc "<source integrity>";message;related=[]}]
  | Unix.Unix_error(error,operation,path) ->
    Error [{S.code="MIG013";loc=Location.dummy_loc path;message=operation ^ ": " ^ Unix.error_message error;related=[]}]
-let revalidate t = protect(fun()->Source_input.without_pinned_files(fun()->
- ignore(guard(M.verify_source t.guard ~documents:[]));ignore(guard(M.verify_disk t.guard))))
+(* [quick]: an intermediate check within the command (see M.verify_disk); the
+   default full check is the one a publication relies on. *)
+let revalidate ?quick t = protect(fun()->Source_input.without_pinned_files(fun()->
+ ignore(guard(M.verify_source t.guard ~documents:[]));ignore(guard(M.verify_disk ?quick t.guard))))
 let capture ~project_root ~inputs = protect(fun()->
  let accumulator=ref(guard(M.start_combine (guard(M.create ~project_root ~reads:[] ~directories:[] ~imports:[] ~documents:[] ~writes:[])) ~documents:[])) in
  let seen=ref Paths.empty and directories=ref Paths.empty and files=Hashtbl.create 32 in
@@ -81,7 +83,7 @@ let capture ~project_root ~inputs = protect(fun()->
  {guard=manifest;files=Hashtbl.to_seq files |> List.of_seq |> List.sort compare;fresh=ref (not (Source_input.has_pinned_files ()));token=Source_input.view_token ()})
 let with_captured t f = protect(fun()->
  if !(t.fresh) then t.fresh := false
- else (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));
+ else (match revalidate ~quick:true t with Ok()->()|Error errors->raise(Invalid errors));
  let project_root=Option.value(Source_input.project_root()) ~default:(M.project_root t.guard) in
  (* The files were read in the capture's view; freezing them there observes
     exactly what that view does. *)
@@ -89,4 +91,4 @@ let with_captured t f = protect(fun()->
  let result=Source_input.with_overlays ~project_root t.files(fun()->Source_input.with_pinned_files t.files (fun () ->
    if equivalent then Source_input.with_equivalent_view t.token f else f ())) in
  (* Leave the owned snapshot before checking the caller's current source view. *)
- (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));result)
+ (match revalidate ~quick:true t with Ok()->()|Error errors->raise(Invalid errors));result)

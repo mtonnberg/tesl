@@ -31,7 +31,11 @@ val overlays : t -> (string * string) list
     dependencies. A new/closed document invalidates the captured document set.
     This check does not replace the separate disk precondition. *)
 val verify_source : t -> documents:document list -> (unit, error list) result
-val verify_disk : t -> (unit, error list) result
+(** [quick] (an intermediate check of one command) accepts files and directories
+    whose lstat identity is unchanged since a pass of this compilation read them,
+    and imports that pass resolved; the default full pass reads everything anew
+    and is what a command runs before it writes or reports success. *)
+val verify_disk : ?quick:bool -> t -> (unit, error list) result
 (** Read exact input bytes and compare each with its original source precondition.
     A build can pin these bytes while deriving output, then recheck source, disk,
     imports and directory guards after leaving the pinned scope. *)

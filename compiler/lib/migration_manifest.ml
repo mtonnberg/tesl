@@ -52,30 +52,88 @@ let validate_root root =
 let resolve ~disk source name =
   if disk then Validation_common.resolve_local_import_path_with ~exists:Sys.file_exists ~realpath:Unix.realpath source name
   else Validation_common.resolve_local_import_path source name
+
+(* Disk evidence of the passes already made within one compilation (Source_input
+   scope): for each file, the lstat identity under which its bytes had a digest;
+   each directory's listing under its lstat identity; each import resolution
+   found on disk. A quick pass (an intermediate check of a command) accepts a
+   file or directory whose lstat identity is unchanged and an import already
+   resolved to its expected path; a full pass (the default, and every final guard)
+   reads, hashes, lists and resolves everything anew. *)
+type identity = int * int * int * float * float * Unix.file_kind
+let identity (s : Unix.stats) : identity = s.st_dev,s.st_ino,s.st_size,s.st_mtime,s.st_ctime,s.st_kind
+let seen_files : (string, identity * string) Hashtbl.t = Hashtbl.create 64
+let seen_names : (string, identity * string list) Hashtbl.t = Hashtbl.create 16
+let seen_imports : (string * string, string) Hashtbl.t = Hashtbl.create 64
+let () = Source_input.on_scope_exit (fun () ->
+  Hashtbl.reset seen_files; Hashtbl.reset seen_names; Hashtbl.reset seen_imports)
+let remember table key value = if Source_input.in_scope () then Hashtbl.replace table key value
+
+(* One disk pass observes each path once: import resolution probes the same
+   ancestors for many imports. *)
+let disk_pass () =
+  let exists = Hashtbl.create 64 and real = Hashtbl.create 16 in
+  let memo table f path = match Hashtbl.find_opt table path with
+    | Some (Ok v) -> v | Some (Error e) -> raise e
+    | None -> let r = try Ok (f path) with e -> Error e in Hashtbl.replace table path r;
+      (match r with Ok v -> v | Error e -> raise e) in
+  fun source name -> Validation_common.resolve_local_import_path_with
+    ~exists:(memo exists Sys.file_exists) ~realpath:(memo real Unix.realpath) source name
+
 (* One verification pass resolves each directory's canonical spelling once
    (Source_input.with_path_memo); every file is still read and hashed. A disk
    pass resolves anew, so it observes a directory replaced during the command. *)
-let verify_files t disk = (if disk then Source_input.with_fresh_path_memo else Source_input.with_path_memo) @@ fun () ->
+let verify_files ?(quick=false) t disk = (if disk then Source_input.with_fresh_path_memo else Source_input.with_path_memo) @@ fun () ->
+  let quick = quick && disk && Source_input.in_scope () in
   validate_root t.root;
+  let resolve_disk = disk_pass () in
   List.iter (fun guard ->
     let expected = if disk then guard.disk_path else guard.source_path in
-    if resolve ~disk guard.source guard.name <> expected then
-      reject guard.source ("import resolution changed since preview: " ^ guard.name)) t.imports;
+    let key = guard.source,guard.name in
+    if not (quick && Hashtbl.find_opt seen_imports key = Some expected) then begin
+      let resolved = if disk then resolve_disk guard.source guard.name else resolve ~disk guard.source guard.name in
+      if resolved <> expected then
+        reject guard.source ("import resolution changed since preview: " ^ guard.name);
+      if disk then remember seen_imports key resolved
+    end) t.imports;
+  let observed path = match Unix.lstat path with
+    | stats -> Some (identity stats) | exception Unix.Unix_error _ -> None in
   List.iter (fun guard ->
     canonical t.root guard.file;
     let expected = if disk then guard.disk_digest else guard.source_digest in
-    if Option.map hash (file_bytes ~disk guard.file) <> expected then
-      reject guard.file (if disk then "saved source changed since preview" else "source view changed since preview")) t.files;
+    let before = if disk then observed guard.file else None in
+    let unchanged = quick && (match before, expected, Hashtbl.find_opt seen_files guard.file with
+      | Some now, Some digest, Some (recorded, recorded_digest) -> now = recorded && digest = recorded_digest
+      | _ -> false) in
+    if not unchanged then begin
+      let actual = Option.map hash (file_bytes ~disk guard.file) in
+      if actual <> expected then
+        reject guard.file (if disk then "saved source changed since preview" else "source view changed since preview");
+      (* Recorded only when the file kept one identity around its read. *)
+      match before, actual with
+      | Some id, Some digest when disk && observed guard.file = before -> remember seen_files guard.file (id,digest)
+      | _ -> ()
+    end) t.files;
   List.iter (fun guard ->
     canonical t.root guard.directory;
     let expected = if disk then guard.disk_names else guard.source_names in
-    if names ~disk guard.directory <> expected then
-      reject guard.directory (if disk then "saved directory membership changed since preview" else "source directory membership changed since preview")) t.directories
+    let before = if disk then observed guard.directory else None in
+    let unchanged = quick && (match before, expected, Hashtbl.find_opt seen_names guard.directory with
+      | Some now, Some names, Some (recorded, recorded_names) -> now = recorded && names = recorded_names
+      | _ -> false) in
+    if not unchanged then begin
+      let actual = names ~disk guard.directory in
+      if actual <> expected then
+        reject guard.directory (if disk then "saved directory membership changed since preview" else "source directory membership changed since preview");
+      match before, actual with
+      | Some id, Some names when disk && observed guard.directory = before -> remember seen_names guard.directory (id,names)
+      | _ -> ()
+    end) t.directories
 let verify_source t ~documents = protect (fun () ->
   let documents = normalized_documents t.root documents in
   if documents <> t.documents then reject t.root "open document set or version changed since preview";
   verify_files t false)
-let verify_disk t = protect (fun () -> verify_files t true)
+let verify_disk ?quick t = protect (fun () -> verify_files ?quick t true)
 let source_files t = protect (fun () ->
   List.filter_map (fun guard ->
     canonical t.root guard.file;
@@ -99,11 +157,12 @@ let create_with ~observed ~project_root:root ~reads ~directories ~imports ~docum
   let file_bytes ~disk path = memo (fun o -> o.observed_files) (fun (disk,path) -> file_bytes ~disk path) (disk,path) in
   let names ~disk path = memo (fun o -> o.observed_names) (fun (disk,path) -> names ~disk path) (disk,path) in
   validate_root root;
+  let resolve_disk = disk_pass () in
   let documents = normalized_documents root documents in
   let imports = List.sort_uniq compare imports |> List.map (fun (source,name) ->
     canonical root source;
     if not (String.is_valid_utf_8 name) then reject source "import names must be valid UTF-8";
-    {source;name;source_path=resolve ~disk:false source name;disk_path=resolve ~disk:true source name}) in
+    {source;name;source_path=resolve ~disk:false source name;disk_path=resolve_disk source name}) in
   let writes = List.fold_left (fun map (path,source) ->
     canonical root path;
     (* Generated revision checkpoints are written beside their migration root. *)

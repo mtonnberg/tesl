@@ -1132,7 +1132,8 @@ let resolve_local_import_path_with ~exists ~realpath source_file module_name =
         search (try realpath dir with _ -> dir)
 
 let resolve_local_import_path source_file module_name =
-  resolve_local_import_path_with ~exists:Source_input.exists ~realpath:Source_input.realpath source_file module_name
+  Source_input.memo_in_view (source_file ^ "\000" ^ module_name) (fun () ->
+    resolve_local_import_path_with ~exists:Source_input.exists ~realpath:Source_input.realpath source_file module_name)
 
 let import_parse_cache : (string, string * module_form Parser.result) Hashtbl.t =
   Hashtbl.create 32

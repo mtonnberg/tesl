@@ -71,3 +71,11 @@ val with_scope_path_memo : (unit -> 'a) -> 'a
     guard) and, on a change, calls [reset_disk_memo] and computes again. *)
 val disk_changed : unit -> bool
 val reset_disk_memo : unit -> unit
+(** Whether a [with_scope_path_memo] scope is active, and a reset to run when
+    the outermost one ends (for per-compilation tables kept elsewhere). *)
+val in_scope : unit -> bool
+(** [memo_in_view key compute]: within a compilation scope (outside fresh or
+    bounded path memos), [compute] runs once per source view and key; it must
+    depend only on observations made through this module. *)
+val memo_in_view : string -> (unit -> string) -> string
+val on_scope_exit : (unit -> unit) -> unit

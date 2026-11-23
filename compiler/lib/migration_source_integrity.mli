@@ -4,7 +4,7 @@
 type t
 val capture : project_root:string -> inputs:(string * string) list ->
   (t,Migration_sparse.error list) result
-val revalidate : t -> (unit,Migration_sparse.error list) result
+val revalidate : ?quick:bool -> t -> (unit,Migration_sparse.error list) result
 (** Pins the captured files, preserves discovered directory membership through the
     source overlay, and verifies the caller's source/disk view again on return. *)
 val with_captured : t -> (unit -> 'a) -> ('a,Migration_sparse.error list) result

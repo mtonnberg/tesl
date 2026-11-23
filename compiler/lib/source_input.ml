@@ -86,6 +86,8 @@ let with_fresh_path_memo f =
   incr fresh_depth;
   Fun.protect ~finally:(fun () -> decr fresh_depth; path_memo := previous) f
 let scope_resets : (unit -> unit) list ref = ref [reset_disk_memo]
+let in_scope () = !scope_memo_active
+let on_scope_exit reset = scope_resets := reset :: !scope_resets
 let with_scope_path_memo f =
   if !scope_memo_active then f () else begin
     scope_memo_active := true;
@@ -369,6 +371,32 @@ let () =
       scope_tables := (token, table) :: List.filteri (fun i _ -> i < 7) !scope_tables;
       table)
 let same_view token = same_raw (canonical_token token) (view_token ())
+(* Answers derived only from observations of one source view (for example an
+   import's resolved path), memoized per view for the compilation scope while
+   disk answers are memoized; outside that, always computed. A memoized answer
+   replays its observations to every judgment recording them (see [recording]). *)
+let view_memos : (view_token * (string, string * observation list) Hashtbl.t) list ref = ref []
+let () = scope_resets := (fun () -> view_memos := []) :: !scope_resets
+let memo_in_view key compute =
+  if not (disk_memo_active ()) || !path_memo <> None then compute () else
+  let token = view_token () in
+  let table = match List.find_opt (fun (t, _) -> same_raw t token) !view_memos with
+    | Some (_, table) -> table
+    | None ->
+      let table = Hashtbl.create 256 in
+      view_memos := (token, table) :: List.filteri (fun i _ -> i < 15) !view_memos;
+      table in
+  match Hashtbl.find_opt table key with
+  | Some (answer, observations) ->
+    (* A judgment recording its observations sees the ones this answer made. *)
+    List.iter (fun recorder -> recorder := List.rev_append observations !recorder) !recorders;
+    answer
+  | None ->
+    let recorder = ref [] in
+    recorders := recorder :: !recorders;
+    let answer = Fun.protect ~finally:(fun () -> recorders := List.filter (fun r -> r != recorder) !recorders) compute in
+    Hashtbl.replace table key (answer, List.rev !recorder); answer
+
 let with_equivalent_view parent f =
   let token = raw_token () in
   if same_raw token parent then f () else begin
