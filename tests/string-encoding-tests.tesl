@@ -1,0 +1,107 @@
+module StringEncodingTests exposing []
+
+# Reversible string encodings in Tesl.String.  `toBase64Url` / `toHex` mint a
+# fact on their result, `parseBase64Url` / `parseHex` mint it on validated
+# untrusted text, and `fromBase64Url` / `fromHex` decode only a value that
+# carries it, so decoding has no failure case.  The rows below pin the round
+# trips (empty, ASCII, multi-byte) and that every non-canonical spelling of an
+# encoding is refused rather than silently accepted.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Something, Nothing]
+import Tesl.String exposing [
+  IsBase64Url,
+  IsHex,
+  String.toBase64Url,
+  String.parseBase64Url,
+  String.fromBase64Url,
+  String.toHex,
+  String.parseHex,
+  String.fromHex,
+]
+
+# A pagination cursor: opaque on the wire, and only a proven cursor decodes.
+fn encodeCursor(position: String) -> String ? IsBase64Url =
+  String.toBase64Url position
+
+fn cursorPosition(cursor: String ::: IsBase64Url cursor) -> String =
+  String.fromBase64Url cursor
+
+fn readCursor(raw: String) -> String =
+  case String.parseBase64Url raw of
+    Something cursor -> cursorPosition cursor
+    Nothing -> "invalid"
+
+fn base64RoundTrip(s: String) -> String =
+  let encoded = String.toBase64Url s
+  String.fromBase64Url encoded
+
+fn hexRoundTrip(s: String) -> String =
+  let encoded = String.toHex s
+  String.fromHex encoded
+
+fn acceptsBase64Url(raw: String) -> Bool =
+  case String.parseBase64Url raw of
+    Something _ -> True
+    Nothing -> False
+
+fn acceptsHex(raw: String) -> Bool =
+  case String.parseHex raw of
+    Something _ -> True
+    Nothing -> False
+
+fn readHex(raw: String) -> String =
+  case String.parseHex raw of
+    Something proven -> String.fromHex proven
+    Nothing -> "invalid"
+
+test "base64url encodes to the RFC 4648 URL-safe alphabet without padding" {
+  expect String.toBase64Url "" == ""
+  expect String.toBase64Url "f" == "Zg"
+  expect String.toBase64Url "fo" == "Zm8"
+  expect String.toBase64Url "foo" == "Zm9v"
+  expect String.toBase64Url "雪だるま😀" == "6Zuq44Gg44KL44G-8J-YgA"
+}
+
+test "base64url round trips empty, ascii and multi-byte strings" {
+  expect base64RoundTrip "" == ""
+  expect base64RoundTrip "page=2&after=42" == "page=2&after=42"
+  expect base64RoundTrip "雪だるま😀 café" == "雪だるま😀 café"
+}
+
+test "a cursor survives encode, transport and validation" {
+  expect readCursor (encodeCursor "id>42") == "id>42"
+  expect readCursor "aWQ-NDI" == "id>42"
+  expect readCursor "aWQ+NDI" == "invalid"
+}
+
+test "base64url validation refuses non-canonical and non-UTF-8 encodings" {
+  expect acceptsBase64Url "" == True
+  expect acceptsBase64Url "Zm9v" == True
+  expect acceptsBase64Url "Zg==" == False
+  expect acceptsBase64Url "Zh" == False
+  expect acceptsBase64Url "Z" == False
+  expect acceptsBase64Url "a+b/" == False
+  expect acceptsBase64Url "Zm9v\n" == False
+  expect acceptsBase64Url "Zm 9v" == False
+  expect acceptsBase64Url "_w" == False
+}
+
+test "hex encodes lowercase and round trips" {
+  expect String.toHex "" == ""
+  expect String.toHex "hi!" == "686921"
+  expect String.toHex "é" == "c3a9"
+  expect hexRoundTrip "" == ""
+  expect hexRoundTrip "雪だるま😀" == "雪だるま😀"
+  expect readHex "c3a9" == "é"
+}
+
+test "hex validation refuses uppercase, odd length and non-UTF-8" {
+  expect acceptsHex "686921" == True
+  expect acceptsHex "C3A9" == False
+  expect acceptsHex "c3A9" == False
+  expect acceptsHex "4" == False
+  expect acceptsHex "0x41" == False
+  expect acceptsHex "zz" == False
+  expect acceptsHex "ff" == False
+}
