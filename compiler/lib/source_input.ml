@@ -414,6 +414,7 @@ let same_view token = same_raw (canonical_token token) (view_token ())
    replays its observations to every judgment recording them (see [recording]). *)
 let view_memos : (view_token * (string, string * observation list) Hashtbl.t) list ref = ref []
 let () = scope_resets := (fun () -> view_memos := []) :: !scope_resets
+let same_reads_in : (view_token -> observation list -> bool) ref = ref (fun _ _ -> false)
 let memo_in_view key compute =
   if not (disk_memo_active ()) || !path_memo <> None then compute () else
   let token = view_token () in
@@ -423,7 +424,14 @@ let memo_in_view key compute =
       let table = Hashtbl.create 256 in
       view_memos := (token, table) :: List.filteri (fun i _ -> i < 15) !view_memos;
       table in
-  match Hashtbl.find_opt table key with
+  (* An answer of another view holds here when its observations do. *)
+  let elsewhere () = List.find_map (fun (other, table) ->
+    if same_raw other token then None else
+    match Hashtbl.find_opt table key with
+    | Some (_, observations) as found when !same_reads_in other observations -> found
+    | _ -> None) !view_memos in
+  match (match Hashtbl.find_opt table key with Some _ as found -> found | None ->
+    let found = elsewhere () in Option.iter (Hashtbl.replace table key) found; found) with
   | Some (answer, observations) ->
     (* A judgment recording its observations sees the ones this answer made. *)
     List.iter (fun recorder -> recorder := List.rev_append observations !recorder) !recorders;
@@ -477,16 +485,17 @@ let view_difference ((view, pinned, _) : view_token) =
     (match lstat path with { Unix.st_kind = Unix.S_REG; _ } -> true | _ -> false | exception Unix.Unix_error _ -> false) &&
     (match memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all) path with
      | disk -> String.equal disk bytes | exception (Sys_error _ | Unix.Unix_error _) -> false) in
-  (* A pinned resource shadows a view file of the same path, so a difference
-     in pinned resources always counts. *)
+  (* A pinned resource shadows a view file of the same path: it supplies
+     nothing new only where neither view has a file. *)
   let differing ~transparent a b =
     Paths.merge (fun path x y -> match x, y with
       | Some x, Some y when x == y || String.equal x y -> None
-      | Some x, None | None, Some x when transparent && disk_regular path x -> None
+      | Some x, None | None, Some x when transparent path && disk_regular path x -> None
       | None, None -> None
       | _ -> Some ()) a b in
-  let changed = Paths.union (fun _ () () -> Some ()) (differing ~transparent:true (files view) (files !active))
-    (differing ~transparent:false pinned !pinned_files) in
+  let unshadowed path = not (Paths.mem path (files view) || Paths.mem path (files !active)) in
+  let changed = Paths.union (fun _ () () -> Some ()) (differing ~transparent:(fun _ -> true) (files view) (files !active))
+    (differing ~transparent:unshadowed pinned !pinned_files) in
   let paths = Paths.fold (fun path () set -> Names.add path set) changed Names.empty
     |> Names.union (Names.diff (directories view) (directories !active))
     |> Names.union (Names.diff (directories !active) (directories view)) in
@@ -495,6 +504,18 @@ let view_difference ((view, pinned, _) : view_token) =
     if parent = path || Names.mem parent set then set else ancestors parent (Names.add parent set) in
   let all = Names.fold ancestors paths paths in
   all, Names.map Filename.basename paths
+
+(* Few distinct pairs of views meet within one command. *)
+let differences : (view_token * view_token * (Names.t * Names.t)) list ref = ref []
+let () = scope_resets := (fun () -> differences := []) :: !scope_resets
+let view_difference token =
+  let current = raw_token () in
+  match List.find_opt (fun (t, c, _) -> same_raw t token && same_raw c current) !differences with
+  | Some (_, _, difference) -> difference
+  | None ->
+    let difference = view_difference token in
+    differences := (token, current, difference) :: List.filteri (fun i _ -> i < 15) !differences;
+    difference
 
 let same_reads token observations =
   let (_, _, epoch) = token in
@@ -509,5 +530,7 @@ let same_reads token observations =
         not (affected path) || replay observation
       | Unindexed -> true) observations
   end else List.for_all replay observations
+
+let () = same_reads_in := same_reads
 
 let has_pinned_files () = not (Paths.is_empty !pinned_files)
