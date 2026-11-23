@@ -116,7 +116,12 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
  if selected=[] then f None else
  let rec filesystem_root file = let parent=Filename.dirname file in if parent=file then file else filesystem_root parent in
  let input_root = Option.value (Source_input.project_root ()) ~default:(filesystem_root entry_file) in
+ (* An entry buffer equal to the bytes the enclosing view supplies changes
+    nothing that view observes. *)
+ let parent = Source_input.view_token () in
+ let unchanged = (try Source_input.read entry_file = source with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> false) in
  Source_input.with_overlays ~project_root:input_root [entry_file,source] (fun () ->
+  (if unchanged then Source_input.with_equivalent_view parent else fun f -> f ()) (fun () ->
   let context = abi (A.current ()) in
   let stored_value_compatibility = A.stored_value_compatibility context in
   abi (A.with_snapshot context (fun () ->
@@ -137,7 +142,8 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    let rec with_integrity captures run = match captures with
     | [] -> run()
     | capture::rest -> checked(Migration_source_integrity.with_captured capture (fun()->with_integrity rest run)) in
-   let result = with_integrity integrity (fun () -> Source_input.with_pinned_files inputs (fun () ->
+   (* [inputs] were read in this view: pinning them freezes what it observes. *)
+   let result = with_integrity integrity (fun () -> let parent = Source_input.view_token () in Source_input.with_pinned_files inputs (fun () -> Source_input.with_equivalent_view parent @@ fun () ->
    let inventories = ref [] and row_histories=ref [] and contracts=ref [] and resumed_any=ref false and records=ref [] and resumed_through=ref [] in
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
@@ -347,7 +353,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
    result)) in
    List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards;
-   result)))))
+   result))))))
 
 let unresumed t =
  if t.resumed then invalid_arg "a checkpoint-resumed history capture cannot publish complete history artifacts"

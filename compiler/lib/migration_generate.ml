@@ -641,7 +641,11 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
       | Some previous -> previous | None -> reject migration.path "refresh requires an adjacent frozen predecessor" in
     if initial.previous_root <> I.root_module (H.inventory previous) || initial.current_root <> I.root_module (H.inventory current) then
       reject migration.path "MIG020: refresh requires the current edge's adjacent frozen/current schema references";
+    let compiler = lazy (Migration_trust.current_compiler ()) in
     List.iter (fun (edge : H.migration_source) ->
+      (* A trusted completed edge's seals were verified by this compiler for
+         exactly these bytes (Migration_trust). *)
+      if not (trusted_edge root compiler edge) then
       let header = match sparse (Header.read ~file:edge.path edge.contents) with
         | Some header -> header | None -> reject edge.path "completed migration is missing its source seals" in
       let old,fresh = Header.roots header in

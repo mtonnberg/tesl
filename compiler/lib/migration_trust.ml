@@ -127,16 +127,23 @@ let edge_uncached ~project_root ~compiler ~file ~source =
    checkpoint, the application check and the capture. A decision is reused only
    under the identical source view (same overlays and pinned resources) in
    which it re-hashed every recorded input; any other view decides again. *)
+(* A decision is also reused in another view when every file it read has the
+   same bytes there and the directories they came from list the same entries
+   (Source_input.same_reads). *)
 let edge_memo : (string * string * string * (string * string) option,
-  Source_input.view_token * evidence option) Migration_analysis_cache.t =
+  Source_input.view_token list ref * (string * string) list * Source_input.listing * evidence option) Migration_analysis_cache.t =
   Migration_analysis_cache.create ~limit:4096
 let edge ~project_root ~compiler ~file ~source =
   if full_history () then None else
   let key = project_root,file,Migration_hash.digest source,compiler in
-  let decide () = Source_input.view_token (),edge_uncached ~project_root ~compiler ~file ~source in
+  let decide () =
+    let token = Source_input.view_token () in
+    let evidence,reads = Source_input.recording (fun () -> Source_input.with_path_memo (fun () -> edge_uncached ~project_root ~compiler ~file ~source)) in
+    ref [token],reads,Source_input.listings reads,evidence in
   (* Trust re-hashes recorded bytes only; no proof scope shapes it. *)
-  let _,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
-    ~guard:(fun (token,_) -> Source_input.same_view token) decide in
+  let _,_,_,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
+    ~guard:(fun (tokens,reads,dirs,_) -> List.exists Source_input.same_view !tokens ||
+      (Source_input.same_reads (List.hd !tokens) reads dirs && (tokens := Source_input.view_token () :: !tokens; true))) decide in
   Option.iter (fun e -> trusted_log := e.root :: !trusted_log) evidence;
   evidence
 
@@ -162,4 +169,34 @@ let module_edge ~compiler (m : Ast.module_form) source =
           (try edge ~project_root ~compiler ~file:root_file ~source:(Source_input.read root_file)
            with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ -> None)
       else edge ~project_root ~compiler ~file ~source
+  | Some (family, revision, _), Some relative when revision <> "VCurrent" && revision <> "Migrate" ->
+    (* A frozen schema module V<k> (or a private module of its closure) whose
+       exact bytes are recorded in a seal of a trusted completed migration:
+       the previous-schema seal of V<k+1> or the current-schema seal of V<k>.
+       That seal was written from this compiler's checked inventory of exactly
+       these bytes. *)
+    let file = Validation_common.canonical_import_path m.source_file in
+    let suffix = Filename.dir_sep ^ relative in
+    (match int_of_string_opt (String.sub revision 1 (String.length revision - 1)) with
+     | Some version when revision.[0] = 'V' && String.ends_with ~suffix file ->
+       let project_root = String.sub file 0 (String.length file - String.length suffix) in
+       let digest = Migration_hash.digest source in
+       let covered migration pick =
+         match Validation_common.schema_module_relative_path (Printf.sprintf "%s.Migrate.V%d" family migration) with
+         | None -> false
+         | Some relative ->
+           let root_file = Filename.concat project_root relative in
+           (try
+              let root_source = Source_input.read root_file in
+              edge ~project_root ~compiler ~file:root_file ~source:root_source <> None &&
+              (match Migration_header.read ~file:root_file root_source with
+               | Ok (Some located) ->
+                 let seal = pick (Migration_header.recorded_seals located) in
+                 Migration_seal.root_module seal = family ^ "." ^ revision &&
+                 List.assoc_opt m.module_name (Migration_seal.sources seal) = Some digest
+               | _ -> false)
+            with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ -> false) in
+       if covered (version + 1) fst || (version > 1 && covered version snd)
+       then Some { root = m.module_name } else None
+     | _ -> None)
   | _ -> None

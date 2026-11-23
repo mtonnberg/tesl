@@ -2,7 +2,9 @@ module M = Migration_manifest
 module D = Migration_source_diagnostics
 module S = Migration_sparse
 module Paths = Set.Make(String)
-type t = { guard:M.t; files:(string * string) list }
+(* [fresh]: the guards were verified when the token was published and nothing
+   has used it since; the first [with_captured] need not verify them again. *)
+type t = { guard:M.t; files:(string * string) list; fresh:bool ref; token:Source_input.view_token }
 exception Invalid of S.error list
 let reject path message = raise (Invalid [{S.code="MIG013";loc=Location.dummy_loc path;message;related=[]}])
 let guard = function Ok value -> value | Error errors ->
@@ -18,8 +20,9 @@ let revalidate t = protect(fun()->Source_input.without_pinned_files(fun()->
 let capture ~project_root ~inputs = protect(fun()->
  let accumulator=ref(guard(M.start_combine (guard(M.create ~project_root ~reads:[] ~directories:[] ~imports:[] ~documents:[] ~writes:[])) ~documents:[])) in
  let seen=ref Paths.empty and directories=ref Paths.empty and files=Hashtbl.create 32 in
+ let observed=M.observations () in
  let extend ~reads ~dirs ~imports =
-  let next=guard(M.create ~project_root ~reads ~directories:dirs ~imports ~documents:[] ~writes:[]) in
+  let next=guard(M.create_observed observed ~project_root ~reads ~directories:dirs ~imports ~documents:[] ~writes:[]) in
   (* Keep each original observation. Rechecking the growing union here makes
      graph discovery quadratic; the final union checks every captured source,
      disk, directory and import guard before publishing the token. *)
@@ -73,11 +76,17 @@ let capture ~project_root ~inputs = protect(fun()->
  List.iter(fun(path,bytes)->visit path;
    if Hashtbl.find_opt files path<>Some bytes then reject path "source changed before integrity discovery")inputs;
  let manifest=guard(M.finish_combine !accumulator) in
- let token={guard=manifest;files=Hashtbl.to_seq files |> List.of_seq |> List.sort compare} in
- (match revalidate token with Ok()->()|Error errors->raise(Invalid errors));token)
+ (* finish_combine has just verified every source, disk, directory and import
+    guard of the union. *)
+ {guard=manifest;files=Hashtbl.to_seq files |> List.of_seq |> List.sort compare;fresh=ref (not (Source_input.has_pinned_files ()));token=Source_input.view_token ()})
 let with_captured t f = protect(fun()->
- (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));
+ if !(t.fresh) then t.fresh := false
+ else (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));
  let project_root=Option.value(Source_input.project_root()) ~default:(M.project_root t.guard) in
- let result=Source_input.with_overlays ~project_root t.files(fun()->Source_input.with_pinned_files t.files f) in
+ (* The files were read in the capture's view; freezing them there observes
+    exactly what that view does. *)
+ let equivalent=Source_input.same_view t.token in
+ let result=Source_input.with_overlays ~project_root t.files(fun()->Source_input.with_pinned_files t.files (fun () ->
+   if equivalent then Source_input.with_equivalent_view t.token f else f ())) in
  (* Leave the owned snapshot before checking the caller's current source view. *)
  (match revalidate t with Ok()->()|Error errors->raise(Invalid errors));result)

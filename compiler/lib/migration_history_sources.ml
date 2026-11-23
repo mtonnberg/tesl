@@ -121,7 +121,13 @@ let check_inputs history =
 
 let verify_unchanged history = protect history.current.root_file (fun () -> check_inputs history)
 
-let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family =
+(* What [inspect] needs to rebuild its result for another stored-value label
+   or without migrations, without discovering again (see [inspect] below). *)
+type core = { full : t; specs : (int * string * string * bool) list;
+  schema_inputs : (string * string) list; schema_imports : (string * string * string) list;
+  loader : string -> string option -> string -> string -> Migration_inventory.t }
+
+let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family =
   protect project_root (fun () ->
     if not (Migration_source.valid_family family) then
       reject project_root "invalid schema family";
@@ -186,10 +192,8 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
           end else reject ~kind:Invalid_source m.source_file
             ("schema import escapes its revision: " ^ imp.module_name)) m.imports
       end in
-    let load_schema ?(defer=false) version revision path =
-      let expected = family ^ "." ^ revision in
-      visit_schema expected expected;
-      let load () =
+    let specs = ref [] in
+    let load_inventory compiler_abi stored_value_compatibility expected path =
       match Migration_inventory.load_with_compatibility ~stored_value_compatibility ~compiler_abi ~root_file:path with
       | Error error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.message})
       | Ok inventory ->
@@ -204,7 +208,13 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
           if Hashtbl.find_opt sources source <> Some digest then
             reject ~kind:Changed_source source "schema source changed during history discovery") inputs;
         inventory in
-      let loaded = if defer then lazy (try load () with Invalid error -> failwith error.message)
+    let load_schema ?(defer=false) version revision path =
+      let expected = family ^ "." ^ revision in
+      visit_schema expected expected;
+      specs := (version,expected,path,defer) :: !specs;
+      let load () = load_inventory compiler_abi stored_value_compatibility expected path in
+      let loaded = if capture<>None then lazy (invalid_arg "history core schemas are rebuilt before use")
+        else if defer then lazy (try load () with Invalid error -> failwith error.message)
         else Lazy.from_val (load ()) in
       {version; root_file=path; loaded} in
     let compiler = lazy (Migration_trust.current_compiler ()) in
@@ -216,6 +226,8 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
        with Sys_error _ | Unix.Unix_error _ -> false) in
     let frozen = List.map (fun (version, path) -> load_schema ~defer:(covered version) version ("V" ^ string_of_int version) path) snapshots in
     let current = load_schema current_version "VCurrent" current_path in
+    let schema_inputs = Hashtbl.to_seq sources |> List.of_seq |> List.sort compare in
+    let schema_imports = List.sort_uniq compare !import_resolutions in
     let migration_modules = Hashtbl.create 16 in
     let rec visit_migration name =
       if not (Hashtbl.mem migration_modules name) then begin
@@ -260,35 +272,76 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
       import_resolutions=List.sort_uniq compare !import_resolutions;
       revision_directories=[schema_dir, snapshots; migration_dir, migration_files]} in
     check_inputs history;
+    Option.iter (fun capture -> capture := Some {full=history;specs=List.rev !specs;schema_inputs;schema_imports;
+      loader=load_inventory}) capture;
     history)
 
 
 type history_cache_key = string option * bool * string * string * string * (string * string) list
 type history_cache = { entries : (history_cache_key, t) Hashtbl.t; mutable weight : int;
   verified : (history_cache_key, Source_input.view_token) Hashtbl.t }
+type core_entry = { core : core; reads : (string * string) list; dirs : Source_input.listing; views : (string * string option * bool, t) Hashtbl.t;
+  loads : (string * string option * string, Migration_inventory.t) Hashtbl.t;
+  mutable verified_views : Source_input.view_token list }
+type core_key = string * string * (string * string) list * bool
+let cores : (core_key, core_entry) Hashtbl.t = Hashtbl.create 4
 let active_cache : history_cache option ref = ref None
 let with_cache f = match !active_cache with
  | Some _ -> f ()
  | None ->
    active_cache := Some {entries=Hashtbl.create 8;weight=0;verified=Hashtbl.create 8};
-   Fun.protect ~finally:(fun () -> active_cache := None) f
+   Fun.protect ~finally:(fun () -> active_cache := None; Hashtbl.reset cores) f
 let stdlib_inputs () =
  try Some (List.map (fun (name,_) ->
    match Validation_common.lifted_stdlib_source_path name with
    | None -> raise Not_found
    | Some path -> path,Source_input.read path) Validation_common.lifted_stdlib_sources)
  with Not_found | Sys_error _ | Unix.Unix_error _ -> None
-let inspect_uncached = inspect
+let inspect_uncached ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family = inspect_with ~capture:None ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family
+(* One discovery serves every caller of a command: the core is discovered once
+   with migrations, and each (stored-value label, migrations) view of it is
+   rebuilt from the same reads. A view's inventories are loaded from the core's
+   loader and shared between callers asking for the same label. Any failure
+   falls back to the ordinary discovery of exactly the requested view, which
+   reports its precise error. *)
+let view_of entry ~compiler_abi ~stored_value_compatibility ~include_migrations =
+  match Hashtbl.find_opt entry.views (compiler_abi,stored_value_compatibility,include_migrations) with
+  | Some t -> Ok t
+  | None ->
+    protect entry.core.full.current.root_file (fun () ->
+      let load expected path =
+        let key = compiler_abi,stored_value_compatibility,path in
+        match Hashtbl.find_opt entry.loads key with
+        | Some inventory -> inventory
+        | None ->
+          let inventory = entry.core.loader compiler_abi stored_value_compatibility expected path in
+          Hashtbl.replace entry.loads key inventory; inventory in
+      let schema (version,expected,path,defer) =
+        let load () = load expected path in
+        {version;root_file=path;loaded=if defer then lazy (try load () with Invalid error -> failwith error.message)
+          else Lazy.from_val (load ())} in
+      let schemas = List.map schema entry.core.specs in
+      let frozen,current = match List.rev schemas with
+        | current :: frozen -> List.rev frozen,current
+        | [] -> invalid_arg "history core has no current schema" in
+      let full = entry.core.full in
+      let t = if include_migrations then {full with frozen;current}
+        else {full with frozen;current;completed_migrations=[];current_migration=None;contracts=[];
+          contract_directory=None;source_inputs=entry.core.schema_inputs;import_resolutions=entry.core.schema_imports} in
+      (* Bounded: a scope that asks under many labels keeps at most 16 views. *)
+      if Hashtbl.length entry.views >= 16 then (Hashtbl.reset entry.views; Hashtbl.reset entry.loads);
+      Hashtbl.replace entry.views (compiler_abi,stored_value_compatibility,include_migrations) t;
+      t)
 let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family =
  let compute () = inspect_uncached ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family in
  let key = match !active_cache with
   | None -> None
   | Some _ ->
-    (try Option.map (fun stdlib -> stored_value_compatibility,include_migrations,compiler_abi,
-       Source_input.realpath project_root,family,stdlib) (stdlib_inputs ())
+    (try Option.map (fun stdlib -> Source_input.realpath project_root,family,stdlib,Migration_trust.full_history ())
+       (stdlib_inputs ())
      with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> None) in
  match !active_cache,key with
- | Some cache,Some ((_,_,_,_,_,stdlib) as key) ->
+ | Some _,Some ((_,_,stdlib,_) as key) ->
    (* A hit still scans revision/Contract directories, rechecks canonical regular
       files and exact source digests, and resolves every captured import. Changed
       inputs trigger fresh discovery, not a stale result or cached diagnostic. *)
@@ -298,34 +351,32 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
       resources) is reused without re-reading; any other view re-verifies.
       A disk edit made while one command runs is caught by that command's final
       source guards (capture validation, preview verification) before it emits
-      or reports success. *)
-   let cached = Option.bind (Hashtbl.find_opt cache.entries key) (fun history ->
-     match Hashtbl.find_opt cache.verified key with
-     | Some token when Source_input.same_view token -> Some history
+      or reports success. The table lives only inside the compilation scope. *)
+   let cached = Option.bind (Hashtbl.find_opt cores key) (fun entry ->
+     match entry.verified_views with
+     | tokens when List.exists Source_input.same_view tokens -> Some entry
+     | token :: _ when Source_input.same_reads token entry.reads entry.dirs ->
+       entry.verified_views <- Source_input.view_token () :: entry.verified_views; Some entry
      | _ ->
-       match verify_unchanged history with
+       match verify_unchanged entry.core.full with
        | Ok () when stdlib_inputs () = Some stdlib ->
-         Hashtbl.replace cache.verified key (Source_input.view_token ()); Some history
-       | _ -> None) in
-   (match cached with
-    | Some history -> Ok history
-    | None ->
-      if Hashtbl.mem cache.entries key then begin
-        Hashtbl.clear cache.entries; Hashtbl.clear cache.verified; cache.weight <- 0
-      end;
-      let result = compute () in
-      (match result with
-       | Ok history when stdlib_inputs () = Some stdlib ->
-         let size = String.length (Marshal.to_string (key,history) [Marshal.Closures]) in
-         if size <= 256 * 1024 * 1024 then begin
-           if Hashtbl.length cache.entries >= 16 || cache.weight + size > 256 * 1024 * 1024 then begin
-             Hashtbl.clear cache.entries; Hashtbl.clear cache.verified; cache.weight <- 0
-           end;
-           Hashtbl.replace cache.entries key history; cache.weight <- cache.weight + size;
-           Hashtbl.replace cache.verified key (Source_input.view_token ())
-         end
-       | _ -> ());
-      result)
+         entry.verified_views <- Source_input.view_token () :: entry.verified_views; Some entry
+       | _ -> Hashtbl.remove cores key; None) in
+   let entry = match cached with
+     | Some entry -> Some entry
+     | None ->
+       let capture = ref None in
+       let discovered,reads = Source_input.recording (fun () -> Source_input.with_path_memo @@ fun () ->
+         inspect_with ~capture:(Some capture) ~stored_value_compatibility ~include_migrations:true ~compiler_abi ~project_root ~family) in
+       (match discovered, !capture with
+        | Ok _,Some core when stdlib_inputs () = Some stdlib ->
+          if Hashtbl.length cores >= 4 then Hashtbl.reset cores;
+          let entry = {core;reads;dirs=Source_input.listings reads;views=Hashtbl.create 4;loads=Hashtbl.create 16;verified_views=[Source_input.view_token ()]} in
+          Hashtbl.replace cores key entry; Some entry
+        | _ -> None) in
+   (match Option.map (fun entry -> view_of entry ~compiler_abi ~stored_value_compatibility ~include_migrations) entry with
+    | Some (Ok t) -> Ok t
+    | Some (Error _) | None -> compute ())
  | _ -> compute ()
 
 let discover_with_compatibility = inspect ~include_migrations:true
@@ -339,8 +390,13 @@ let adjacent_pair_with_compatibility ~stored_value_compatibility ~compiler_abi ~
   match inspect ~stored_value_compatibility ~include_migrations:false ~compiler_abi ~project_root ~family with
   | Error error -> Error error
   | Ok history ->
+    (* Discovery requires each root to declare its revision's name, so a
+       schema is found by name without loading every inventory; the two found
+       are loaded and their roots compared below. *)
+    let name_of (schema : schema) =
+      if schema == history.current then family ^ ".VCurrent" else family ^ ".V" ^ string_of_int schema.version in
     let root schema = Migration_inventory.root_module (inventory schema) in
-    let find name = List.find_opt (fun schema -> root schema = name)
+    let find name = List.find_opt (fun schema -> name_of schema = name && root schema = name)
       (history.frozen @ [history.current]) in
     match find previous, find current with
     | Some before, Some after when before.version + 1 = after.version &&

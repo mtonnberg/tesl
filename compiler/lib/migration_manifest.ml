@@ -80,7 +80,21 @@ let source_files t = protect (fun () ->
     if Option.map hash source <> guard.source_digest then
       reject guard.file "source changed before capturing compilation bytes";
     Option.map (fun source -> guard.file,source) source) t.files)
-let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () ->
+(* Observations shared by the manifests of one capture: each file and directory
+   is read once, and every later manifest records that original observation.
+   The capture's final union rechecks every guard against fresh reads. *)
+type observations = { observed_files : (bool * string, string option) Hashtbl.t;
+  observed_names : (bool * string, string list option) Hashtbl.t }
+let observations () = { observed_files=Hashtbl.create 64; observed_names=Hashtbl.create 16 }
+let create_with ~observed ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () ->
+  let memo table compute key = match observed with
+    | None -> compute key
+    | Some o -> let table = table o in
+      match Hashtbl.find_opt table key with
+      | Some value -> value
+      | None -> let value = compute key in Hashtbl.replace table key value; value in
+  let file_bytes ~disk path = memo (fun o -> o.observed_files) (fun (disk,path) -> file_bytes ~disk path) (disk,path) in
+  let names ~disk path = memo (fun o -> o.observed_names) (fun (disk,path) -> names ~disk path) (disk,path) in
   validate_root root;
   let documents = normalized_documents root documents in
   let imports = List.sort_uniq compare imports |> List.map (fun (source,name) ->
@@ -119,7 +133,9 @@ let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = 
   let t = {root;documents;edits=List.rev edits;files=List.rev files;directories;imports} in
   (* Catch a changed earlier input before publishing the proposal. Apply must
      check again; this is a precondition snapshot, not a filesystem transaction. *)
-  verify_files t false; verify_files t true; t)
+  if observed=None then (verify_files t false; verify_files t true); t)
+let create = create_with ~observed:None
+let create_observed observed = create_with ~observed:(Some observed)
 
 (** Combine independently computed operations without taking a new snapshot of
     their inputs. Re-capturing after target selection could bless changed source

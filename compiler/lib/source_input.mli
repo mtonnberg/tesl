@@ -37,3 +37,25 @@ val without_pinned_files : (unit -> 'a) -> 'a
 type view_token
 val view_token : unit -> view_token
 val same_view : view_token -> bool
+(** Run [f], declaring the current scope equivalent to the view [parent] was
+    taken in: only for a scope entered to freeze bytes that view supplied (an
+    overlay or pinned resources holding exactly the bytes read there). *)
+val with_equivalent_view : view_token -> (unit -> 'a) -> 'a
+
+(** Run [f] and return every file it read through [read]/[read_text] with the
+    bytes it received, in order. *)
+val recording : (unit -> 'a) -> 'a * (string * string) list
+type listing
+(** The directories [reads] came from: canonical path and entries now. *)
+val listings : (string * string) list -> listing
+(** A judgment (taken under [token]) that read exactly [reads] in directories
+    that looked like the listing observes the same inputs now: equal entries
+    and canonical paths for those directories and equal bytes of regular files
+    for every read. *)
+val same_reads : view_token -> (string * string) list -> listing -> bool
+(** Whether compiler resources are pinned in the current scope. *)
+val has_pinned_files : unit -> bool
+
+(** Run [f] computing each directory's canonical spelling at most once (see
+    source_input.ml). For one bounded judgment; never around a final guard. *)
+val with_path_memo : (unit -> 'a) -> 'a

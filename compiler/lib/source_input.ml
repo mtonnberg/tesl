@@ -13,11 +13,39 @@ let within root path =
   let prefix = if Filename.dirname root = root then root else root ^ Filename.dir_sep in
   String.starts_with ~prefix path && path <> root
 
+(* Inside [with_path_memo], the canonical spelling of a directory is computed
+   once: an entry that is not a symlink (nor "." or "..") resolves to its
+   parent's canonical spelling plus its own name, exactly as realpath answers.
+   A memo lives only for one bounded judgment (one discovery or one trust
+   decision); the final source guards run outside it. *)
+let path_memo : (string, string) Hashtbl.t option ref = ref None
+let with_path_memo f = match !path_memo with
+  | Some _ -> f ()
+  | None ->
+    path_memo := Some (Hashtbl.create 64);
+    Fun.protect ~finally:(fun () -> path_memo := None) f
+let rec real path = match !path_memo with
+  | None -> Unix.realpath path
+  | Some memo ->
+    match Hashtbl.find_opt memo path with
+    | Some resolved -> resolved
+    | None ->
+      let name = Filename.basename path and parent = Filename.dirname path in
+      let resolved =
+        if Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then Unix.realpath path
+        else match Unix.lstat path with
+          | { Unix.st_kind = Unix.S_LNK; _ } -> Unix.realpath path
+          | _ -> (match real parent with
+              | resolved_parent -> Filename.concat resolved_parent name
+              | exception Unix.Unix_error _ -> Unix.realpath path)
+          | exception Unix.Unix_error _ -> Unix.realpath path in
+      Hashtbl.replace memo path resolved; resolved
+
 (* realpath also handles aliases of existing paths. For a proposed file, resolve
    its nearest existing ancestor before appending missing components. Do not
    collapse '..' before resolving symlinks: that changes filesystem semantics. *)
 let rec proposed_path path =
-  try Unix.realpath path with
+  try real path with
   | Unix.Unix_error (Unix.ENOENT, _, _) ->
     let parent = Filename.dirname path in
     if parent = path then raise (Sys_error ("unresolvable source path: " ^ path));
@@ -31,7 +59,7 @@ let canonical_path = proposed_path
 
 let rec validate_parent path =
   match Unix.lstat path with
-  | info when info.Unix.st_kind = Unix.S_DIR && Unix.realpath path = path -> ()
+  | info when info.Unix.st_kind = Unix.S_DIR && real path = path -> ()
   | _ -> invalid path "parent must be a canonical directory"
   | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
     let parent = Filename.dirname path in
@@ -42,14 +70,14 @@ let validate_file path =
   let checked () =
     validate_parent (Filename.dirname path);
     match Unix.lstat path with
-    | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
+    | info when info.Unix.st_kind = Unix.S_REG && real path = path -> ()
     | _ -> invalid path "input must be a canonical regular file"
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> () in
   (* An existing regular file whose real path is its own spelling has a
      canonical directory parent; anything else takes the full check, which
      also reports which part failed. *)
   match Unix.lstat path with
-  | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
+  | info when info.Unix.st_kind = Unix.S_REG && real path = path -> ()
   | _ | exception Unix.Unix_error _ -> checked ()
 
 let directories root files =
@@ -132,10 +160,15 @@ let find path =
   | Some contents -> Some (File contents)
   | None -> find_project path
 
-let read_using disk path = match find path with
-  | Some (File contents) -> contents
-  | Some Directory -> raise (Sys_error (path ^ ": is a directory"))
-  | None -> disk path
+(* Active read recorders (see [recording]); each collects path and bytes. *)
+let recorders : (string * string) list ref list ref = ref []
+let read_using disk path =
+  let contents = match find path with
+    | Some (File contents) -> contents
+    | Some Directory -> raise (Sys_error (path ^ ": is a directory"))
+    | None -> disk path in
+  List.iter (fun recorder -> recorder := (path, contents) :: !recorder) !recorders;
+  contents
 let read = read_using (fun path -> In_channel.with_open_bin path In_channel.input_all)
 let read_text = read_using (fun path -> In_channel.with_open_text path In_channel.input_all)
 let exists path = match find path with Some _ -> true | None -> Sys.file_exists path
@@ -152,7 +185,7 @@ let kind path = match find path with
      | _ -> virtual_kind
      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> virtual_kind)
 let realpath path = match find path with
-  | Some _ -> proposed_path path | None -> Unix.realpath path
+  | Some _ -> proposed_path path | None -> real path
 
 let readdir path = match !active, find path with
   | None, _ | Some _, None -> Sys.readdir path
@@ -194,5 +227,52 @@ let without_pinned_files f =
    Views are immutable, so physical equality means "nothing a view supplies has
    changed since the token was taken". It says nothing about unpinned disk bytes. *)
 type view_token = view option * string Paths.t
-let view_token () : view_token = (!active, !pinned_files)
-let same_view ((view, pinned) : view_token) = view == !active && pinned == !pinned_files
+let raw_token () : view_token = (!active, !pinned_files)
+(* Scopes that only freeze bytes the enclosing view already supplied observe
+   what that view observes; each such scope's token is declared equivalent to
+   the enclosing one (see [with_equivalent_view]), so judgments verified there
+   are reused instead of verified again. *)
+let equivalents : (view_token * view_token) list ref = ref []
+let same_raw ((v1, p1) : view_token) ((v2, p2) : view_token) = v1 == v2 && p1 == p2
+let canonical_token token =
+  match List.find_opt (fun (alias, _) -> same_raw alias token) !equivalents with
+  | Some (_, canonical) -> canonical | None -> token
+let view_token () : view_token = canonical_token (raw_token ())
+let same_view token = same_raw (canonical_token token) (view_token ())
+let with_equivalent_view parent f =
+  let token = raw_token () in
+  if same_raw token parent then f () else begin
+    let previous = !equivalents in
+    equivalents := (token, canonical_token parent) :: previous;
+    Fun.protect ~finally:(fun () -> equivalents := previous) f
+  end
+
+let recording f =
+  let recorder = ref [] in
+  recorders := recorder :: !recorders;
+  let result = Fun.protect ~finally:(fun () -> recorders := List.filter (fun r -> r != recorder) !recorders) f in
+  result, List.rev !recorder
+
+(* The directories a judgment read files from, with their canonical path and
+   entries in the current view: what import resolution, companion probes and
+   canonical-path checks observed there. *)
+type listing = (string * string * string list) list
+let listings reads : listing =
+  List.sort_uniq String.compare (List.map (fun (path, _) -> Filename.dirname path) reads)
+  |> List.map (fun dir -> dir, (try realpath dir with Unix.Unix_error _ | Sys_error _ -> ""),
+       (try Array.to_list (readdir dir) |> List.sort String.compare with Unix.Unix_error _ | Sys_error _ -> []))
+
+(* Whether a judgment whose only file contents were the recorded [reads] and
+   whose directories looked like [dirs] observes the same inputs in the current
+   view: equal entries and canonical paths for those directories (so every
+   existence probe and import resolution there answers the same), and every
+   read still a regular file with equal bytes. *)
+let same_reads (_ : view_token) reads (dirs : listing) =
+  listings reads = dirs &&
+  List.for_all (fun (path, bytes) ->
+    match kind path, read path with
+    | Unix.S_REG, current -> current == bytes || String.equal current bytes
+    | _ -> false
+    | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _) -> false) reads
+
+let has_pinned_files () = not (Paths.is_empty !pinned_files)

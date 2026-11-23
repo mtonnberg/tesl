@@ -13,6 +13,14 @@ type t
     input/output parent directory is guarded, as are explicit discovery directories.
     Open documents require unique signed 32-bit versions. Writes may only target
     canonical .tesl files inside the existing project. Nothing is written. *)
+type observations
+(** A fresh observation set for [create_observed]: within it each file and
+    directory is read once, and [create] skips its own recheck. Only for
+    manifests that are combined and finished (which rechecks every guard). *)
+val observations : unit -> observations
+val create_observed : observations -> project_root:string -> reads:string list -> directories:string list ->
+  imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
 val create : project_root:string -> reads:string list -> directories:string list ->
   imports:(string * string) list ->
   documents:document list -> writes:(string * string) list -> (t, error list) result

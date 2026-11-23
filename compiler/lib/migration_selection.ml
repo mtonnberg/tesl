@@ -112,7 +112,9 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       | None -> (match Parser.parse_module file (Source_input.read file) with Ok m -> m | Err e -> reject e.loc e.msg) in
     List.filter_map (fun (i : import_decl) ->
       if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
-  let complete = manifest (M.create ~project_root:root ~reads ~imports ~documents
+  (* The combined guard below and every caller's final verification recheck
+     all of these observations. *)
+  let complete = manifest (M.create_observed (M.observations ()) ~project_root:root ~reads ~imports ~documents
     ~directories:[selected.migration_directory;Filename.dirname current.root_file] ~writes:[]) in
   List.iter (fun (file,(_,hash)) ->
     require_path root file;
