@@ -2,4 +2,4 @@
  (name main)
  (modules main)
  (flags (:standard -warn-error +8))
- (libraries tesl_compiler_lib unix))
+ (libraries tesl_compiler_lib tesl_hash_native unix))

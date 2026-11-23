@@ -1,0 +1,8 @@
+; Native SHA-256 for the CLI and tests (see hash_native.ml). Not linked into the
+; js_of_ocaml playground, which keeps Migration_hash's OCaml implementation.
+(library
+ (name tesl_hash_native)
+ (wrapped false)
+ (modules hash_native)
+ (foreign_stubs (language c) (names sha256_stubs) (flags (:standard -O3)))
+ (libraries tesl_compiler_lib))

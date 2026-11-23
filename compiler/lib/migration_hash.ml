@@ -115,6 +115,10 @@ let compute_native source = let t = stream () in feed t source; finish t
    the identical result; OCaml's string hashing and equality are far cheaper
    than this portable implementation. The memo is cleared when it would retain
    more than memo_limit bytes, so long-lived sessions stay bounded. *)
+(* A native executable may install a C implementation of the same function
+   (lib/hash_native); every other build uses the OCaml rounds below. *)
+let native : (string -> string) option ref = ref None
+let install_native f = native := Some f
 let memo : (string, string) Hashtbl.t = Hashtbl.create 1024
 let memo_bytes = ref 0
 let memo_limit = 256 * 1024 * 1024
@@ -123,7 +127,7 @@ let rec digest source =
   match Hashtbl.find_opt memo source with
   | Some result -> result
   | None ->
-    let result = if Sys.int_size >= 63 then compute_native source else compute source in
+    let result = (match !native with Some f -> f source | None -> if Sys.int_size >= 63 then compute_native source else compute source) in
     if !memo_bytes + String.length source > memo_limit then begin
       Hashtbl.reset memo; memo_bytes := 0
     end;
@@ -181,6 +185,9 @@ and compute source =
 
 (* The digest of the concatenation of [parts], without building it. *)
 let digest_parts parts =
+  match !native with
+  | Some f -> f (String.concat "" parts)
+  | None ->
   if Sys.int_size >= 63 then begin
     let t = stream () in List.iter (feed t) parts; finish t
   end else compute (String.concat "" parts)
