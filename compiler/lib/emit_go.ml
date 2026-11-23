@@ -63,8 +63,10 @@ let seal_cache_artifacts artifacts =
   let rewrite identity (artifact : artifact) =
     if not (Filename.check_suffix artifact.path ".go") then artifact else
     (* Only a line starting with [prefix] changes; without one the split and
-       join below is the identity. *)
-    if find_substring artifact.contents prefix = None then artifact else
+       join below is the identity. The search starts at a letter generated
+       hexadecimal history never contains. *)
+    if find_substring artifact.contents "teslCacheArtifactIdentity = " = None ||
+       find_substring artifact.contents prefix = None then artifact else
     { artifact with contents = String.split_on_char '\n' artifact.contents
         |> List.map (fun line -> if String.starts_with ~prefix line then
              prefix ^ "\"" ^ identity ^ "\"" else line)
@@ -17926,31 +17928,34 @@ let relocate_migration_history ~project_path (artifacts : artifact list) =
     let prefix = "package teslrt\n" in
     if not (String.starts_with ~prefix history.contents) then
       invalid_arg "migration history artifact lacks its runtime package clause";
-    let body = String.sub history.contents (String.length prefix) (String.length history.contents - String.length prefix) in
     (* One pass for every registration call. No replacement can create or hide
        another needle: each starts with a tab and a lower-case name and ends at
        its parenthesis, and a replacement starts with an upper-case package. *)
     let names = ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
             "registerCompiledRowPhysicalHistory"; "registerCompiledRowContractHistory"] in
     let needles = List.map (fun name -> "\t" ^ name ^ "(","\tteslrt." ^ String.capitalize_ascii name ^ "(") names in
-    let body =
-      let length = String.length body in
-      let buffer = Buffer.create (length + 256) in
-      let at position (needle,_) =
-        position + String.length needle <= length && String.sub body position (String.length needle) = needle in
-      let rec copy start from =
-        match String.index_from_opt body from '\t' with
-        | None -> Buffer.add_substring buffer body start (length - start)
-        | Some position ->
-          match List.find_opt (at position) needles with
-          | Some (needle,by) ->
-            Buffer.add_substring buffer body start (position - start);
-            Buffer.add_string buffer by;
-            let next = position + String.length needle in copy next next
-          | None -> copy start (position + 1) in
-      if length = 0 then body else (copy 0 0; Buffer.contents buffer) in
+    (* The history constants are tens of megabytes: copied once, from the
+       package clause on, with only the registration tail rewritten. *)
+    let header = "package teslhistory\n\nimport teslrt " ^ go_quote (project_path ^ "/internal/teslrt") ^ "\n" in
+    let body_start = String.length prefix in
+    let length = String.length history.contents in
+    let buffer = Buffer.create (String.length header + length + 256) in
+    Buffer.add_string buffer header;
+    let at position (needle,_) =
+      position + String.length needle <= length && String.sub history.contents position (String.length needle) = needle in
+    let rec copy start from =
+      match String.index_from_opt history.contents from '\t' with
+      | None -> Buffer.add_substring buffer history.contents start (length - start)
+      | Some position ->
+        match List.find_opt (at position) needles with
+        | Some (needle,by) ->
+          Buffer.add_substring buffer history.contents start (position - start);
+          Buffer.add_string buffer by;
+          let next = position + String.length needle in copy next next
+        | None -> copy start (position + 1) in
+    if body_start < length then copy body_start body_start;
     let relocated = { path = "internal/teslhistory/migration_history_generated.go";
-      contents = "package teslhistory\n\nimport teslrt " ^ go_quote (project_path ^ "/internal/teslrt") ^ "\n" ^ body } in
+      contents = Buffer.contents buffer } in
     (* The first line starting with "package ", found without splitting the file. *)
     let package_clause contents =
       let start = if String.starts_with ~prefix:"package " contents then Some 0
