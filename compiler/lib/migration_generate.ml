@@ -85,7 +85,11 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
     (* Every existing edge must already be source-sealed and checked. In particular,
        a changed VCurrent is a refresh decision, not a license to freeze wrong bytes. *)
     let compiler = lazy (Migration_trust.current_compiler ()) in
-    let checked_edges = List.map (fun (migration : H.migration_source) ->
+    (* A trusted completed edge's trust decision verified its header against
+       its adjacent roots and recorded bytes (Migration_trust). *)
+    let checked_edges = List.filter_map (fun (migration : H.migration_source) ->
+      let current_edge = Some migration = existing in
+      if not current_edge && trusted_edge root compiler migration then None else
       let located = match sparse (Header.read ~file:migration.path migration.contents) with
         | Some located -> located | None -> reject migration.path "record the current migration's source seals before starting another revision" in
       let previous,current = Header.roots located in
@@ -97,7 +101,7 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
           (seal (S.verify_sources ~project_root:root recorded))))) [previous_seal;current_seal];
         check migration.path migration.contents
       end;
-      migration,checked) (completed @ Option.to_list existing) in
+      Some (migration,checked)) (completed @ Option.to_list existing) in
     let old_target = match existing with
       | None -> None
       | Some migration ->
@@ -110,7 +114,12 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
     let rewrites = match existing with
       | None -> []
       | Some migration ->
-        let shared = List.concat_map (fun (m : H.migration_source) -> paths (graph m.path m.contents)) completed in
+        (* A trusted completed migration's frozen closure block lists exactly
+           the migration modules its imports reach. *)
+        let shared = List.concat_map (fun (m : H.migration_source) ->
+          match (if trusted_edge root compiler m then Migration_closure.read ~file:m.path m.contents else Ok None) with
+          | Ok (Some closure) -> List.map (fun (name,_) -> module_path root name) (Migration_closure.sources closure)
+          | _ -> paths (graph m.path m.contents)) completed in
         paths (graph migration.path migration.contents) |> List.filter_map (fun file ->
           let source = Source_input.read file in
           let m = parse file source in
@@ -693,9 +702,10 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
       List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) untrusted);
     let reads = List.map fst (H.source_inputs h) in
     let imports = List.concat_map (fun file ->
-      let m = parse file (Source_input.read file) in
-      List.filter_map (fun (i : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
+      let imports = match Migration_closure.imports ~file (Source_input.read file) with
+        | Ok imports -> imports | Error e -> reject file e.msg in
+      List.filter_map (fun name ->
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) reads in
     let generated_imports=List.concat_map(fun(file,source)->let m=parse file source in
       List.filter_map(fun(i:Ast.import_decl)->if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports)
       ((migration.path,source)::extra_writes)in
