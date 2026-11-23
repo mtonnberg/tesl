@@ -106,6 +106,40 @@
           meta.description = "Tesl project templates (minimal, api, docker)";
         };
 
+        # ── Offline Go module proxy for generated programs ────────────────────
+        # Every generated program is a Go module requiring exactly the runtime's
+        # locked dependencies (runtime/go/go.sum). This fixed-output derivation
+        # downloads those versions once, at build time, and keeps Go's download
+        # layout, which `GOPROXY=file://…` serves directly. The CLI wrappers point
+        # generated builds at it, so `tesl test`/`run`/`build` work without network,
+        # like the native installers' bundled module proxy.
+        tesl-go-module-proxy = pkgs.stdenvNoCC.mkDerivation {
+          pname = "tesl-go-module-proxy";
+          version = toolchainInputs.version;
+          src = pkgs.lib.fileset.toSource {
+            root = ./runtime/go;
+            fileset = pkgs.lib.fileset.unions [ ./runtime/go/go.mod ./runtime/go/go.sum ];
+          };
+          nativeBuildInputs = [ pkgs.go pkgs.cacert ];
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME="$TMPDIR" GOMODCACHE="$TMPDIR/modules" GOTOOLCHAIN=local GOFLAGS=-mod=mod
+            export GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+            go mod download all
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            cp -r "$GOMODCACHE/cache/download/." "$out/"
+            # Download bookkeeping varies between runs; the proxy needs only the
+            # .info/.mod/.zip files and version lists.
+            find "$out" \( -name '*.lock' -o -name '*.partial' -o -name '*.tmp' \) -delete
+            rm -rf "$out/sumdb"
+          '';
+          outputHashMode = "recursive";
+          outputHashAlgo = "sha256";
+          outputHash = "sha256-EzLhDvXt0VljN1A1FxYt4StEZfL8qI3eChr6g0wRUAc=";
+        };
+
         # ── Go editor/debug/MCP tools ─────────────────────────────────────────
         tesl-go-tools = pkgs.buildGoModule {
           pname = "tesl-go-tools";
@@ -160,6 +194,9 @@
           export TESL_GO="${pkgs.go}/bin/go"
           export TESL_STDLIB_DIR="${tesl-compiler}/share/tesl/stdlib"
           export TESL_POSTGRES_BIN="${pkgs.postgresql}/bin"
+          # Generated programs resolve their modules from the pinned offline proxy
+          # and need no C compiler or network, as with the native installers.
+          export GOPROXY="file://${tesl-go-module-proxy}" GOSUMDB=off GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0
           export PATH="${gnuUserland}:$PATH"
         '';
         # The DAST scanners are NOT referenced from the CLI wrapper.  A store path written
@@ -237,7 +274,7 @@
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-go-cli tesl-native-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+           inherit tesl-compiler tesl-go-cli tesl-native-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck tesl-go-module-proxy;
           release-plan = pkgs.writeText "tesl-release-plan.json" (builtins.toJSON
             (import ./nix/release-plan.nix {
               inherit pkgs;
