@@ -552,7 +552,17 @@ instead of re-deriving every revision, when:
 | its recorded migration hashes equal the files' recorded hashes | `MIG013`: restore the checkpoint written with this revision |
 
 Independently of checkpoints, a frozen schema snapshot covered by a trusted
-later revision is loaded only when a check needs it. Go emission still folds the complete history from V1 (the emitted program contains
+later revision is loaded only when a check needs it, and its modules are not
+type- and proof-checked again: a trusted seal recorded exactly their bytes from
+this compiler's checked inventory.
+
+Within one command, each frozen file is read and hashed when the command first
+needs it, and the history is discovered once. A later step in another source
+view (for example the proposed files of a preview) reuses that work when every
+file it read still has the same bytes and its directories list the same
+entries; otherwise it checks again. Before a command reports success or writes
+anything, its final source and disk guards re-read every input, so an edit made
+while the command runs is still refused. Go emission still folds the complete history from V1 (the emitted program contains
 every revision). Histories that use table Drop, staged unique indexes, queue
 payload conversions or write-backs get no checkpoints and are always folded from
 V1; so are histories frozen before checkpoints existed.

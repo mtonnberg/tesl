@@ -280,7 +280,7 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
 type history_cache_key = string option * bool * string * string * string * (string * string) list
 type history_cache = { entries : (history_cache_key, t) Hashtbl.t; mutable weight : int;
   verified : (history_cache_key, Source_input.view_token) Hashtbl.t }
-type core_entry = { core : core; reads : (string * string) list; dirs : Source_input.listing; views : (string * string option * bool, t) Hashtbl.t;
+type core_entry = { core : core; reads : Source_input.observation list; views : (string * string option * bool, t) Hashtbl.t;
   loads : (string * string option * string, Migration_inventory.t) Hashtbl.t;
   mutable verified_views : Source_input.view_token list }
 type core_key = string * string * (string * string) list * bool
@@ -355,7 +355,7 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
    let cached = Option.bind (Hashtbl.find_opt cores key) (fun entry ->
      match entry.verified_views with
      | tokens when List.exists Source_input.same_view tokens -> Some entry
-     | token :: _ when Source_input.same_reads token entry.reads entry.dirs ->
+     | token :: _ when Source_input.same_reads token entry.reads ->
        entry.verified_views <- Source_input.view_token () :: entry.verified_views; Some entry
      | _ ->
        match verify_unchanged entry.core.full with
@@ -371,7 +371,7 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
        (match discovered, !capture with
         | Ok _,Some core when stdlib_inputs () = Some stdlib ->
           if Hashtbl.length cores >= 4 then Hashtbl.reset cores;
-          let entry = {core;reads;dirs=Source_input.listings reads;views=Hashtbl.create 4;loads=Hashtbl.create 16;verified_views=[Source_input.view_token ()]} in
+          let entry = {core;reads;views=Hashtbl.create 4;loads=Hashtbl.create 16;verified_views=[Source_input.view_token ()]} in
           Hashtbl.replace cores key entry; Some entry
         | _ -> None) in
    (match Option.map (fun entry -> view_of entry ~compiler_abi ~stored_value_compatibility ~include_migrations) entry with

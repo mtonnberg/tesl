@@ -42,20 +42,25 @@ val same_view : view_token -> bool
     overlay or pinned resources holding exactly the bytes read there). *)
 val with_equivalent_view : view_token -> (unit -> 'a) -> 'a
 
-(** Run [f] and return every file it read through [read]/[read_text] with the
-    bytes it received, in order. *)
-val recording : (unit -> 'a) -> 'a * (string * string) list
-type listing
-(** The directories [reads] came from: canonical path and entries now. *)
-val listings : (string * string) list -> listing
-(** A judgment (taken under [token]) that read exactly [reads] in directories
-    that looked like the listing observes the same inputs now: equal entries
-    and canonical paths for those directories and equal bytes of regular files
-    for every read. *)
-val same_reads : view_token -> (string * string) list -> listing -> bool
+(** A filesystem observation made through this module, with its answer. *)
+type observation
+(** Run [f] and return every observation it made through [read], [read_text],
+    [exists], [kind], [realpath] and [readdir], with the answers it got. *)
+val recording : (unit -> 'a) -> 'a * observation list
+(** A judgment (taken under [token]) whose filesystem observations were
+    exactly [observations] observes the same inputs now: each observation,
+    repeated in the current view, gets the same answer (equal bytes for a
+    read). *)
+val same_reads : view_token -> observation list -> bool
 (** Whether compiler resources are pinned in the current scope. *)
 val has_pinned_files : unit -> bool
 
 (** Run [f] computing each directory's canonical spelling at most once (see
     source_input.ml). For one bounded judgment; never around a final guard. *)
 val with_path_memo : (unit -> 'a) -> 'a
+(** Run [f] resolving canonical spellings with one fresh table, independent of
+    any enclosing memo: for checks that must observe the filesystem anew. *)
+val with_fresh_path_memo : (unit -> 'a) -> 'a
+(** Run [f] with one canonical-spelling table per source view for the whole
+    scope (one compilation). [with_fresh_path_memo] still observes anew. *)
+val with_scope_path_memo : (unit -> 'a) -> 'a

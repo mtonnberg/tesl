@@ -52,7 +52,10 @@ let validate_root root =
 let resolve ~disk source name =
   if disk then Validation_common.resolve_local_import_path_with ~exists:Sys.file_exists ~realpath:Unix.realpath source name
   else Validation_common.resolve_local_import_path source name
-let verify_files t disk =
+(* One verification pass resolves each directory's canonical spelling once
+   (Source_input.with_path_memo); every file is still read and hashed. A disk
+   pass resolves anew, so it observes a directory replaced during the command. *)
+let verify_files t disk = (if disk then Source_input.with_fresh_path_memo else Source_input.with_path_memo) @@ fun () ->
   validate_root t.root;
   List.iter (fun guard ->
     let expected = if disk then guard.disk_path else guard.source_path in
@@ -86,7 +89,7 @@ let source_files t = protect (fun () ->
 type observations = { observed_files : (bool * string, string option) Hashtbl.t;
   observed_names : (bool * string, string list option) Hashtbl.t }
 let observations () = { observed_files=Hashtbl.create 64; observed_names=Hashtbl.create 16 }
-let create_with ~observed ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () ->
+let create_with ~observed ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () -> Source_input.with_path_memo @@ fun () ->
   let memo table compute key = match observed with
     | None -> compute key
     | Some o -> let table = table o in

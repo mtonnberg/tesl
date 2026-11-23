@@ -31,14 +31,16 @@ type stats = { hits : int; misses : int }
 
 type ('k, 'v) t = {
   limit : int;
-  mutable entries : ('k * Migration_proof_context.scope_token * 'v) list;
+  (* Entries by key, most recent first; [size] counts all of them. *)
+  entries : ('k, (Migration_proof_context.scope_token * 'v) list) Hashtbl.t;
+  mutable size : int;
   mutable hits : int;
   mutable misses : int;
 }
 
 let create ~limit =
-  let memo = { limit; entries = []; hits = 0; misses = 0 } in
-  resets := (fun () -> memo.entries <- []) :: !resets;
+  let memo = { limit; entries = Hashtbl.create 64; size = 0; hits = 0; misses = 0 } in
+  resets := (fun () -> Hashtbl.reset memo.entries; memo.size <- 0) :: !resets;
   memo
 
 let stats memo = { hits = memo.hits; misses = memo.misses }
@@ -50,15 +52,24 @@ let reset_stats memo = memo.hits <- 0; memo.misses <- 0
 let find ?(store = fun _ -> true) ?(any_scope = false) memo ~key ~guard compute =
   if !depth = 0 || not (enabled ()) then compute ()
   else
-    let matches (k, scope, _) = k = key && (any_scope || Migration_proof_context.same_scope scope) in
-    match List.find_opt (fun ((_, _, value) as entry) -> matches entry && guard value) memo.entries with
-    | Some (_, _, value) -> memo.hits <- memo.hits + 1; value
+    let matches (scope, _) = any_scope || Migration_proof_context.same_scope scope in
+    let bucket = Option.value (Hashtbl.find_opt memo.entries key) ~default:[] in
+    match List.find_opt (fun ((_, value) as entry) -> matches entry && guard value) bucket with
+    | Some (_, value) -> memo.hits <- memo.hits + 1; value
     | None ->
       memo.misses <- memo.misses + 1;
       let scope = Migration_proof_context.current_scope () in
       let value = compute () in
-      let others = List.filter (fun entry -> not (matches entry)) memo.entries in
-      if store value then
-        memo.entries <- (key, scope, value) :: List.filteri (fun index _ -> index < memo.limit - 1) others
-      else memo.entries <- others;
+      (* The computation may itself have used this memo. *)
+      let bucket = Option.value (Hashtbl.find_opt memo.entries key) ~default:[] in
+      let others = List.filter (fun entry -> not (matches entry)) bucket in
+      memo.size <- memo.size - List.length bucket + List.length others;
+      if store value then begin
+        if memo.size >= memo.limit then begin Hashtbl.reset memo.entries; memo.size <- 0 end;
+        let others = Option.value (Hashtbl.find_opt memo.entries key) ~default:[]
+          |> List.filter (fun entry -> not (matches entry)) in
+        Hashtbl.replace memo.entries key ((scope, value) :: others);
+        memo.size <- memo.size + 1
+      end else if others = [] then Hashtbl.remove memo.entries key
+      else Hashtbl.replace memo.entries key others;
       value

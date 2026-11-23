@@ -103,7 +103,7 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
   "database history bindings changed during compilation; rebuild from one source snapshot";
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
-let with_compilation_cache f = Parser.with_module_cache (fun () ->
+let with_compilation_cache f = Source_input.with_scope_path_memo @@ fun () -> Parser.with_module_cache (fun () ->
  Migration_history_sources.with_cache (fun () -> Migration_inventory.with_cache (fun () ->
   Migration_analysis_cache.with_scope f)))
 

@@ -18,28 +18,54 @@ let within root path =
    parent's canonical spelling plus its own name, exactly as realpath answers.
    A memo lives only for one bounded judgment (one discovery or one trust
    decision); the final source guards run outside it. *)
-let path_memo : (string, string) Hashtbl.t option ref = ref None
+type path_table = (string, (string, Unix.error) result) Hashtbl.t
+let path_memo : path_table option ref = ref None
+(* Inside [with_scope_path_memo], each source view (by its identity, see
+   [view_token] below) keeps one table for the whole scope. *)
+let scope_memo_active = ref false
+(* Set below, once views have identities: the current view's scope table. *)
+let scope_table : (unit -> path_table) ref = ref (fun () -> Hashtbl.create 1)
 let with_path_memo f = match !path_memo with
   | Some _ -> f ()
+  | None when !scope_memo_active -> f ()
   | None ->
     path_memo := Some (Hashtbl.create 64);
     Fun.protect ~finally:(fun () -> path_memo := None) f
-let rec real path = match !path_memo with
+let with_fresh_path_memo f =
+  let previous = !path_memo in
+  path_memo := Some (Hashtbl.create 64);
+  Fun.protect ~finally:(fun () -> path_memo := previous) f
+let scope_resets : (unit -> unit) list ref = ref []
+let with_scope_path_memo f =
+  if !scope_memo_active then f () else begin
+    scope_memo_active := true;
+    Fun.protect ~finally:(fun () -> scope_memo_active := false; List.iter (fun reset -> reset ()) !scope_resets) f
+  end
+let active_table () = match !path_memo with
+  | Some table -> Some table
+  | None -> if !scope_memo_active then Some (!scope_table ()) else None
+(* A path whose own lstat fails cannot resolve either: realpath reports the
+   same error for it. *)
+let rec real path = match active_table () with
   | None -> Unix.realpath path
   | Some memo ->
-    match Hashtbl.find_opt memo path with
-    | Some resolved -> resolved
-    | None ->
-      let name = Filename.basename path and parent = Filename.dirname path in
-      let resolved =
-        if Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then Unix.realpath path
-        else match Unix.lstat path with
-          | { Unix.st_kind = Unix.S_LNK; _ } -> Unix.realpath path
-          | _ -> (match real parent with
-              | resolved_parent -> Filename.concat resolved_parent name
-              | exception Unix.Unix_error _ -> Unix.realpath path)
-          | exception Unix.Unix_error _ -> Unix.realpath path in
-      Hashtbl.replace memo path resolved; resolved
+    let resolved = match Hashtbl.find_opt memo path with
+      | Some resolved -> resolved
+      | None ->
+        let name = Filename.basename path and parent = Filename.dirname path in
+        let resolved =
+          if Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then
+            (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
+          else match Unix.lstat path with
+            | { Unix.st_kind = Unix.S_LNK; _ } -> (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
+            | _ -> (match real parent with
+                | resolved_parent -> Ok (Filename.concat resolved_parent name)
+                | exception Unix.Unix_error _ -> (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error))
+            | exception Unix.Unix_error (error, _, _) -> Error error in
+        Hashtbl.replace memo path resolved; resolved in
+    match resolved with
+    | Ok resolved -> resolved
+    | Error error -> raise (Unix.Unix_error (error, "realpath", path))
 
 (* realpath also handles aliases of existing paths. For a proposed file, resolve
    its nearest existing ancestor before appending missing components. Do not
@@ -160,21 +186,53 @@ let find path =
   | Some contents -> Some (File contents)
   | None -> find_project path
 
-(* Active read recorders (see [recording]); each collects path and bytes. *)
-let recorders : (string * string) list ref list ref = ref []
+(* What a judgment observed of the filesystem through this module, with the
+   answer it got (see [recording]). An exception is kept as its text. *)
+type observation =
+  | Read of string * string
+  | Exists of string * bool
+  | Kind of string * string
+  | Real of string * string
+  | Listing of string * string
+let recorders : observation list ref list ref = ref []
+let observe make = if !recorders <> [] then begin
+    let observation = make () in
+    List.iter (fun recorder -> recorder := observation :: !recorder) !recorders end
+let outcome f = match f () with
+  | value -> Ok value
+  | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _ as error) -> Error error
+let answer show = function Ok value -> "=" ^ show value | Error error -> "!" ^ Printexc.to_string error
+let recorded show path make f =
+  let result = outcome f in
+  observe (fun () -> make path (answer show result));
+  match result with Ok value -> value | Error error -> raise error
 let read_using disk path =
   let contents = match find path with
     | Some (File contents) -> contents
     | Some Directory -> raise (Sys_error (path ^ ": is a directory"))
     | None -> disk path in
-  List.iter (fun recorder -> recorder := (path, contents) :: !recorder) !recorders;
+  observe (fun () -> Read (path, contents));
   contents
 let read = read_using (fun path -> In_channel.with_open_bin path In_channel.input_all)
 let read_text = read_using (fun path -> In_channel.with_open_text path In_channel.input_all)
-let exists path = match find path with Some _ -> true | None -> Sys.file_exists path
+(* Disk existence answers share the canonical-spelling memo (see [real]). *)
+let disk_exists path = match active_table () with
+  | None -> Sys.file_exists path
+  | Some memo ->
+    let key = "\001" ^ path in
+    match Hashtbl.find_opt memo key with
+    | Some (Ok answer) -> answer = "1"
+    | _ -> let answer = Sys.file_exists path in Hashtbl.replace memo key (Ok (if answer then "1" else "0")); answer
+let exists path =
+  let answer = match find path with Some _ -> true | None -> disk_exists path in
+  observe (fun () -> Exists (path, answer)); answer
 let is_directory path = match find path with
   | Some Directory -> true | Some (File _) -> false | None -> Sys.is_directory path
-let kind path = match find path with
+let kind_name = function
+  | Unix.S_REG -> "reg" | Unix.S_DIR -> "dir" | Unix.S_CHR -> "chr" | Unix.S_BLK -> "blk"
+  | Unix.S_LNK -> "lnk" | Unix.S_FIFO -> "fifo" | Unix.S_SOCK -> "sock"
+let rec kind path = recorded kind_name path (fun path answer -> Kind (path, answer)) (fun () -> kind_unrecorded path)
+and kind_unrecorded path = match find path with
   | None -> (Unix.lstat path).Unix.st_kind
   | Some entry ->
     let virtual_kind = match entry with Directory -> Unix.S_DIR | File _ -> Unix.S_REG in
@@ -184,10 +242,13 @@ let kind path = match find path with
      | info when info.Unix.st_kind = Unix.S_LNK -> Unix.S_LNK
      | _ -> virtual_kind
      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> virtual_kind)
-let realpath path = match find path with
-  | Some _ -> proposed_path path | None -> real path
+let realpath path = recorded Fun.id path (fun path answer -> Real (path, answer)) (fun () ->
+  match find path with
+  | Some _ -> proposed_path path | None -> real path)
 
-let readdir path = match !active, find path with
+let rec readdir path = recorded (fun names -> String.concat "\000" (Array.to_list names)) path
+    (fun path answer -> Listing (path, answer)) (fun () -> readdir_unrecorded path)
+and readdir_unrecorded path = match !active, find path with
   | None, _ | Some _, None -> Sys.readdir path
   | Some _, Some (File _) -> raise (Sys_error (path ^ ": not a directory"))
   | Some view, Some Directory ->
@@ -238,6 +299,17 @@ let canonical_token token =
   match List.find_opt (fun (alias, _) -> same_raw alias token) !equivalents with
   | Some (_, canonical) -> canonical | None -> token
 let view_token () : view_token = canonical_token (raw_token ())
+let scope_tables : (view_token * path_table) list ref = ref []
+let () =
+  scope_resets := (fun () -> scope_tables := []) :: !scope_resets;
+  scope_table := (fun () ->
+    let token = view_token () in
+    match List.find_opt (fun (t, _) -> same_raw t token) !scope_tables with
+    | Some (_, table) -> table
+    | None ->
+      let table = Hashtbl.create 256 in
+      scope_tables := (token, table) :: List.filteri (fun i _ -> i < 7) !scope_tables;
+      table)
 let same_view token = same_raw (canonical_token token) (view_token ())
 let with_equivalent_view parent f =
   let token = raw_token () in
@@ -247,32 +319,27 @@ let with_equivalent_view parent f =
     Fun.protect ~finally:(fun () -> equivalents := previous) f
   end
 
+let recorded_answer show f = answer show (outcome f)
 let recording f =
   let recorder = ref [] in
   recorders := recorder :: !recorders;
   let result = Fun.protect ~finally:(fun () -> recorders := List.filter (fun r -> r != recorder) !recorders) f in
   result, List.rev !recorder
 
-(* The directories a judgment read files from, with their canonical path and
-   entries in the current view: what import resolution, companion probes and
-   canonical-path checks observed there. *)
-type listing = (string * string * string list) list
-let listings reads : listing =
-  List.sort_uniq String.compare (List.map (fun (path, _) -> Filename.dirname path) reads)
-  |> List.map (fun dir -> dir, (try realpath dir with Unix.Unix_error _ | Sys_error _ -> ""),
-       (try Array.to_list (readdir dir) |> List.sort String.compare with Unix.Unix_error _ | Sys_error _ -> []))
-
-(* Whether a judgment whose only file contents were the recorded [reads] and
-   whose directories looked like [dirs] observes the same inputs in the current
-   view: equal entries and canonical paths for those directories (so every
-   existence probe and import resolution there answers the same), and every
-   read still a regular file with equal bytes. *)
-let same_reads (_ : view_token) reads (dirs : listing) =
-  listings reads = dirs &&
-  List.for_all (fun (path, bytes) ->
-    match kind path, read path with
-    | Unix.S_REG, current -> current == bytes || String.equal current bytes
-    | _ -> false
-    | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _) -> false) reads
+(* Whether a judgment whose only filesystem observations through this module
+   were [observations] observes the same inputs in the current view: every
+   observation, repeated now, gets the same answer (equal bytes for a read). *)
+let same_reads (_ : view_token) observations =
+  List.for_all (function
+    | Read (path, bytes) ->
+      (match read path with
+       | current -> current == bytes || String.equal current bytes
+       | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _) -> false)
+    | Exists (path, answer) -> exists path = answer
+    | Kind (path, answer) -> recorded_answer kind_name (fun () -> kind path) = answer
+    | Real (path, answer) -> recorded_answer Fun.id (fun () -> realpath path) = answer
+    | Listing (path, answer) ->
+      recorded_answer (fun names -> String.concat "\000" (Array.to_list names)) (fun () -> readdir path) = answer)
+    observations
 
 let has_pinned_files () = not (Paths.is_empty !pinned_files)

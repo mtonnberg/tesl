@@ -127,11 +127,10 @@ let edge_uncached ~project_root ~compiler ~file ~source =
    checkpoint, the application check and the capture. A decision is reused only
    under the identical source view (same overlays and pinned resources) in
    which it re-hashed every recorded input; any other view decides again. *)
-(* A decision is also reused in another view when every file it read has the
-   same bytes there and the directories they came from list the same entries
-   (Source_input.same_reads). *)
+(* A decision is also reused in another view when every filesystem
+   observation it made gets the same answer there (Source_input.same_reads). *)
 let edge_memo : (string * string * string * (string * string) option,
-  Source_input.view_token list ref * (string * string) list * Source_input.listing * evidence option) Migration_analysis_cache.t =
+  Source_input.view_token list ref * Source_input.observation list * evidence option) Migration_analysis_cache.t =
   Migration_analysis_cache.create ~limit:4096
 let edge ~project_root ~compiler ~file ~source =
   if full_history () then None else
@@ -139,11 +138,11 @@ let edge ~project_root ~compiler ~file ~source =
   let decide () =
     let token = Source_input.view_token () in
     let evidence,reads = Source_input.recording (fun () -> Source_input.with_path_memo (fun () -> edge_uncached ~project_root ~compiler ~file ~source)) in
-    ref [token],reads,Source_input.listings reads,evidence in
+    ref [token],reads,evidence in
   (* Trust re-hashes recorded bytes only; no proof scope shapes it. *)
-  let _,_,_,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
-    ~guard:(fun (tokens,reads,dirs,_) -> List.exists Source_input.same_view !tokens ||
-      (Source_input.same_reads (List.hd !tokens) reads dirs && (tokens := Source_input.view_token () :: !tokens; true))) decide in
+  let _,_,evidence = Migration_analysis_cache.find ~any_scope:true edge_memo ~key
+    ~guard:(fun (tokens,reads,_) -> List.exists Source_input.same_view !tokens ||
+      (Source_input.same_reads (List.hd !tokens) reads && (tokens := Source_input.view_token () :: !tokens; true))) decide in
   Option.iter (fun e -> trusted_log := e.root :: !trusted_log) evidence;
   evidence
 
