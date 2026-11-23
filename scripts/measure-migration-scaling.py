@@ -34,14 +34,21 @@ ENTITIES = ["Alpha", "Beta", "Gamma"]
 TOML = "# Synthetic scaling project; releases are frozen through compiler previews.\n"
 
 
-def plan(revisions):
-    """Return (fields per version, change per version)."""
+def plan(revisions, constant=False):
+    """Return (fields per version, change per version).
+
+    With [constant], every entity starts with three optional fields and every
+    release renames one of them, so the schema keeps its size and only the
+    history grows."""
     state = {e: {"id": "String", "name": "String"} for e in ENTITIES}
+    if constant:
+        for e in ENTITIES:
+            state[e].update({f"f{i}": "Maybe String" for i in range(1, 4)})
     history, changes = {1: {e: dict(f) for e, f in state.items()}}, {1: None}
     for version in range(2, revisions + 1):
         entity = ENTITIES[version % 3]
         optional = [k for k, t in state[entity].items() if t == "Maybe String"]
-        if version % 5 == 0 and optional:
+        if (constant or version % 5 == 0) and optional:
             old = optional[0]
             new = f"{old.split('r')[0]}r{version}"
             state[entity] = {(new if k == old else k): t for k, t in state[entity].items()}
@@ -122,6 +129,8 @@ def main():
     parser.add_argument("--compiler", type=Path, default=ROOT / "compiler/_build/default/bin/main.exe")
     parser.add_argument("--revisions", type=int, default=60)
     parser.add_argument("--full-history", action="store_true", help="set TESL_FULL_HISTORY=1 for every command")
+    parser.add_argument("--constant-schema", action="store_true",
+                        help="rename a field every release instead of growing the schema")
     parser.add_argument("--no-emit", action="store_true", help="skip the per-release Go emit")
     parser.add_argument("--keep", default="", help="comma-separated releases whose sources are copied to OUTPUT/snapshots/vN")
     args = parser.parse_args()
@@ -137,7 +146,7 @@ def main():
     if args.full_history:
         env["TESL_FULL_HISTORY"] = "1"
     entry, current = source / "app.tesl", source / "schema/scale/v-current.tesl"
-    history, changes = plan(args.revisions)
+    history, changes = plan(args.revisions, args.constant_schema)
     checked, records = {}, []
     for version in range(1, args.revisions + 1):
         seconds = {}
