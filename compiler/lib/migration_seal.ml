@@ -188,8 +188,7 @@ let verify_semantics ?stored_value_compatibility ~compiler_abi checked = protect
    | None,_ -> reject Abi_mismatch checked.root_file
        "legacy snapshot source is unchanged, but semantic comparison requires its recorded compiler ABI"
    | Some recorded,Some current when recorded = current -> ()
-   | Some _,_ -> reject Abi_mismatch checked.root_file
-       "snapshot requires the same explicit stored-value compatibility contract; changed semantics need revalidation");
+   | Some recorded,_ -> reject Abi_mismatch checked.root_file (Migration_abi.mismatch_message ~recorded));
   let inventory = match I.load_with_compatibility
       ~stored_value_compatibility:checked.seal.stored_value_compatibility ~compiler_abi ~root_file:checked.root_file with
     | Ok inventory -> inventory

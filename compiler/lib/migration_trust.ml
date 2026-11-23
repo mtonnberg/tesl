@@ -20,7 +20,9 @@
      reports the ordinary MIG013/MIG001 integrity diagnostic);
    - a seal recorded under another compiler ABI with the same stored-value
      contract (re-checked under the current compiler, as before trust existed);
-   - a different stored-value contract (refused with MIG013, unchanged);
+   - a different stored-value identity (refused with MIG013, naming what
+     changed and `tesl migrate revalidate`, which re-checks the complete
+     history under the new semantics and re-records the seals);
    - the current step (target VCurrent), which has no completed seal.
 
    Trust only removes repeated per-step judgments. Cross-step history analysis
@@ -59,7 +61,8 @@ let reset_trusted_roots () = trusted_log := []
 (* Both snapshot seals of one completed edge were recorded by this exact
    compiler build. The ABI identity covers the compiler, its embedded runtime and
    the lifted stdlib bytes, so equal identities also mean an equal stored-value
-   contract; a seal without an explicit contract (legacy v1) is never trusted. *)
+   identity; a seal without an explicit identity (legacy seal format v1) is never
+   trusted. *)
 let same_compiler ~compiler_abi ~stored_value_compatibility seals =
   List.for_all (fun seal ->
     Migration_seal.compiler_abi seal = compiler_abi &&

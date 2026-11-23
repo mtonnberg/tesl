@@ -329,12 +329,10 @@ let prepare ?stored_value_compatibility ~compiler_abi ~source (m : module_form) 
           | Ok abi ->
             let current = Migration_abi.stored_value_compatibility abi in
             let before,after = Migration_header.seals header in
-            if List.exists (fun seal -> match Migration_seal.stored_value_compatibility seal with
-                | Some recorded -> recorded <> current | None -> false) [before;after] then
-                reject "MIG013" declaration.loc
-                  "this migration history was sealed under a different stored-value compatibility \
-                   contract (another compiler or stdlib version); the production build refuses \
-                   it. Build with the compiler and stdlib that sealed it") source_seals;
+            match List.find_map (fun seal -> match Migration_seal.stored_value_compatibility seal with
+                | Some recorded when recorded <> current -> Some recorded | _ -> None) [before;after] with
+            | Some recorded -> reject "MIG013" declaration.loc (Migration_abi.mismatch_message ~recorded)
+            | None -> ()) source_seals;
       let closure = checked (Migration_closure.read ~file:m.source_file source) in
       Option.iter (fun located -> ignore (checked (Migration_closure.verify ~project_root
         ~root_file:(Validation_common.canonical_import_path m.source_file) ~source located))) closure;
