@@ -39,3 +39,7 @@ val diagnostics_batch : (string * string) list -> Frontend_check.diagnostic list
 
 (** Hit/miss counters of the compilation-scoped checked-plan memo (tests). *)
 val plan_cache_stats : unit -> Migration_analysis_cache.stats
+(** The values a compiled history publishes for this Contract, and what the
+    Contract prerequisite of a later revision reads from it. *)
+val record : t -> Migration_records.contract
+val view : t -> Migration_records.contract_view

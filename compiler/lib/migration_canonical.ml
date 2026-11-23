@@ -26,6 +26,34 @@ let encode root =
   emit root;
   Buffer.contents output
 
+(* Inverse of Migration_canonical.encode. *)
+let parse text =
+  let length = String.length text in
+  let fail () = invalid_arg "malformed checkpoint encoding" in
+  let rec number position acc =
+    if position >= length then fail () else
+    match text.[position] with
+    | '0'..'9' as c when acc < 1 lsl 40 -> number (position+1) (acc*10 + Char.code c - 48)
+    | ':' -> acc,position+1
+    | _ -> fail () in
+  let rec node position =
+    if position >= length then fail () else
+    match text.[position] with
+    | 's' ->
+      let size,start = number (position+1) 0 in
+      if start+size > length then fail ();
+      Bytes (String.sub text start size),start+size
+    | 'l' ->
+      let count,start = number (position+1) 0 in
+      let rec children n position acc =
+        if n=0 then Seq (List.rev acc),position else
+        let child,next = node position in children (n-1) next (child::acc) in
+      children count start []
+    | _ -> fail () in
+  let root,stop = node 0 in
+  if stop<>length then fail ();
+  root
+
 let domain_name = function
   | Snapshot -> "snapshot" | Migration -> "migration" | Same -> "same"
   | Repair -> "repair" | Contract -> "contract" | Provenance -> "provenance"

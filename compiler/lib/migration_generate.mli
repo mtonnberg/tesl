@@ -25,6 +25,12 @@ val start : compiler_abi:string -> project_root:string -> family:string ->
 val start_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> family:string -> version:int ->
   documents:Migration_manifest.document list -> (preview,error list) result
+(** [start_with_compatibility] for the selected connection's PostgreSQL
+    [namespace]: the frozen revision's checkpoint then also stores the records
+    its compiled history publishes (Migration_records). *)
+val start_with_namespace : namespace:string option -> stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> family:string -> version:int ->
+  documents:Migration_manifest.document list -> (preview,error list) result
 
 type decision_option = { id:string; label:string; template:string; help:string; needs_custom_code:bool }
 type decision = { id:string; entity:string; file:string; line:int; col:int; reason:string; options:decision_option list }
