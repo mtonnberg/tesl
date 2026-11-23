@@ -98,6 +98,11 @@ let current_compiler () =
   Option.map (fun abi -> Migration_abi.id abi, Migration_abi.stored_value_compatibility abi)
     (Result.to_option (Migration_abi.current ()))
 
+(* Recorded parse facts are trusted state: never used under full history. *)
+let () =
+  Migration_module_facts.disabled := full_history;
+  Migration_module_facts.current_abi := (fun () -> Option.map fst (current_compiler ()))
+
 (* Self-contained decision for a saved completed migration file reached only as
    history (not the module being queried). Any failure means "not trusted"; the
    caller then runs the full check, which reports the precise diagnostic. *)
@@ -114,8 +119,10 @@ let edge_uncached ~project_root ~compiler ~file ~source =
         if Validation_common.schema_module_relative_path migration_module
            |> Option.map (Filename.concat project_root) <> Some file then None
         else
-        (match Migration_header.verify ~project_root ~migration_module ~previous ~current located,
-               Migration_closure.verify ~project_root ~root_file:file ~source closure with
+        (* The closure first: its verified checkpoint supplies the parse facts
+           both verifications use. *)
+        let closure_checked = Migration_closure.verify ~project_root ~root_file:file ~source closure in
+        (match Migration_header.verify ~project_root ~migration_module ~previous ~current located, closure_checked with
          | Ok checked, Ok () ->
            of_verified ~compiler_abi ~stored_value_compatibility:(Some contract)
              ~root:migration_module ~header:(Some checked) ~closure:(Some closure)

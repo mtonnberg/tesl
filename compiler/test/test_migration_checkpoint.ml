@@ -272,9 +272,12 @@ let other_abi_ignored () = with_history (fun root path entry ->
   let abi = Migration_abi.id (Result.get_ok (Migration_abi.current ())) in
   let other = "tesl-source-abi-v1:another-compiler-build" in
   let length s = string_of_int (String.length s) in
-  (* Only the checkpoint's own compiler field; stored contracts embed the ABI too. *)
+  (* Only the checkpoint's own compiler field, in the state after the parse
+     facts line; the facts and stored contracts embed the ABI too. *)
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    Str.replace_first (Str.regexp_string ("s" ^ length abi ^ ":" ^ abi)) ("s" ^ length other ^ ":" ^ other) text)) [2;3;4];
+    let state = String.index_from text (String.index text '\n' + 1) '\n' + 1 in
+    String.sub text 0 state ^ Str.replace_first (Str.regexp_string ("s" ^ length abi ^ ":" ^ abi)) ("s" ^ length other ^ ":" ^ other)
+      (String.sub text state (String.length text - state)))) [2;3;4];
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history still emits" true (String.starts_with ~prefix:"ok\n" reference);
   check string "normal emission agrees" reference (with_full_history false (fun () -> emit entry));
@@ -342,7 +345,7 @@ let other_namespace () = with_history (fun _ _ entry ->
 (* A checkpoint in an earlier format came from an earlier compiler: ignored. *)
 let earlier_format_ignored () = with_history (fun _ path entry ->
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    replace "tesl-migration-checkpoint-v2\n" "tesl-migration-checkpoint-v1\n" text)) [2;3;4];
+    replace "tesl-migration-checkpoint-v3\n" "tesl-migration-checkpoint-v2\n" text)) [2;3;4];
   check (option int) "an earlier format is not resumed" None (with_full_history false (fun () -> resumed_through entry));
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);

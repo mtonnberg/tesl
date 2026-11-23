@@ -26,8 +26,9 @@ let encode root =
   emit root;
   Buffer.contents output
 
-(* Inverse of Migration_canonical.encode. *)
-let parse text =
+(* Inverse of Migration_canonical.encode, for the node starting at [from]:
+   the node and the position after it. *)
+let parse_at text ~from =
   let length = String.length text in
   let fail () = invalid_arg "malformed checkpoint encoding" in
   let rec number position acc =
@@ -50,8 +51,12 @@ let parse text =
         let child,next = node position in children (n-1) next (child::acc) in
       children count start []
     | _ -> fail () in
-  let root,stop = node 0 in
-  if stop<>length then fail ();
+  node from
+
+(* Inverse of Migration_canonical.encode. *)
+let parse text =
+  let root,stop = parse_at text ~from:0 in
+  if stop<>String.length text then invalid_arg "malformed checkpoint encoding";
   root
 
 let domain_name = function

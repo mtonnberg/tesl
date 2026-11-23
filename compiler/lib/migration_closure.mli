@@ -14,6 +14,16 @@ val verify : project_root:string -> root_file:string -> source:string -> located
   (unit, Migration_sparse.error list) result
 (** The generated checkpoint beside a completed migration root (v<n>.checkpoint). *)
 val checkpoint_file : string -> string
+(** A root's bytes without its frozen-source block (the bytes its closure seal
+    hashes); None when the block is malformed. *)
+val without_block : file:string -> string -> string option
+(** The declared name and imports of a module's bytes (for a root, without its
+    frozen-source block): recorded facts (Migration_module_facts), else a parse. *)
+type parsed = Recorded of Migration_module_facts.t | Parsed of Ast.module_form
+val parsed_facts : parsed -> Migration_module_facts.t
+val source_facts : file:string -> string -> (parsed, Parser.parse_error) result
+(** The imports of [source_facts], in source order. *)
+val imports : file:string -> string -> (string list, Parser.parse_error) result
 (** SHA-256 of the root's checkpoint recorded in this block, if any. [verify]
     refuses a recorded checkpoint whose bytes differ (MIG013). *)
 val checkpoint : located -> string option

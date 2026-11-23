@@ -166,31 +166,35 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
         let path = module_path name in
         require_regular path;
         let contents = Source_input.read path in
-        let m = match Parser.parse_module path contents with
+        (* Recorded parse facts of a frozen module's bytes stand for its parse
+           (Migration_module_facts); other modules are parsed. *)
+        let m = match Migration_closure.source_facts ~file:path contents with
           | Ok m -> m
-          | Err error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.msg}) in
-        if m.module_name <> name then reject path ("history module must declare " ^ name);
+          | Error error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.msg}) in
+        if (Migration_closure.parsed_facts m).module_name <> name then reject path ("history module must declare " ^ name);
         Hashtbl.add sources path (Migration_hash.digest contents);
         Hashtbl.add parsed name (m, contents);
         m, contents in
-    let check_import source (imp : Ast.import_decl) =
-      let expected = module_path imp.module_name in
-      let resolved = Validation_common.resolve_local_import_path source imp.module_name in
+    let imports m = (Migration_closure.parsed_facts m).Migration_module_facts.imports in
+    let check_import source imported =
+      let expected = module_path imported in
+      let resolved = Validation_common.resolve_local_import_path source imported in
       if resolved <> expected then reject resolved
         ("history import must resolve to its canonical module path: " ^ expected);
-      import_resolutions := (source, imp.module_name, expected) :: !import_resolutions in
+      import_resolutions := (source, imported, expected) :: !import_resolutions in
     let schema_modules = Hashtbl.create 32 in
     let rec visit_schema prefix name =
       if not (Hashtbl.mem schema_modules name) then begin
         Hashtbl.add schema_modules name ();
         let m, _ = read_module name in
-        List.iter (fun (imp : Ast.import_decl) ->
-          if String.starts_with ~prefix:"Tesl." imp.module_name then ()
-          else if Migration_schema.within prefix imp.module_name then begin
-            check_import m.source_file imp;
-            visit_schema prefix imp.module_name
-          end else reject ~kind:Invalid_source m.source_file
-            ("schema import escapes its revision: " ^ imp.module_name)) m.imports
+        let source_file = module_path name in
+        List.iter (fun imported ->
+          if String.starts_with ~prefix:"Tesl." imported then ()
+          else if Migration_schema.within prefix imported then begin
+            check_import source_file imported;
+            visit_schema prefix imported
+          end else reject ~kind:Invalid_source source_file
+            ("schema import escapes its revision: " ^ imported)) (imports m)
       end in
     let specs = ref [] in
     let load_inventory compiler_abi stored_value_compatibility expected path =
@@ -224,7 +228,11 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
       let file = module_path (Printf.sprintf "%s.Migrate.V%d" family (version+1)) in
       (try Migration_trust.edge ~project_root:root ~compiler:(Lazy.force compiler) ~file ~source:(Source_input.read file) <> None
        with Sys_error _ | Unix.Unix_error _ -> false) in
-    let frozen = List.map (fun (version, path) -> load_schema ~defer:(covered version) version ("V" ^ string_of_int version) path) snapshots in
+    (* Coverage first: the covering migration's verified checkpoint supplies
+       the parse facts of the schema's modules. *)
+    let frozen = List.map (fun (version, path) ->
+      let defer = covered version in
+      load_schema ~defer version ("V" ^ string_of_int version) path) snapshots in
     let current = load_schema current_version "VCurrent" current_path in
     let schema_inputs = Hashtbl.to_seq sources |> List.of_seq |> List.sort compare in
     let schema_imports = List.sort_uniq compare !import_resolutions in
@@ -233,19 +241,24 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
       if not (Hashtbl.mem migration_modules name) then begin
         Hashtbl.add migration_modules name ();
         let m, _ = read_module name in
-        (match Migration_schema.check_databases m with
-         | error :: _ -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.message})
-         | [] -> ());
-        List.iter (fun (imp : Ast.import_decl) ->
-          if String.starts_with ~prefix:"Tesl." imp.module_name then ()
+        let source_file = module_path name in
+        (* Recorded facts belong to a frozen closure whose bytes passed this
+           check when the revision was frozen. *)
+        (match m with
+         | Migration_closure.Recorded _ -> ()
+         | Migration_closure.Parsed m -> match Migration_schema.check_databases m with
+           | error :: _ -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.message})
+           | [] -> ());
+        List.iter (fun imported ->
+          if String.starts_with ~prefix:"Tesl." imported then ()
           else begin
-            check_import m.source_file imp;
-            if Migration_schema.migration_family imp.module_name = Some family then
-              visit_migration imp.module_name
-            else if not (Hashtbl.mem schema_modules imp.module_name) then
-              reject ~kind:Invalid_source m.source_file
-                ("migration imports a schema module outside the discovered ownership closures: " ^ imp.module_name)
-          end) m.imports
+            check_import source_file imported;
+            if Migration_schema.migration_family imported = Some family then
+              visit_migration imported
+            else if not (Hashtbl.mem schema_modules imported) then
+              reject ~kind:Invalid_source source_file
+                ("migration imports a schema module outside the discovered ownership closures: " ^ imported)
+          end) (imports m)
       end in
     let read_migration version path =
       let name = Printf.sprintf "%s.Migrate.V%d" family version in

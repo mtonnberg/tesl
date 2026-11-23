@@ -41,10 +41,10 @@ let capture ~project_root ~inputs = protect(fun()->
     Hashtbl.replace files file bytes;
     (* Every read is guarded before its bytes select more inputs. Combining
        manifests preserves those observations instead of recapturing them. *)
-    let imports=match Parser.parse_module file bytes with
-     | Err _ -> [] (* the ordinary diagnostic preserves malformed-source detail *)
-     | Ok m -> List.filter_map(fun(i:Ast.import_decl)->
-        if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports in
+    let imports=match Migration_closure.imports ~file bytes with
+     | Error _ -> [] (* the ordinary diagnostic preserves malformed-source detail *)
+     | Ok imports -> List.filter_map(fun name->
+        if String.starts_with ~prefix:"Tesl." name then None else Some(file,name))imports in
     let imported=extend ~reads:[] ~dirs:[] ~imports in
     List.iter(fun(child,_)->if child<>file then visit child)imported;
     let scopes=D.owned_scopes "schema" file @ D.owned_scopes "migrations" file |> List.sort_uniq compare in

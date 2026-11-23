@@ -107,11 +107,11 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       (Option.get (Validation_common.schema_module_relative_path (family ^ ".Migrate.V2"))))} in
   let reads = List.map fst sources @ List.map fst (H.source_inputs h) |> List.sort_uniq String.compare in
   let imports = List.concat_map (fun file ->
-    let m = match List.assoc_opt file sources with
-      | Some (m,_) -> m
-      | None -> (match Parser.parse_module file (Source_input.read file) with Ok m -> m | Err e -> reject e.loc e.msg) in
-    List.filter_map (fun (i : import_decl) ->
-      if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
+    let imports = match List.assoc_opt file sources with
+      | Some (m,_) -> List.map (fun (i : import_decl) -> i.module_name) m.imports
+      | None -> (match Migration_closure.imports ~file (Source_input.read file) with Ok imports -> imports | Error e -> reject e.loc e.msg) in
+    List.filter_map (fun name ->
+      if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) reads in
   (* The combined guard below and every caller's final verification recheck
      all of these observations. *)
   let complete = manifest (M.create_observed (M.observations ()) ~project_root:root ~reads ~imports ~documents

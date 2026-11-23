@@ -171,9 +171,10 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
     let original_reads = List.map fst (H.source_inputs h) in
     let reads = original_reads @ frozen_inputs in
     let imports = List.concat_map (fun file ->
-      let m = parse file (Source_input.read file) in
-      List.filter_map (fun (i : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) original_reads in
+      let imports = match Migration_closure.imports ~file (Source_input.read file) with
+        | Ok imports -> imports | Error e -> reject file e.msg in
+      List.filter_map (fun name ->
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) original_reads in
     let source_manifest = manifest (M.create ~project_root:root ~reads
       ~directories:[Filename.dirname current.root_file;Filename.dirname (module_path root (family ^ ".Migrate.V1"))]
       ~imports ~documents ~writes) in

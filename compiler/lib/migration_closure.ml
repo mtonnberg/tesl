@@ -74,9 +74,18 @@ let read_raw ~file source =
     if List.exists (fun line -> reserved line.text) rest then malformed ();
     if last.stop=String.length source && not (String.ends_with ~suffix:"\n" source) then malformed ();
     Some {seal={root;sources;checkpoint= !checkpoint};start_offset=first.offset;end_offset=last.stop;loc=Location.dummy_loc file}
-let read ~file source = protect file (fun () -> read_raw ~file source)
+(* A pure function of the file name and bytes: decoded once (see
+   Migration_header.read). *)
+let read_memo : (located option, E.error list) result Hash.Text_table.t = Hash.Text_table.create 64
+let read ~file source = match Hash.Text_table.find_opt read_memo (file,source) with
+  | Some result -> result
+  | None ->
+    let result = protect file (fun () -> read_raw ~file source) in
+    if Hash.Text_table.length read_memo >= 4096 then Hash.Text_table.reset read_memo;
+    Hash.Text_table.replace read_memo (file,source) result; result
 let remove source located = String.sub source 0 located.start_offset ^ String.sub source located.end_offset (String.length source-located.end_offset)
-let without ~file source = match read_raw ~file source with None -> source | Some located -> remove source located
+let without ~file source = match read ~file source with
+  | Ok None -> source | Ok (Some located) -> remove source located | Error errors -> raise (Invalid errors)
 let encode seal = opening ^ seal.root ^ "\n" ^
   String.concat "" (List.map (fun (name,digest) -> member ^ name ^ " " ^ digest ^ "\n") seal.sources) ^
   Option.fold ~none:"" ~some:(fun digest -> checkpoint_member ^ digest ^ "\n") seal.checkpoint ^ closing ^ "\n"
@@ -89,33 +98,48 @@ let mentions_file ~project_root ~file located = List.exists (fun (name,_) -> pat
 let regular file =
   if Input.kind file <> Unix.S_REG || Input.realpath file <> file then
     reject file "frozen migration sources must be canonical regular files"
+(* Facts of [contents] (a root's bytes without its frozen-source block, as its
+   seal hashes them): recorded ones, else a parse. *)
+type parsed = Recorded of Migration_module_facts.t | Parsed of Ast.module_form
+let parsed_facts = function Recorded facts -> facts | Parsed m -> Migration_module_facts.of_module m
+let lookup file contents =
+  match Migration_module_facts.find (Hash.digest contents) with
+  | Some facts -> Ok (Recorded facts)
+  | None -> match Parser.parse_module file contents with
+    | Ok m -> Ok (Parsed m) | Err error -> Error error
+let facts file contents = Result.map parsed_facts (lookup file contents)
+let source_facts ~file source = match without ~file source with
+  | bytes -> lookup file bytes
+  | exception Invalid _ -> lookup file source
+let imports ~file source = Result.map (fun parsed -> (parsed_facts parsed).Migration_module_facts.imports) (source_facts ~file source)
+let without_block ~file source = try Some (without ~file source) with Invalid _ -> None
 let collect ~project_root ~root_file ~source =
-  let parse file contents = match Parser.parse_module file contents with
-    | Ok m -> m | Err error -> reject file error.msg in
-  let entry = parse root_file source in
-  let root = entry.Ast.module_name in
+  let parse file contents = match facts file contents with
+    | Ok m -> m | Error (error : Parser.parse_error) -> reject file error.msg in
+  let entry = parse root_file (without ~file:root_file source) in
+  let root = entry.Migration_module_facts.module_name in
   if not (valid_root root) || path project_root root <> root_file then
     reject root_file "frozen migration root must use its canonical versioned path";
   let found = Hashtbl.create 16 in
   let rec visit name file contents =
     if not (Hashtbl.mem found name) then begin
       regular file;
-      let m = parse file contents in
-      if m.Ast.module_name <> name then reject file ("frozen migration source must declare " ^ name);
       let bytes = if name=root then without ~file contents else contents in
+      let m = parse file bytes in
+      if m.module_name <> name then reject file ("frozen migration source must declare " ^ name);
       Hashtbl.add found name (Hash.digest bytes);
-      List.iter (fun (imp : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." imp.module_name then ()
-        else if Schema.migration_family imp.module_name=Some (family root) then begin
-          let expected = path project_root imp.module_name in
-          if V.resolve_local_import_path file imp.module_name <> expected then
-            reject file ("frozen migration import changed resolution: " ^ imp.module_name);
-          if not (Hashtbl.mem found imp.module_name) then begin
-            regular expected; visit imp.module_name expected (Input.read expected)
+      List.iter (fun imported ->
+        if String.starts_with ~prefix:"Tesl." imported then ()
+        else if Schema.migration_family imported=Some (family root) then begin
+          let expected = path project_root imported in
+          if V.resolve_local_import_path file imported <> expected then
+            reject file ("frozen migration import changed resolution: " ^ imported);
+          if not (Hashtbl.mem found imported) then begin
+            regular expected; visit imported expected (Input.read expected)
           end
-        end else match Schema.schema_prefix imp.module_name with
+        end else match Schema.schema_prefix imported with
           | Some prefix when String.starts_with ~prefix:(family root ^ ".V") prefix && not (String.ends_with ~suffix:".VCurrent" prefix) -> ()
-          | _ -> reject file ("completed migration import escapes frozen ownership: " ^ imp.module_name)
+          | _ -> reject file ("completed migration import escapes frozen ownership: " ^ imported)
       ) m.imports
     end in
   visit root root_file source;
@@ -145,7 +169,10 @@ let verify ~project_root ~root_file ~source located = protect root_file (fun () 
   Option.iter (fun digest ->
     let file = checkpoint_file root_file in
     regular file;
-    if Hash.digest (Input.read file) <> digest then
-      reject file "recorded migration checkpoint changed; restore it, or run the full-history check to find which bytes differ") located.seal.checkpoint;
+    let bytes = Input.read file in
+    if Hash.digest bytes <> digest then
+      reject file "recorded migration checkpoint changed; restore it, or run the full-history check to find which bytes differ";
+    (* Verified: its recorded parse facts may replace parses below. *)
+    Migration_module_facts.load_checkpoint bytes) located.seal.checkpoint;
   let actual = collect ~project_root ~root_file ~source in
   if {actual with checkpoint=located.seal.checkpoint} <> located.seal then reject root_file "frozen migration source or Contract companion closure changed; restore it and prepare the Contract before starting the next revision")
