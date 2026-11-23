@@ -588,13 +588,14 @@ promise that every migration can run with every old application still serving.
 For a compatible adjacent Kubernetes rollout, the order is:
 
 ```text
-worker --install → worker ready → roll Request pods → old pods/claims drain → deploy/Contract
+install Job (or worker --install) → worker ready → roll Request pods → old pods/claims drain → deploy/Contract
 ```
 
 The finite `--schema deploy` command completes retirement. Running it as a
 pre-upgrade hook while the controller still keeps old pods alive can wait for
 those very pods. Use the [rolling example](../example/kubernetes-rolling/README.md)
-for that ordering. A stop → deploy → start pipeline is a useful finite deployment
+for that ordering; it runs `--schema install` as a separate one-off Job so the
+long-running Worker never holds the Installer credentials. A stop → deploy → start pipeline is a useful finite deployment
 route, but does not promise continuous availability.
 
 See [operating a migration](migration-operations.md) for credentials, blockers and

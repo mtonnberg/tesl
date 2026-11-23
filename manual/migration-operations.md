@@ -103,17 +103,22 @@ from retrieving startup credentials. PostgreSQL still checks the Worker login's
 permissions on its connection.
 
 For the [Kubernetes rolling example](../example/kubernetes-rolling/README.md),
-the order is database → migrator Worker ready → application rolling update →
-retirement Job. `/worker.sh` runs `--schema worker --install`; there is no separate
-pre-install Job. The migrator runtime Secret contains Worker DDL credentials and
-the Installer DSN, while the app Request Secret contains no privileged credentials.
-The remaining app post-install/post-upgrade hook runs finite `--schema deploy`:
-it catches up and completes the reviewed target Contract after old applications
-and their claims drain. Running that retirement command before rolling old pods
-can wait for pods that the deployment controller has not yet replaced.
+the order is database → install Job → migrator Worker ready → application
+rolling update → retirement Job. A Helm pre-install/pre-upgrade hook Job holds
+the Installer credentials, runs `app --schema install --worker demo_worker
+--request demo_request` and exits; Helm then creates or updates the Worker
+Deployment, whose `/worker.sh` runs plain `--schema worker`. The Worker runtime
+Secret contains only Worker DDL credentials and no Installer DSN, and the app
+Request Secret contains no privileged credentials. This keeps the Installer
+credential out of every long-running pod, at the cost of one more Job per
+release. The remaining app post-install/post-upgrade hook runs finite
+`--schema deploy`: it catches up and completes the reviewed target Contract
+after old applications and their claims drain. Running that retirement command
+before rolling old pods can wait for pods that the deployment controller has
+not yet replaced.
 
-The combined startup has a recorded local Kubernetes run: 731 successful samples,
-no failed samples, both application-version overlaps and 121 correct final job
+This ordering has a recorded local Kubernetes run: 805 successful samples, no
+failed samples, both application-version overlaps and 133 correct final job
 receipts. See the [example's evidence and limits](../example/kubernetes-rolling/README.md#files-and-evidence).
 This verifies those compatible adjacent changes in the sampled local workload;
 it is not a production availability guarantee for arbitrary migrations.
