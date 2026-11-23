@@ -145,8 +145,12 @@ let source_files t = protect (fun () ->
    is read once, and every later manifest records that original observation.
    The capture's final union rechecks every guard against fresh reads. *)
 type observations = { observed_files : (bool * string, string option) Hashtbl.t;
-  observed_names : (bool * string, string list option) Hashtbl.t }
-let observations () = { observed_files=Hashtbl.create 64; observed_names=Hashtbl.create 16 }
+  observed_names : (bool * string, string list option) Hashtbl.t;
+  observed_roots : (string, unit) Hashtbl.t;
+  (* One disk pass for every manifest of the set (each path probed once). *)
+  observed_resolver : (string -> string -> string) Lazy.t }
+let observations () = { observed_files=Hashtbl.create 64; observed_names=Hashtbl.create 16;
+  observed_roots=Hashtbl.create 1; observed_resolver=lazy (disk_pass ()) }
 let create_with ~observed ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () -> Source_input.with_path_memo @@ fun () ->
   let memo table compute key = match observed with
     | None -> compute key
@@ -156,8 +160,12 @@ let create_with ~observed ~project_root:root ~reads ~directories ~imports ~docum
       | None -> let value = compute key in Hashtbl.replace table key value; value in
   let file_bytes ~disk path = memo (fun o -> o.observed_files) (fun (disk,path) -> file_bytes ~disk path) (disk,path) in
   let names ~disk path = memo (fun o -> o.observed_names) (fun (disk,path) -> names ~disk path) (disk,path) in
-  validate_root root;
-  let resolve_disk = disk_pass () in
+  (* Manifests sharing one observation set validate their common root once. *)
+  (match observed with
+   | Some o when Hashtbl.mem o.observed_roots root -> ()
+   | Some o -> validate_root root; Hashtbl.replace o.observed_roots root ()
+   | None -> validate_root root);
+  let resolve_disk = match observed with Some o -> Lazy.force o.observed_resolver | None -> disk_pass () in
   let documents = normalized_documents root documents in
   let imports = List.sort_uniq compare imports |> List.map (fun (source,name) ->
     canonical root source;
@@ -171,7 +179,9 @@ let create_with ~observed ~project_root:root ~reads ~directories ~imports ~docum
     if Paths.mem path map then reject path "duplicate output path";
     Paths.add path source map) Paths.empty writes in
   let overlay_root = Option.value (Source_input.project_root ()) ~default:root in
-  Source_input.with_overlays ~project_root:overlay_root (Paths.bindings writes) (fun () -> ());
+  (* Validates the proposed output paths in a source view; no writes, no view. *)
+  if not (Paths.is_empty writes) then
+    Source_input.with_overlays ~project_root:overlay_root (Paths.bindings writes) (fun () -> ());
   let paths = reads @ List.map fst (Paths.bindings writes) @ List.map (fun (d : document) -> d.path) documents @
     List.concat_map (fun g -> [g.source;g.source_path;g.disk_path]) imports
     |> List.sort_uniq String.compare in
