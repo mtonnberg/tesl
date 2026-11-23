@@ -72,7 +72,7 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -158,7 +158,10 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
            state through V<n>, derived from exactly these proposed sources. Its
            digest joins the frozen-source block, outside the root digest. *)
         let checkpoint = overlay root ((migration.path,attached) :: others) (fun () ->
-          Migration_checkpoint.derive ?stored_value_compatibility ~compiler_abi ~project_root:root ~family ~through:n ()) in
+          Migration_checkpoint.derive ?stored_value_compatibility ?namespace ~compiler_abi ~project_root:root ~family ~through:n
+            ~check_contract:(fun ~plan ~namespace ~file ~source ->
+              Result.map (fun c -> Migration_contract.record c,Migration_contract.view c)
+                (Migration_contract.check ~plan ~namespace ~file ~source)) ()) in
         match checkpoint with
         | None -> (migration.path,attached) :: others
         | Some text ->
@@ -186,6 +189,7 @@ let start_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
+let start_with_compatibility = start_with_namespace ~namespace:None
 let start = start_with_compatibility ~stored_value_compatibility:None
 
 module Syntax = Migration_source_syntax

@@ -110,7 +110,7 @@ let seals_and_closures ~context ~project_root:root ~family =
 
 (* Add the recomputed checkpoints. [derive] returns None when the prefix no
    longer checks; the caller has already reported the full diagnostics. *)
-let with_checkpoints ~context ~project_root:root ~family (closed,reads,(recorded_identities,recorded_abis),identity,_) =
+let with_checkpoints ?namespace ~context ~project_root:root ~family (closed,reads,(recorded_identities,recorded_abis),identity,_) =
   protect (fun () ->
   let abi = A.id context in
   let roots = List.map (fun (e,source,_) -> e.migration.path,source) closed in
@@ -118,8 +118,13 @@ let with_checkpoints ~context ~project_root:root ~family (closed,reads,(recorded
     match closure with
     | Some closure when e.checkpointed ->
       let text = overlay root roots (fun () ->
-        Migration_checkpoint.derive ~stored_value_compatibility:identity ~compiler_abi:abi
-          ~project_root:root ~family ~through:e.migration.version ()) in
+        (* Exactly what a fresh freeze records (Migration_generate), including the
+           per-revision records published for the application's namespace. *)
+        Migration_checkpoint.derive ~stored_value_compatibility:identity ?namespace ~compiler_abi:abi
+          ~project_root:root ~family ~through:e.migration.version
+          ~check_contract:(fun ~plan ~namespace ~file ~source ->
+            Result.map (fun c -> Migration_contract.record c,Migration_contract.view c)
+              (Migration_contract.check ~plan ~namespace ~file ~source)) ()) in
       (match text with
        | None -> fail e.migration.path (Printf.sprintf
            "the checkpoint of V%d cannot be recomputed under the new stored-value semantics" e.migration.version)

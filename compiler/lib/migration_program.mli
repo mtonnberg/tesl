@@ -4,9 +4,9 @@ type origin = {
   initial_version : int;
   steps : (Migration_expansion.step list, Migration_sparse.error list) result;
 }
-type queue_payload = {job:string;contract:string;contract_hash:string}
-type queue_contract = {queue:string;payloads:queue_payload list}
-type queue_version = {version:int;storage_snapshot_hash:string;schema_snapshot_hash:string;
+type queue_payload = Migration_records.queue_payload = {job:string;contract:string;contract_hash:string}
+type queue_contract = Migration_records.queue_contract = {queue:string;payloads:queue_payload list}
+type queue_version = Migration_records.queue_version = {version:int;storage_snapshot_hash:string;schema_snapshot_hash:string;
  source_seal_inventory:string;contracts:queue_contract list}
 type queue_binding = {application_queue:string;database_identity:string;family:string;queue_identity:string;
  current_version:int;jobs:(string * string * string) list}
@@ -59,6 +59,13 @@ val with_source_history : ?resume:bool -> entry:Ast.module_form -> source:string
 val source_program : source_history -> t
 val source_modules : source_history -> (Ast.module_form * string) list
 val row_histories : source_history -> (string * Migration_row_history.t) list
+(** Every per-revision record the capture's artifacts publish for one database
+    (Migration_records): checkpoint records for a resumed prefix followed by
+    records computed for the later revisions. *)
+val records : source_history -> string -> Migration_records.t
+(** The checkpointed revision a publishing capture of this database continued
+    from (its [row_histories] then hold only that revision and later ones). *)
+val resumed_through : source_history -> string -> int option
 
 (** Must run inside the capture callback. Revalidates complete source/ABI guards
     and exact ownership-preserving lowered graph, including private helpers. *)

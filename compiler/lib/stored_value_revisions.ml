@@ -52,7 +52,7 @@ let families = [
     "compiler/lib/validation_proof.ml","457f3c7ff53e09c89347541e87f6d0d48650c2afc619a43598adb3e06f841619";
   ]};
   {name="canonical-storage-mapping"; revision=1; files=[
-    "compiler/lib/migration_canonical.ml","2555dbfb77840dc507372fb324c7c1226bb797090a6a7e55d5ea67ed110ecc9b";
+    "compiler/lib/migration_canonical.ml","a2d10d8aaa08fcbbe16a6f6e29d0028b36bf9c82f26e1668e6d1bcc5481310c4";
     "compiler/lib/migration_ir.ml","81b88ff91e6f5b76274a36bf2ee263a499993796695556f7aedbf24a308e9828";
     "compiler/lib/migration_storage.ml","f249f603c936ce49f1d46d39a1c804223a1f9b378fff273a8685166fe501f022";
     "compiler/lib/validation_sql_codec.ml","916e37858fcec84d3553907f7a3032a2d93a7adfc03c545fca86216533174241";

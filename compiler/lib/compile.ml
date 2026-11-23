@@ -22,11 +22,7 @@ let collapse_changed_current (diagnostics : diagnostic list) =
     | Some key -> Hashtbl.add seen key (); true) diagnostics
 
 (* Several migration checks (the entry's history, its migrations and their
-   Contract companions) can report the very same error. Keep the first copy of
-   each identical diagnostic; distinct ones keep their order. *)
-let drop_identical (diagnostics : diagnostic list) =
-  let seen = Hashtbl.create 16 in
-  List.filter (fun d -> if Hashtbl.mem seen d then false else (Hashtbl.add seen d (); true)) diagnostics
+   Contract companions) can also report the same error; see drop_identical. *)
 let check_module ?skip_dep_body source m =
   Migration_program.with_compilation_cache (fun () ->
   match Migration_application.with_contexts ~source m (fun () ->

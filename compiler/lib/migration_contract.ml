@@ -376,3 +376,9 @@ let diagnostics_batch sources =
  List.concat_map (fun (file,source) -> match Parser.parse_module file source with
   | Err e -> [Frontend_check.diag_of_parse_error e]
   | Ok m -> diagnostics_with check_module source m) sources
+
+(* Published record and prerequisite view (Migration_records). *)
+let record t = {Migration_records.contract_version=version t;encoded=encoded t;digest=digest t;
+  settled=settled_encoded t;settled_hash=settled_hash t}
+let view t = {Migration_records.view_version=version t;view_family=family t;view_namespace=namespace t;
+  view_window=window t;view_settled=settled t}

@@ -9,15 +9,14 @@ let to_json ~quote source =
  P.unresumed program;
  let database (database:P.database) =
   let history=List.assoc database.identity (P.row_histories source) in
+  (* The plan judgment stays in every build; resumed builds plan their later
+     revisions from the checkpointed state. *)
   match R.plan history with
   | Error errors -> Error errors
-  | Ok plan ->
-   let version v =
-    let contract,hash=H.contract C.Migration (version_node ~family:database.family ~namespace:database.namespace plan v) in
-    Printf.sprintf {|{"contract":%s,"hash":%s}|} (quote contract) (quote hash) in
+  | Ok _ ->
    Ok (Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s}|}
     (quote database.identity) (quote database.family) (quote database.namespace) database.current_version
-    (array version (R.versions plan))) in
+    (array (Migration_records.physical_json ~quote) (P.records source database.identity).physical)) in
  let databases=List.map database (P.databases program) in
  let errors=List.concat_map (function Error errors -> errors | Ok _ -> []) databases in
  if errors<>[] then Error errors else

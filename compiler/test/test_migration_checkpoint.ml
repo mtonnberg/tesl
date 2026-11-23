@@ -272,8 +272,9 @@ let other_abi_ignored () = with_history (fun root path entry ->
   let abi = Migration_abi.id (Result.get_ok (Migration_abi.current ())) in
   let other = "tesl-source-abi-v1:another-compiler-build" in
   let length s = string_of_int (String.length s) in
+  (* Only the checkpoint's own compiler field; stored contracts embed the ABI too. *)
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    replace ("s" ^ length abi ^ ":" ^ abi) ("s" ^ length other ^ ":" ^ other) text)) [2;3;4];
+    Str.replace_first (Str.regexp_string ("s" ^ length abi ^ ":" ^ abi)) ("s" ^ length other ^ ":" ^ other) text)) [2;3;4];
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history still emits" true (String.starts_with ~prefix:"ok\n" reference);
   check string "normal emission agrees" reference (with_full_history false (fun () -> emit entry));
@@ -296,6 +297,57 @@ let without_checkpoints () = with_history (fun root path entry ->
   check bool "previews still work" true
     (not (String.starts_with ~prefix:"error" (with_full_history false (fun () -> preview_text root entry false)))))
 
+let resumed_through entry = Migration_program.with_compilation_cache (fun () ->
+  let source = read entry in
+  let m = match Parser.parse_module entry source with Parser.Ok m -> m | Parser.Err e -> fail e.msg in
+  match Migration_program.with_source_history ~entry:m ~source (function
+    | None -> fail "no history"
+    | Some history -> Migration_program.resumed_through history "App.Main") with
+  | Ok through -> through
+  | Error errors -> fail (String.concat "\n" (List.map (fun (e:Migration_sparse.error) -> e.message) errors)))
+
+(* Start stores each completed revision's published records, and a publishing
+   build continues from them instead of folding from V1. *)
+let records_written () = with_history (fun _ path entry ->
+  List.iter (fun version ->
+    check bool (Printf.sprintf "v%d.checkpoint stores its records" version) true
+      (contains (read (checkpoint path version)) "tesl-history-records-v1")) [2;3;4];
+  check (option int) "emission continues from the newest checkpoint" (Some 4)
+    (with_full_history false (fun () -> resumed_through entry));
+  check (option int) "full history folds from V1" None (with_full_history true (fun () -> resumed_through entry)))
+
+(* A consistently re-recorded record is published by a normal build (its seal
+   is trusted) and refused by the full-history check. *)
+let stored_records_published () = with_history (fun _ path entry ->
+  let reference = with_full_history true (fun () -> emit entry) in
+  rewrite_checkpoint path 3 (fun text -> replace "s6:rename" "s6:renamX" text);
+  check bool "the edit changed a stored record" true (contains (read (checkpoint path 3)) "s6:renamX");
+  let normal = with_full_history false (fun () -> emit entry) in
+  check bool "a normal build publishes the stored record" true
+    (String.starts_with ~prefix:"ok\n" normal && contains normal "renamX" && normal<>reference);
+  let full = with_full_history true (fun () -> emit entry) in
+  check bool ("full history refuses the edited record:\n" ^ full) true
+    (String.starts_with ~prefix:"failed\n" full && contains full "differs from the full-history recomputation"))
+
+(* Records belong to the namespace they were computed for; another namespace
+   folds from V1 and still emits the same artifacts as a full-history build. *)
+let other_namespace () = with_history (fun _ _ entry ->
+  write entry (replace {|namespace: "scale"|} {|namespace: "other"|} (read entry));
+  check (option int) "records of another namespace are not used" None
+    (with_full_history false (fun () -> resumed_through entry));
+  let reference = with_full_history true (fun () -> emit entry) in
+  check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);
+  check string "normal emission agrees" reference (with_full_history false (fun () -> emit entry)))
+
+(* A checkpoint in an earlier format came from an earlier compiler: ignored. *)
+let earlier_format_ignored () = with_history (fun _ path entry ->
+  List.iter (fun version -> rewrite_checkpoint path version (fun text ->
+    replace "tesl-migration-checkpoint-v2\n" "tesl-migration-checkpoint-v1\n" text)) [2;3;4];
+  check (option int) "an earlier format is not resumed" None (with_full_history false (fun () -> resumed_through entry));
+  let reference = with_full_history true (fun () -> emit entry) in
+  check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);
+  check string "normal emission agrees" reference (with_full_history false (fun () -> emit entry)))
+
 let () = run "Migration checkpoints" [
   "written", [ test_case "Start writes sealed checkpoints" `Slow written ];
   "resume", [ test_case "a resumed prefix equals the complete fold" `Slow resume_equals_fold;
@@ -304,5 +356,9 @@ let () = run "Migration checkpoints" [
   "integrity", [ test_case "an edited checkpoint byte fails with MIG013" `Slow tampered;
                  test_case "full history refuses a stale checkpoint" `Slow stale_rejected_by_full_history ];
   "abi", [ test_case "another compiler's checkpoint is ignored" `Slow other_abi_ignored ];
-  "compatibility", [ test_case "histories without checkpoints work" `Slow without_checkpoints ];
+  "compatibility", [ test_case "histories without checkpoints work" `Slow without_checkpoints;
+                     test_case "an earlier checkpoint format is ignored" `Slow earlier_format_ignored ];
+  "records", [ test_case "Start stores published records and builds continue from them" `Slow records_written;
+               test_case "a stored record is published and full history refuses an edit" `Slow stored_records_published;
+               test_case "records of another namespace are not used" `Slow other_namespace ];
 ]

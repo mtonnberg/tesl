@@ -31,6 +31,8 @@ val resolve_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> entry_file:string ->
   database:string option -> documents:Migration_manifest.document list -> (t,error list) result
 val selection : t -> selection
+(** The selected database connection's static PostgreSQL namespace, if declared. *)
+val namespace : t -> string option
 (** Immutable guards captured by selection, including the complete application
     imports and schema/migration discovery. Consumers recheck source and disk
     before returning a derived report. No writes are present. *)

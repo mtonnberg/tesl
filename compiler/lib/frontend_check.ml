@@ -964,7 +964,15 @@ let cross_module_diags ?(additional = fun _ _ -> []) ?(skip_dep_body : string ->
     the entrypoint check with dep-anchored diagnostics.  [skip_dep_body]
     (canonical path predicate) suppresses the dep-body re-check for modules
     that are themselves being checked in the same CLI invocation. *)
+(* Separate passes can report the very same diagnostic (an unknown field is
+   seen by both validation and its SQL codec check). Keep the first copy of
+   each identical diagnostic; distinct ones keep their order. Every checking
+   surface goes through here, so the CLI, the editor and the browser agree. *)
+let drop_identical (diagnostics : diagnostic list) =
+  let seen = Hashtbl.create 16 in
+  List.filter (fun d -> if Hashtbl.mem seen d then false else (Hashtbl.add seen d (); true)) diagnostics
+
 let check_module ?(additional = fun _ _ -> []) ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
-  match module_local_diags ~additional source m with
+  drop_identical (match module_local_diags ~additional source m with
   | ({ code = "E003"; _ } :: _) as diagnostics -> diagnostics
-  | diagnostics -> diagnostics @ cross_module_diags ~additional ?skip_dep_body m
+  | diagnostics -> diagnostics @ cross_module_diags ~additional ?skip_dep_body m)
