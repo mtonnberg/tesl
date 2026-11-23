@@ -17,11 +17,11 @@ func vector(t *testing.T) []byte {
 	root := t.TempDir()
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
 	empty := `"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`
-	return []byte(`{"version":1,"projectRoot":` + q(root) + `,"documents":[{"path":` + q(filepath.Join(root, "c.tesl")) + `,"version":-4}],"imports":[],"inputs":[` +
+	return []byte(`{"version":2,"projectRoot":` + q(root) + `,"documents":[{"path":` + q(filepath.Join(root, "c.tesl")) + `,"version":-4}],"imports":[],"inputs":[` +
 		`{"path":` + q(filepath.Join(root, "a.tesl")) + `,"sourceHash":null,"diskHash":null},` +
 		`{"path":` + q(filepath.Join(root, "b.tesl")) + `,"sourceHash":` + empty + `,"diskHash":` + empty + `},` +
 		`{"path":` + q(filepath.Join(root, "c.tesl")) + `,"sourceHash":` + empty + `,"diskHash":null}],` +
-		`"directories":[{"path":` + q(root) + `,"sourceHash":` + empty + `,"diskHash":` + empty + `}],` +
+		`"directories":[{"path":` + q(root) + `,"sourceHash":` + empty + `,"diskHash":` + empty + `}],"history":[],` +
 		`"edits":[{"path":` + q(filepath.Join(root, "a.tesl")) + `,"beforeHex":null,"afterHex":"61","documentVersion":null},` +
 		`{"path":` + q(filepath.Join(root, "b.tesl")) + `,"beforeHex":"","afterHex":"6262","documentVersion":null},` +
 		`{"path":` + q(filepath.Join(root, "c.tesl")) + `,"beforeHex":"","afterHex":"636363","documentVersion":-4}]}`)
@@ -153,12 +153,12 @@ func TestSourceManifestRejectsAmbiguousJSON(t *testing.T) {
 		change func([]byte) []byte
 	}{
 		{"duplicate key", func(b []byte) []byte {
-			return bytes.Replace(b, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+			return bytes.Replace(b, []byte(`"version":2`), []byte(`"version":2,"version":2`), 1)
 		}},
 		{"nested duplicate", func(b []byte) []byte {
 			return bytes.Replace(b, []byte(`"sourceHash":null`), []byte(`"sourceHash":null,"sourceHash":null`), 1)
 		}},
-		{"case alias", func(b []byte) []byte { return bytes.Replace(b, []byte(`"version":1`), []byte(`"Version":1`), 1) }},
+		{"case alias", func(b []byte) []byte { return bytes.Replace(b, []byte(`"version":2`), []byte(`"Version":2`), 1) }},
 		{"trailing object", func(b []byte) []byte { return append(b, []byte(`{}`)...) }},
 		{"invalid UTF8", func(b []byte) []byte { return append(b, 0xff) }},
 		{"lone high surrogate", func(b []byte) []byte { return bytes.Replace(b, []byte(`a.tesl`), []byte(`\ud800.tesl`), 1) }},
@@ -180,7 +180,7 @@ func TestSourceManifestRejectsIncompleteOrInconsistentGuards(t *testing.T) {
 		name   string
 		change func(map[string]any)
 	}{
-		{"version", func(m map[string]any) { m["version"] = 2 }},
+		{"version", func(m map[string]any) { m["version"] = 1 }},
 		{"fractional version", func(m map[string]any) { m["version"] = 1.5 }},
 		{"missing collection", func(m map[string]any) { delete(m, "inputs") }},
 		{"null collection", func(m map[string]any) { m["edits"] = nil }},
@@ -338,9 +338,9 @@ func TestSourceManifestEscapedSurrogatePair(t *testing.T) {
 func FuzzSourceManifestDecode(f *testing.F) {
 	root := filepath.Join(os.TempDir(), "tesl-manifest-fuzz")
 	digest := strings.Repeat("0", 64)
-	seed := encode(wireManifest{Version: 1, ProjectRoot: root, Directories: []directory{{Path: root, SourceHash: &digest, DiskHash: &digest}}})
+	seed := encode(wireManifest{Version: 2, ProjectRoot: root, Directories: []directory{{Path: root, SourceHash: &digest, DiskHash: &digest}}})
 	f.Add(seed)
-	f.Add([]byte(`{"version":1,"version":2}`))
+	f.Add([]byte(`{"version":2,"version":1}`))
 	f.Add([]byte(`null`))
 	f.Add([]byte("\xff"))
 	f.Fuzz(func(t *testing.T, raw []byte) {

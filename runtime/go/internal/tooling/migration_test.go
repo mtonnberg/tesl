@@ -70,7 +70,7 @@ func migrationPreviewVector(t *testing.T) (MigrationSelection, []MigrationDocume
 	}
 	digest := sha256.Sum256([]byte("saved"))
 	hash := hex.EncodeToString(digest[:])
-	manifest := map[string]any{"version": 1, "projectRoot": root,
+	manifest := map[string]any{"version": 2, "projectRoot": root, "history": []any{},
 		"documents": []any{map[string]any{"path": entry, "version": -7}}, "imports": []any{},
 		"inputs":      []any{map[string]any{"path": entry, "sourceHash": hash, "diskHash": hash}},
 		"directories": []any{map[string]any{"path": root, "sourceHash": strings.Repeat("a", 64), "diskHash": strings.Repeat("a", 64)}},

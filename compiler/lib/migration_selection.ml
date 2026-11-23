@@ -14,7 +14,8 @@ type selection = {
 }
 type candidate = { database_name : string; database_file : string }
 type error = { loc : Location.loc; message : string; candidates : candidate list }
-type t = { selected : selection; compiler_abi : string; stored_value_compatibility : string option; root : string; guard : M.t }
+type t = { selected : selection; compiler_abi : string; stored_value_compatibility : string option; root : string; guard : M.t;
+  flat_history : bool }
 let selection t = t.selected
 let source_guard t = t.guard
 exception Invalid of error list
@@ -90,7 +91,7 @@ let infer_project_root ~entry_file ~database = protect entry_file (fun () ->
   require_root root m binding;
   List.iter (fun (file,_) -> require_path root file) sources;
   root)
-let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
+let resolve_scoped ~flat_history ~stored_value_compatibility ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
   (* Validate the project and capture selection inputs before interpreting them.
      All subsequently discovered dependencies retain their separately read hashes. *)
   let initial = manifest (M.create ~project_root:root ~reads:[entry_file] ~directories:[] ~imports:[] ~documents ~writes:[]) in
@@ -114,7 +115,8 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) reads in
   (* The combined guard below and every caller's final verification recheck
      all of these observations. *)
-  let complete = manifest (M.create_observed (M.observations ()) ~project_root:root ~reads ~imports ~documents
+  let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:current.version) else None in
+  let complete = manifest (M.create_observed_scoped scope (M.observations ()) ~project_root:root ~reads ~imports ~documents
     ~directories:[selected.migration_directory;Filename.dirname current.root_file] ~writes:[]) in
   List.iter (fun (file,(_,hash)) ->
     require_path root file;
@@ -122,9 +124,11 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       file_error file "target source changed during database selection") sources;
   history (H.verify_unchanged h);
   let guard = manifest (M.combine initial complete ~documents) in
-  {selected;compiler_abi;stored_value_compatibility;root;guard})
+  {selected;compiler_abi;stored_value_compatibility;root;guard;flat_history})
 
+let resolve_with_compatibility = resolve_scoped ~flat_history:false
 let resolve = resolve_with_compatibility ~stored_value_compatibility:None
+let flat_history t = t.flat_history
 let project_root t = t.root
 let compiler_abi t = t.compiler_abi
 let stored_value_compatibility t = t.stored_value_compatibility

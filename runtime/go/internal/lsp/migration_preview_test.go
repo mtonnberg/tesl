@@ -47,7 +47,7 @@ func migrationEditorSourceFixture(t *testing.T, before, after string) (*Server, 
 	entry, created := filepath.Join(root, "app.tesl"), filepath.Join(root, "new.tesl")
 	digest := sha256.Sum256([]byte(before))
 	hash := hex.EncodeToString(digest[:])
-	manifest := map[string]any{"version": 1, "projectRoot": root, "documents": []any{map[string]any{"path": entry, "version": 19}}, "imports": []any{},
+	manifest := map[string]any{"version": 2, "projectRoot": root, "history": []any{}, "documents": []any{map[string]any{"path": entry, "version": 19}}, "imports": []any{},
 		"inputs":      []any{map[string]any{"path": entry, "sourceHash": hash, "diskHash": hash}, map[string]any{"path": created, "sourceHash": nil, "diskHash": nil}},
 		"directories": []any{map[string]any{"path": root, "sourceHash": hash, "diskHash": hash}},
 		"edits": []any{map[string]any{"path": entry, "beforeHex": hex.EncodeToString([]byte(before)), "afterHex": hex.EncodeToString([]byte(after)), "documentVersion": 19},

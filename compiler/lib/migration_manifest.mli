@@ -9,6 +9,20 @@ type edit = {
 }
 type error = { path : string; message : string }
 type t
+(** A frozen history scope: canonical directories (a family's schema and
+    migrations trees) whose files are guarded together. Every entry below each
+    tree is observed in both views, as a directory or a regular file with the
+    digest of its bytes; a symbolic link or special file there leaves the manifest
+    without this scope (each input keeps its own guard). Inputs inside a tree lose
+    their own guards unless [keep] selects them (the current revision), they are
+    written or open, or a kept import resolves to them; imports between frozen
+    sources lose theirs when the trees' guarded state determines them. Every path
+    with its own file or directory guard is excluded from the tree digest. *)
+type history = { history_trees : string list; keep : string -> bool }
+(** The scope of one schema family: its schema and migrations trees, keeping the
+    files of [current_version] (VCurrent and its private modules, that revision's
+    migration, contract, checkpoint and helpers). *)
+val family_history : project_root:string -> family:string -> current_version:int -> history
 (** Capture exact bytes in both the active Source_input view and on disk. Every
     input/output parent directory is guarded, as are explicit discovery directories.
     Open documents require unique signed 32-bit versions. Writes may only target
@@ -23,6 +37,13 @@ val create_observed : observations -> project_root:string -> reads:string list -
   documents:document list -> writes:(string * string) list -> (t, error list) result
 val create : project_root:string -> reads:string list -> directories:string list ->
   imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
+(** [create] and [create_observed] under an optional frozen history scope. *)
+val create_scoped : history option -> project_root:string -> reads:string list -> directories:string list ->
+  imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
+val create_observed_scoped : history option -> observations -> project_root:string -> reads:string list ->
+  directories:string list -> imports:(string * string) list ->
   documents:document list -> writes:(string * string) list -> (t, error list) result
 val project_root : t -> string
 val edits : t -> edit list
@@ -58,8 +79,9 @@ type accumulator
 val start_combine : t -> documents:document list -> (accumulator,error list) result
 val add_to_combine : accumulator -> t -> (accumulator,error list) result
 val finish_combine : accumulator -> (t,error list) result
-(** Stable version-1 JSON with separate source/disk hashes, hashed directory
-    membership, exact replacement bytes (lowercase hex) and editor versions.
+(** Stable version-2 JSON with separate source/disk hashes, hashed directory
+    membership, one source/disk digest per frozen history scope, exact
+    replacement bytes (lowercase hex) and editor versions.
     Paths are UTF-8. Source bytes need not be. It grants no execution authority.
     This module does not decode/apply an untrusted manifest. *)
 val to_json : t -> string
