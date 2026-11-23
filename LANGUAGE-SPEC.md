@@ -1322,7 +1322,7 @@ The current frontend gives special treatment to these module names:
 
 **String and number utilities**
 
-- `Tesl.String` — string functions: `String.length`, `String.isEmpty`, `String.trim` (→ `IsTrimmed`), `String.toUpper` (→ `IsUpperCase`), `String.toLower` (→ `IsLowerCase`), `String.startsWith`, `String.endsWith`, `String.contains`, `String.split`, `String.join`, `String.replace`, `String.slice`, `String.padLeft`, `String.padRight`, `String.indexOf`, `String.toInt`, `String.fromInt`, and more. Also exports check function `String.requireNonEmpty` (→ `IsNonEmpty`) and proof predicate name constants `IsTrimmed`, `IsUpperCase`, `IsLowerCase`, `IsNonNegative`, `IsNonEmpty`.
+- `Tesl.String` — string functions: `String.length`, `String.isEmpty`, `String.trim` (→ `IsTrimmed`), `String.toUpper` (→ `IsUpperCase`), `String.toLower` (→ `IsLowerCase`), `String.startsWith`, `String.endsWith`, `String.contains`, `String.split`, `String.join`, `String.replace`, `String.slice`, `String.padLeft`, `String.padRight`, `String.indexOf`, `String.toInt`, `String.fromInt`, and more. Also exports check function `String.requireNonEmpty` (→ `IsNonEmpty`), the reversible encodings `String.toBase64Url` / `String.parseBase64Url` / `String.fromBase64Url` (→ `IsBase64Url`) and `String.toHex` / `String.parseHex` / `String.fromHex` (→ `IsHex`), and proof predicate name constants `IsTrimmed`, `IsUpperCase`, `IsLowerCase`, `IsNonNegative`, `IsNonEmpty`, `IsBase64Url`, `IsHex`.
 - `Tesl.Regex` — regular expressions over `String`: `Regex.matches`, `Regex.find`, `Regex.findAll`, `Regex.captures`, `Regex.replace`, `Regex.split`. The pattern is argument 1 of every function and must be a **string literal** — it is parsed and safety-checked at compile time (`VREGEX001`–`VREGEX004`), so there is no dynamic-pattern form. Pure — no capability. See §21.6.
 - `Tesl.Url` — URL component parsing: the opaque `Url` type plus `Url.parse`, `Url.scheme`, `Url.host`, `Url.port`, `Url.effectivePort`, `Url.path`, `Url.query`, `Url.fragment`, `Url.userInfo`, `Url.toString`. `Url.parse` is the only constructor, so `Url.host` is always canonical (lowercased, trailing dot stripped, unbracketed, IP literals folded) and never carries the port. Pure — no capability. See §21.9.
 - `Tesl.Net` — host classification: the `HostClass` ADT (`Loopback`, `PrivateIp`, `LinkLocal`, `Cgnat`, `Multicast`, `Unspecified`, `PublicIp`, `DomainName`, `InvalidHost`) with `Net.classifyHost`, `Net.normalizeHost`, `Net.isForbiddenHost` and the per-range predicates. Every `inet_aton` and IPv4-mapped spelling of an address folds to one canonical form before classification. Pure — no capability. See §21.9.
@@ -1390,6 +1390,8 @@ Several standard library functions return proof-bearing values. These proofs can
 | `String.toUpper` | `IsUpperCase result` | Ensures string is uppercase |
 | `String.toLower` | `IsLowerCase result` | Ensures string is lowercase |
 | `List.sort`, `List.sortBy` | `IsSorted result` | Ensures list is sorted |
+| `String.toBase64Url` | `IsBase64Url result` | Result is canonical base64url and decodes with `String.fromBase64Url` |
+| `String.toHex` | `IsHex result` | Result is canonical lowercase hex and decodes with `String.fromHex` |
 
 **Check functions (use with `let x = check f(n)`):**
 
@@ -1413,6 +1415,8 @@ All of the following functions require a proof at the call site — the compiler
 | `List.drop(n, xs)` | `n ::: IsNonNegative n` | `check Int.nonNegative(n)` |
 | `List.repeat(x, n)` | `n ::: IsNonNegative n` | `check Int.nonNegative(n)` |
 | `Dict.get(key, dict)` | `dict ::: HasKey key dict` | `check Dict.requireKey(key, dict)` |
+| `String.fromBase64Url(s)` | `s ::: IsBase64Url s` | `String.toBase64Url`, or `String.parseBase64Url` on untrusted text |
+| `String.fromHex(s)` | `s ::: IsHex s` | `String.toHex`, or `String.parseHex` on untrusted text |
 
 ```tesl
 fn safeDivideInt(a: Int, b: Int) -> Int =
@@ -1430,6 +1434,41 @@ fn safeTake(xs: List Int, n: Int) -> List Int =
 fn requireUser(userId: String, users: Dict String String) -> String =
   let checkedUsers = check Dict.requireKey(userId, users)
   Dict.get(userId, checkedUsers)
+```
+
+**Reversible string encodings:**
+
+`IsBase64Url s` means `s` is the canonical base64url encoding of the UTF-8 bytes
+of some string: the RFC 4648 URL-safe alphabet (`A-Z a-z 0-9 - _`), no `=`
+padding, and zero trailing bits. `IsHex s` means `s` is the lowercase hex
+encoding of the UTF-8 bytes of some string. "Canonical" means exactly the text
+the encoder produces, so every string has one proven encoding.
+
+The facts are minted only by the encoders and by the two validators, which
+return `Maybe` so untrusted input gets a `Nothing` branch instead of a failed
+request:
+
+| Function | Signature |
+|---|---|
+| `String.parseBase64Url(raw)` | `Maybe (s: String ::: IsBase64Url s)` |
+| `String.parseHex(raw)` | `Maybe (s: String ::: IsHex s)` |
+
+A validator returns `Something` only for the exact text the matching encoder
+produces for some string. Padding, the standard `+`/`/` alphabet, whitespace,
+non-zero trailing bits, uppercase hex digits, odd-length hex and bytes that
+are not valid UTF-8 all return `Nothing`. Because the decoders require the fact,
+they have no failure case. These are encodings, not encryption: anyone can
+decode the value. Use `Crypto.signWith` when a client must not be able to forge
+or alter it.
+
+```tesl
+fn nextCursor(lastId: String) -> String ? IsBase64Url =
+  String.toBase64Url lastId
+
+fn afterId(rawCursor: String) -> Maybe String =
+  case String.parseBase64Url rawCursor of
+    Something cursor -> Something (String.fromBase64Url cursor)
+    Nothing -> Nothing
 ```
 
 **Return type annotation for proof-propagating functions:**
