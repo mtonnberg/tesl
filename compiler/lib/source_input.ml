@@ -57,7 +57,10 @@ let rec real path = match active_table () with
           (* On Windows a component can be an 8.3 short name (RUNNER~1) that
              realpath expands, so parent-plus-name is not realpath's answer
              there: resolve the whole path. *)
-          if Sys.win32 || Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then
+          (* A filesystem root is its own canonical spelling (realpath "/" = "/");
+             the browser's virtual filesystem has no entry for it to resolve. *)
+          if parent = path && not (Filename.is_relative path) && not Sys.win32 then Ok path
+          else if Sys.win32 || Filename.is_relative path || parent = path || name = "." || name = ".." || name = "" then
             (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
           else match Unix.lstat path with
             | { Unix.st_kind = Unix.S_LNK; _ } -> (try Ok (Unix.realpath path) with Unix.Unix_error (error, _, _) -> Error error)
