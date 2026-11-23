@@ -56,17 +56,16 @@ let names = function
   | DAgent _ | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> []
 
 let builtin m namespace name =
-  let candidates = Type_system.tesl_module_exports |> List.filter_map (fun (home,exports) ->
-    if List.mem name exports && List.exists (fun (i:import_decl) -> i.module_name=home) m.imports
-    then Some home else None) |> List.sort_uniq compare in
+  let candidates = Migration_checked_graph.builtin_homes_of name |> List.filter (fun home ->
+    List.exists (fun (i:import_decl) -> i.module_name=home) m.imports) |> List.sort_uniq compare in
   let allowed = match namespace with
     | IR.Codec -> List.mem_assoc name Validation_common.builtin_codec_type
-    | IR.Predicate -> List.exists (fun (_,predicates) -> List.mem name predicates) Checker.tesl_module_predicate_exports
+    | IR.Predicate -> Migration_checked_graph.builtin_predicate name
     | IR.Type -> name<>"" && name.[0]>='A' && name.[0]<='Z'
     | IR.Value -> Type_system.stdlib_capabilities_of name=[] in
   if not allowed then None else match candidates with
   | [home] -> Some (IR.Primitive (home ^ "." ^ name))
-  | [] when List.mem name Type_system.always_available_stdlib_names -> Some (IR.Primitive ("Tesl.Prelude." ^ name))
+  | [] when Migration_checked_graph.always_available_builtin name -> Some (IR.Primitive ("Tesl.Prelude." ^ name))
   | _ -> None
 
 let graph ~before ~after ~source (root:module_form) =

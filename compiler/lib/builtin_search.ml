@@ -20,7 +20,10 @@ let prefix s p = String.starts_with ~prefix:p s
 let id (e : Stdlib_docs.entry) =
   e.module_ ^ "/" ^ e.name ^ "/" ^ Stdlib_docs.kind_label e.kind
 
-let entries =
+(* Built on first use: every compiler process links this module, but only
+   search and catalog commands read it, and building it scans every generated
+   constructor name against the documentation catalog. *)
+let entries_lazy = lazy (
   (* Generated constructor names are real aliases, including in the exported
      catalog and its identity. Otherwise adding a time zone could change search
      results without invalidating a client's cached catalog. Resolve ownership
@@ -33,7 +36,8 @@ let entries =
   List.map (fun (e : Stdlib_docs.entry) -> { e with aliases = List.sort_uniq String.compare
     (e.aliases @ List.filter_map (fun (owner, alias) ->
       if owner = id e && alias <> e.name then Some alias else None) family_aliases) }) Stdlib_docs.entries
-  |> List.sort_uniq (fun a b -> String.compare (id a) (id b))
+  |> List.sort_uniq (fun a b -> String.compare (id a) (id b)))
+let entries () = Lazy.force entries_lazy
 
 let scheme (e : Stdlib_docs.entry) =
   match e.kind with
@@ -106,7 +110,7 @@ let entry_json (e : Stdlib_docs.entry) =
 
 (* A content identity, not a security digest. Delivery integrity uses SHA-256.
    Includes signatures, docs, labels, aliases, requirements and structured types. *)
-let catalog_rows = lazy (array entry_json entries)
+let catalog_rows = lazy (array entry_json (entries ()))
 let catalog_id = lazy (Digest.to_hex (Digest.string (Lazy.force catalog_rows)))
 let catalog_json () = Printf.sprintf
   {|{"version":%d,"catalog_id":%s,"scope":"builtins","entries":%s}|}
@@ -119,12 +123,12 @@ let invalid s = raise (Invalid_query s)
 
 (* Only the unfinished suffix is relaxed. Earlier nominal names and variable
    relationships remain exact. A complete known constructor never becomes a prefix. *)
-let constructors =
+let constructors_lazy = lazy (
   let rec names acc = function
     | TCon name -> name :: acc | TVar _ -> acc
     | TApp (a, b) | TFun (a, b) -> names (names acc a) b in
-  List.concat_map (fun e -> match scheme e with Some s -> names [] s.mono | None -> []) entries
-  |> List.sort_uniq String.compare
+  List.concat_map (fun e -> match scheme e with Some s -> names [] s.mono | None -> []) (entries ())
+  |> List.sort_uniq String.compare)
 
 let parse_type_query ?(completion = false) source =
   let incomplete = ref false in
@@ -163,8 +167,8 @@ let parse_type_query ?(completion = false) source =
   and atom depth = match !tokens with
     | Ident s :: rest -> tokens := rest;
       if s.[0] >= 'a' && s.[0] <= 'z' then Var s
-      else if completion && rest = [] && not (List.mem s constructors)
-           && List.exists (fun name -> prefix name s) constructors then
+      else if completion && rest = [] && not (List.mem s (Lazy.force constructors_lazy))
+           && List.exists (fun name -> prefix name s) (Lazy.force constructors_lazy) then
         (incomplete := true; Nominal_prefix s)
       else Con s
     | Left :: rest -> tokens := rest; let t = arrow (depth + 1) in
@@ -240,12 +244,12 @@ let search query =
         | Some q -> (match scheme e with
           | Some s -> closed_scheme s && matches q s.mono
           | None -> false) in
-      if shape_ok then Option.map (fun score -> score, e) (text_score text_query e) else None) entries in
+      if shape_ok then Option.map (fun score -> score, e) (text_score text_query e) else None) (entries ()) in
     (* Typo fallback only when there are no direct results; bounded by the
        existing catalog suggestion function. Never makes a type near-match. *)
     let scored = if scored = [] && type_query = None && String.length query >= 3 && List.length (words query) = 1 then
       let suggestions = Stdlib_docs.suggestions query in
-      List.filter_map (fun e -> if List.mem e.Stdlib_docs.name suggestions then Some (8, e) else None) entries
+      List.filter_map (fun e -> if List.mem e.Stdlib_docs.name suggestions then Some (8, e) else None) (entries ())
       else scored in
     let ordered = List.sort (fun (a, x) (b, y) -> let c = compare a b in if c = 0 then String.compare (id x) (id y) else c) scored in
     { query; mode = !mode; completion = !completion; error = None; total = List.length ordered;

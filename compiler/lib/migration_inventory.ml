@@ -133,18 +133,41 @@ let with_abi inventory body = match inventory.stored_value_compatibility with
   | None -> Migration_canonical.Seq [Bytes "compiler-semantics"; Bytes inventory.compiler_abi; body]
   | Some contract -> Migration_canonical.Seq [Bytes "stored-value-semantics"; Bytes contract; body]
 
+(* Inventories are immutable once published, and a closure is a pure function
+   of the inventory and its roots. One command asks for the same snapshots and
+   entity closures once per revision per analysis pass, so each published
+   inventory value remembers its own results; the table is keyed by physical
+   identity and forgets an inventory once it is collected. *)
+module Closures = Ephemeron.K1.Make (struct
+  type nonrec t = t
+  let equal = ( == )
+  let hash = Hashtbl.hash
+end)
+let closures : (Migration_canonical.node option * (Migration_ir.namespace * string) list, (Migration_canonical.node, Migration_ir.error) result) Hashtbl.t Closures.t =
+  Closures.create 64
+let remembered inventory key compute =
+  let table = match Closures.find_opt closures inventory with
+    | Some table -> table
+    | None -> let table = Hashtbl.create 8 in Closures.replace closures inventory table; table in
+  match Hashtbl.find_opt table key with
+  | Some result -> result
+  | None -> let result = compute () in Hashtbl.replace table key result; result
+
 let closure inventory roots =
+  remembered inventory (None, roots) (fun () ->
   match Migration_ir.closure ~scopes:inventory.scopes
       ~definitions:inventory.definitions
       ~roots:(List.map (fun (ns, name) -> ns, Global name) roots) with
   | Ok body -> Ok (with_abi inventory body)
-  | Error _ as error -> error
+  | Error _ as error -> error)
 
+let snapshot_key = Some (Migration_canonical.Bytes "snapshot")
 let snapshot inventory =
-  match Migration_ir.closure ~scopes:inventory.scopes
+  match remembered inventory (snapshot_key, []) (fun () ->
+    Result.map (with_abi inventory) (Migration_ir.closure ~scopes:inventory.scopes
       ~definitions:inventory.definitions
-      ~roots:(List.map (fun d -> d.key) inventory.definitions) with
-  | Ok body -> with_abi inventory body
+      ~roots:(List.map (fun d -> d.key) inventory.definitions))) with
+  | Ok body -> body
   | Error _ -> assert false (* load checks this exact closure before publishing t *)
 
 type staged_index = {

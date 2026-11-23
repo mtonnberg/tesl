@@ -12,10 +12,44 @@ type artifact = {
 
 (* Cache compatibility hashes the complete emitted closure, including codecs
    and runtime. Normalize our digest so project emission can reseal modules. *)
+(* Literal, leftmost, non-overlapping substring search and replacement (what
+   Str.global_replace does with Str.regexp_string), without per-byte allocation:
+   these run over the generated history constants, whose size grows with every
+   frozen revision. *)
+let find_substring ?(from=0) haystack needle =
+  let length = String.length haystack and size = String.length needle in
+  let rec matches index offset =
+    offset = size || (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && matches index (offset + 1)) in
+  let rec scan index =
+    if index + size > length then None
+    else match String.index_from_opt haystack index (String.unsafe_get needle 0) with
+      | None -> None
+      | Some candidate when candidate + size > length -> None
+      | Some candidate -> if matches candidate 0 then Some candidate else scan (candidate + 1) in
+  if size = 0 then (if from <= length then Some from else None) else scan from
+let replace_substring ~needle ~by haystack =
+  if needle = "" then invalid_arg "replace_substring: empty needle" else
+  match find_substring haystack needle with
+  | None -> haystack
+  | Some first ->
+    let buffer = Buffer.create (String.length haystack) in
+    let rec copy start = function
+      | None -> Buffer.add_substring buffer haystack start (String.length haystack - start)
+      | Some index ->
+        Buffer.add_substring buffer haystack start (index - start);
+        Buffer.add_string buffer by;
+        let next = index + String.length needle in
+        copy next (find_substring ~from:next haystack needle) in
+    copy 0 (Some first);
+    Buffer.contents buffer
+
 let seal_cache_artifacts artifacts =
   let prefix = "const teslCacheArtifactIdentity = " in
   let rewrite identity (artifact : artifact) =
     if not (Filename.check_suffix artifact.path ".go") then artifact else
+    (* Only a line starting with [prefix] changes; without one the split and
+       join below is the identity. *)
+    if find_substring artifact.contents prefix = None then artifact else
     { artifact with contents = String.split_on_char '\n' artifact.contents
         |> List.map (fun line -> if String.starts_with ~prefix line then
              prefix ^ "\"" ^ identity ^ "\"" else line)
@@ -11076,6 +11110,11 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
 
 let contains_go_code haystack needle =
   let length = String.length haystack and needle_length = String.length needle in
+  (* Compare in place: this scan runs over every emitted Go file, including the
+     generated history constants, so it must not allocate per byte. *)
+  let rec at index offset =
+    offset = needle_length ||
+    (String.unsafe_get haystack (index + offset) = String.unsafe_get needle offset && at index (offset + 1)) in
   let rec loop index in_string escaped in_comment =
     if index >= length then false
     else if in_comment then
@@ -11089,8 +11128,7 @@ let contains_go_code haystack needle =
     else if haystack.[index] = '"' then loop (index + 1) true false false
     else if haystack.[index] = '/' && index + 1 < length && haystack.[index + 1] = '/' then
       loop (index + 2) false false true
-    else if index + needle_length <= length
-         && String.sub haystack index needle_length = needle then true
+    else if index + needle_length <= length && at index 0 then true
     else loop (index + 1) false false false
   in
   needle_length = 0 || loop 0 false false false
@@ -14167,7 +14205,7 @@ let normalize_stdlib_import_all (m : module_form) : module_form =
     { m with imports }
   end
 
-let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
+let compile_module_internal ?(seal=true) ?(stage_preparation=false) ?(migration_metered=false) ?emission_graph ?(nominal_mappings=[]) ?(nominal_reverses=[]) ?(nominal_transports=[]) ?(row_access_entities=[]) ?(row_storage_entities=[]) ?(mode=Release) ?(dependencies=[]) ?(entity_bindings=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ?project_path (m : module_form) =
   let previous_transports = !current_nominal_transports and previous_graph= !current_emission_graph in
   let previous_meter = !current_migration_metering and previous_owned = !current_migration_owned_module in
   Fun.protect ~finally:(fun () -> current_migration_metering:=previous_meter;current_migration_owned_module:=previous_owned;current_nominal_transports := previous_transports;current_emission_graph:=previous_graph) (fun () ->
@@ -17720,7 +17758,10 @@ let compile_module_internal ?(stage_preparation=false) ?(migration_metered=false
           Embedded_go_runtime.files
       end
     in
-    Ok (seal_cache_artifacts artifacts, { ex_module = m.module_name; ex_package = package;
+    (* A project build re-seals its complete, deduplicated artifact set after
+       normalizing every identity line, so it skips this per-module seal (which
+       hashes the embedded runtime once per module). *)
+    Ok ((if seal then seal_cache_artifacts artifacts else artifacts), { ex_module = m.module_name; ex_package = package;
                      ex_types = types; ex_signatures = signatures; ex_codecs = codecs; ex_taken=Hashtbl.copy taken; ex_row_storage=List.map fst row_storage_adapters; ex_nominal_reverses=List.map (fun (binding,_,_) -> binding) nominal_reverse_adapters; ex_nominal_mappings=List.map (fun (binding,_,_) -> binding) nominal_mapping_adapters;
                      ex_servers=List.map (fun (server : server_form) -> server.name) servers })
   with Unsupported error -> Error [error])
@@ -17798,7 +17839,7 @@ let relocate_migration_history ~project_path (artifacts : artifact list) =
       invalid_arg "migration history artifact lacks its runtime package clause";
     let body = String.sub history.contents (String.length prefix) (String.length history.contents - String.length prefix) in
     let body = List.fold_left (fun body name ->
-        Str.global_replace (Str.regexp_string ("\t" ^ name ^ "(")) ("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
+        replace_substring ~needle:("\t" ^ name ^ "(") ~by:("\tteslrt." ^ String.capitalize_ascii name ^ "(") body)
       body ["registerCompiledMigrationHistory"; "registerCompiledQueueHistory"; "registerCompiledRowHistory";
             "registerCompiledRowPhysicalHistory"; "registerCompiledRowContractHistory"] in
     let relocated = { path = "internal/teslhistory/migration_history_generated.go";
@@ -18009,7 +18050,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
  let project_path="tesl.generated/" ^ package_name entry.module_name in
  let loc=Location.dummy_loc entry.source_file in
  let require = function Some value -> value | None -> unsupported loc "row companion is missing an exact emitted declaration" in
- let owner name= require (List.find_opt (fun e -> e.ex_module=emitted_owner (Some graph) name) exports) in
+ let owner name= let emitted=emitted_owner (Some graph) name in require (List.find_opt (fun e -> e.ex_module=emitted) exports) in
  let split name=match List.rev (String.split_on_char '.' name) with
   | short::rest -> String.concat "." (List.rev rest),short | _ -> assert false in
  let entity (e:RH.entity)=
@@ -18463,7 +18504,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-         (match compile_module_internal ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
+         (match compile_module_internal ~seal:false ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_transports)

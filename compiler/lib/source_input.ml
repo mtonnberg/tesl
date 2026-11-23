@@ -1,7 +1,9 @@
 module Paths = Map.Make (String)
 module Names = Set.Make (String)
 
-type view = { root : string; files : string Paths.t; directories : Names.t }
+type view = { root : string; files : string Paths.t; directories : Names.t;
+              basenames : Names.t (* final components of every file and directory entry *);
+              children : Names.t Paths.t (* each directory's file and directory entries, by name *) }
 let active : view option ref = ref None
 let pinned_files : string Paths.t ref = ref Paths.empty
 let project_root () = Option.map (fun view -> view.root) !active
@@ -37,11 +39,18 @@ let rec validate_parent path =
     validate_parent parent
 
 let validate_file path =
-  validate_parent (Filename.dirname path);
+  let checked () =
+    validate_parent (Filename.dirname path);
+    match Unix.lstat path with
+    | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
+    | _ -> invalid path "input must be a canonical regular file"
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> () in
+  (* An existing regular file whose real path is its own spelling has a
+     canonical directory parent; anything else takes the full check, which
+     also reports which part failed. *)
   match Unix.lstat path with
   | info when info.Unix.st_kind = Unix.S_REG && Unix.realpath path = path -> ()
-  | _ -> invalid path "input must be a canonical regular file"
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+  | _ | exception Unix.Unix_error _ -> checked ()
 
 let directories root files =
   Paths.fold (fun path _ result ->
@@ -73,7 +82,17 @@ let with_overlays ~project_root inputs f =
     if Names.mem path !seen then invalid path "duplicate input";
     seen := Names.add path !seen;
     Paths.add path contents files) base inputs in
-  let view = {root; files; directories=directories root files} in
+  let directories = directories root files in
+  let basenames = Names.union
+    (Paths.fold (fun path _ names -> Names.add (Filename.basename path) names) files Names.empty)
+    (Names.map Filename.basename directories) in
+  let children =
+    let add path children =
+      let parent = Filename.dirname path in
+      Paths.update parent (fun names ->
+        Some (Names.add (Filename.basename path) (Option.value ~default:Names.empty names))) children in
+    Names.fold add directories (Paths.fold (fun path _ children -> add path children) files Paths.empty) in
+  let view = {root; files; directories; basenames; children} in
   Query_cache.clear ();
   active := Some view;
   Fun.protect ~finally:(fun () -> active := previous; Query_cache.clear ()) f
@@ -92,6 +111,17 @@ let find_project path = match !active with
     match lookup path with
     | Some _ as found -> found
     | None ->
+      (* The canonical spelling keeps the final component unless that component
+         is itself a symlink (or "." / ".."). When it is not, and no view entry
+         has this final name, the canonical lookup below cannot match: skip the
+         realpath walk. Import resolution probes many absent paths. *)
+      let name = Filename.basename path in
+      let unaliased () = name <> "." && name <> ".." &&
+        (match Unix.lstat path with
+         | info -> info.Unix.st_kind <> Unix.S_LNK
+         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
+         | exception Unix.Unix_error _ -> false) in
+      if not (Names.mem name view.basenames) && unaliased () then None else
       let canonical = try proposed_path path with Unix.Unix_error _ | Sys_error _ -> path in
       if canonical = path then None else lookup canonical
 
@@ -134,10 +164,8 @@ let readdir path = match !active, find path with
       | _ -> Sys.readdir path
       | exception Unix.Unix_error (Unix.ENOENT, _, _) when Names.mem canonical view.directories -> [||] in
     let names = Array.fold_left (fun set name -> Names.add name set) Names.empty disk in
-    let add_child child names =
-      if Filename.dirname child = canonical then Names.add (Filename.basename child) names else names in
-    let names = Paths.fold (fun child _ names -> add_child child names) view.files names in
-    Names.fold add_child view.directories names |> Names.elements |> Array.of_list
+    Names.union names (Option.value ~default:Names.empty (Paths.find_opt canonical view.children))
+    |> Names.elements |> Array.of_list
 
 let with_pinned_files inputs f =
   let previous = !pinned_files and seen = ref Names.empty in
