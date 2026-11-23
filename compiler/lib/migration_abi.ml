@@ -157,7 +157,19 @@ let legacy_identity resources =
   identity_prefix ^ Hash.digest (frame [legacy_semantics_revision;
     component "lifted-stdlib" (List.map (fun r -> r.name,r.digest) resources)])
 let legacy_stored_value_compatibility t = legacy_identity t.resources
-let current () =
+let current_memo : (Input.view_token * t) list ref = ref []
+let () = Input.on_scope_exit (fun () -> current_memo := [])
+let rec current () =
+  (* Within one compilation's memoized disk answers the identity of a source
+     view cannot change: computed once per view. *)
+  if not (Input.memoizing ()) then current_uncached () else
+  match List.find_opt (fun (token,_) -> Input.same_view token) !current_memo with
+  | Some (_,t) -> Ok t
+  | None -> match current_uncached () with
+    | Ok t as result ->
+      current_memo := (Input.view_token (),t) :: List.filteri (fun i _ -> i < 7) !current_memo; result
+    | error -> error
+and current_uncached () =
   try
     let compiler,runtime = Lazy.force compiled in
     let chosen = Hashtbl.create 8 in

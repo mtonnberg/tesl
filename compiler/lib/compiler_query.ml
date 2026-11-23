@@ -67,7 +67,10 @@ let run_once ~filename ~logical_path flag position =
    file saved while the query runs is not seen by its intermediate judgments.
    Before publishing, the query compares every memoized answer with disk; on a
    change it forgets them and answers again from fresh reads. *)
+(* The whole query is one compilation scope: each source is read, parsed and
+   each history judged once, however many checks of the query ask. *)
 let run ~filename ~logical_path flag position =
+  Migration_program.with_compilation_cache @@ fun () ->
   let rec attempt remaining =
     let response = run_once ~filename ~logical_path flag position in
     if remaining = 0 || not (Source_input.disk_changed ()) then response

@@ -56,8 +56,12 @@ let memo_disk table f path =
       Hashtbl.replace table path result; result in
   match result with Ok value -> value | Error error -> raise error
 let lstat = memo_disk disk_lstat Unix.lstat
+(* Counts the resets of the disk memo: answers memoized in one epoch are
+   constant until the next reset. *)
+let disk_epoch = ref 0
 (* Forget every memoized disk answer: the next observation reads disk anew. *)
 let reset_disk_memo () =
+  incr disk_epoch;
   Hashtbl.reset disk_bytes; Hashtbl.reset disk_text; Hashtbl.reset disk_lstat; Hashtbl.reset disk_listing;
   !reset_presence ()
 (* Whether any memoized disk answer differs from what disk answers now. A
@@ -94,6 +98,7 @@ let with_fresh_path_memo f =
   Fun.protect ~finally:(fun () -> decr fresh_depth; path_memo := previous) f
 let scope_resets : (unit -> unit) list ref = ref [reset_disk_memo]
 let in_scope () = !scope_memo_active
+let memoizing () = disk_memo_active ()
 let on_scope_exit reset = scope_resets := reset :: !scope_resets
 let with_scope_path_memo f =
   if !scope_memo_active then f () else begin
@@ -220,6 +225,8 @@ let with_overlays ~project_root inputs f =
 let listing path = Array.copy (memo_disk disk_listing Sys.readdir path)
 
 type entry = File of string | Directory
+(* Set below: records that a lookup went through another spelling. *)
+let observe_alias = ref (fun () -> ())
 
 let find_project path = match !active with
   | None -> None
@@ -245,7 +252,7 @@ let find_project path = match !active with
          | exception Unix.Unix_error _ -> false) in
       if not (Names.mem name view.basenames) && unaliased () then None else
       let canonical = try proposed_path path with Unix.Unix_error _ | Sys_error _ -> path in
-      if canonical = path then None else lookup canonical
+      if canonical = path then None else (!observe_alias (); lookup canonical)
 
 let find path =
   (* Pinned compiler resources are immutable input bytes, independently of the
@@ -262,10 +269,15 @@ type observation =
   | Kind of string * string
   | Real of string * string
   | Listing of string * string
+  (* An observation that [same_reads] may not take as unchanged on its own: made
+     while disk answers were not memoized, or through an aliased spelling. *)
+  | Unindexed
 let recorders : observation list ref list ref = ref []
 let observe make = if !recorders <> [] then begin
     let observation = make () in
-    List.iter (fun recorder -> recorder := observation :: !recorder) !recorders end
+    let indexed = disk_memo_active () in
+    List.iter (fun recorder -> recorder := observation :: (if indexed then !recorder else Unindexed :: !recorder)) !recorders end
+let () = observe_alias := (fun () -> List.iter (fun recorder -> recorder := Unindexed :: !recorder) !recorders)
 let outcome f = match f () with
   | value -> Ok value
   | exception (Sys_error _ | Unix.Unix_error _ | Invalid_argument _ as error) -> Error error
@@ -334,6 +346,16 @@ and readdir_unrecorded path = match !active, find path with
     Names.union names (Option.value ~default:Names.empty (Paths.find_opt canonical view.children))
     |> Names.elements |> Array.of_list
 
+module Disk = struct
+  let lstat = lstat
+  let read = memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all)
+  let readdir = listing
+  let exists path = if disk_memo_active () then memo_disk disk_presence Sys.file_exists path else Sys.file_exists path
+  (* The memo holds one spelling table per source view; disk spellings do not
+     depend on the view, so the table of no view is used. *)
+  let realpath path = if disk_memo_active () then real path else Unix.realpath path
+end
+
 let with_pinned_files inputs f =
   let previous = !pinned_files and seen = ref Names.empty in
   let next = List.fold_left (fun files (path,contents) ->
@@ -360,14 +382,16 @@ let without_pinned_files f =
 (* The identity of the active source view: the overlay and the pinned resources.
    Views are immutable, so physical equality means "nothing a view supplies has
    changed since the token was taken". It says nothing about unpinned disk bytes. *)
-type view_token = view option * string Paths.t
-let raw_token () : view_token = (!active, !pinned_files)
+(* With the disk-memo epoch it was taken in: the same view in a later epoch may
+   observe other disk bytes. *)
+type view_token = view option * string Paths.t * int
+let raw_token () : view_token = (!active, !pinned_files, !disk_epoch)
 (* Scopes that only freeze bytes the enclosing view already supplied observe
    what that view observes; each such scope's token is declared equivalent to
    the enclosing one (see [with_equivalent_view]), so judgments verified there
    are reused instead of verified again. *)
 let equivalents : (view_token * view_token) list ref = ref []
-let same_raw ((v1, p1) : view_token) ((v2, p2) : view_token) = v1 == v2 && p1 == p2
+let same_raw ((v1, p1, e1) : view_token) ((v2, p2, e2) : view_token) = v1 == v2 && p1 == p2 && e1 = e2
 let canonical_token token =
   match List.find_opt (fun (alias, _) -> same_raw alias token) !equivalents with
   | Some (_, canonical) -> canonical | None -> token
@@ -428,8 +452,7 @@ let recording f =
 (* Whether a judgment whose only filesystem observations through this module
    were [observations] observes the same inputs in the current view: every
    observation, repeated now, gets the same answer (equal bytes for a read). *)
-let same_reads (_ : view_token) observations =
-  List.for_all (function
+let replay = function
     | Read (path, bytes) ->
       (match read path with
        | current -> current == bytes || String.equal current bytes
@@ -438,7 +461,53 @@ let same_reads (_ : view_token) observations =
     | Kind (path, answer) -> recorded_answer kind_name (fun () -> kind path) = answer
     | Real (path, answer) -> recorded_answer Fun.id (fun () -> realpath path) = answer
     | Listing (path, answer) ->
-      recorded_answer (fun names -> String.concat "\000" (Array.to_list names)) (fun () -> readdir path) = answer)
-    observations
+      recorded_answer (fun names -> String.concat "\000" (Array.to_list names)) (fun () -> readdir path) = answer
+    | Unindexed -> true
+
+(* The paths whose answers can differ between the view of [token] and the
+   current one, within one disk-memo epoch: every file the two views supply
+   differently (a view file whose bytes equal the regular file on disk supplies
+   nothing new), every directory only one of them creates, and their ancestors;
+   with the final names of those paths (a lookup of another spelling of them
+   may resolve to them). *)
+let view_difference ((view, pinned, _) : view_token) =
+  let files = function None -> Paths.empty | Some v -> v.files in
+  let directories = function None -> Names.empty | Some v -> v.directories in
+  let disk_regular path bytes =
+    (match lstat path with { Unix.st_kind = Unix.S_REG; _ } -> true | _ -> false | exception Unix.Unix_error _ -> false) &&
+    (match memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all) path with
+     | disk -> String.equal disk bytes | exception (Sys_error _ | Unix.Unix_error _) -> false) in
+  (* A pinned resource shadows a view file of the same path, so a difference
+     in pinned resources always counts. *)
+  let differing ~transparent a b =
+    Paths.merge (fun path x y -> match x, y with
+      | Some x, Some y when x == y || String.equal x y -> None
+      | Some x, None | None, Some x when transparent && disk_regular path x -> None
+      | None, None -> None
+      | _ -> Some ()) a b in
+  let changed = Paths.union (fun _ () () -> Some ()) (differing ~transparent:true (files view) (files !active))
+    (differing ~transparent:false pinned !pinned_files) in
+  let paths = Paths.fold (fun path () set -> Names.add path set) changed Names.empty
+    |> Names.union (Names.diff (directories view) (directories !active))
+    |> Names.union (Names.diff (directories !active) (directories view)) in
+  let rec ancestors path set =
+    let parent = Filename.dirname path in
+    if parent = path || Names.mem parent set then set else ancestors parent (Names.add parent set) in
+  let all = Names.fold ancestors paths paths in
+  all, Names.map Filename.basename paths
+
+let same_reads token observations =
+  let (_, _, epoch) = token in
+  if epoch = !disk_epoch && disk_memo_active () && not (List.mem Unindexed observations) then begin
+    (* Every observation held in [token]'s view in this epoch; only those the
+       views can answer differently are asked again. *)
+    let paths, names = view_difference token in
+    if Names.is_empty paths then true else
+    let affected path = Names.mem path paths || Names.mem (Filename.basename path) names in
+    List.for_all (fun observation -> match observation with
+      | Read (path, _) | Exists (path, _) | Kind (path, _) | Real (path, _) | Listing (path, _) ->
+        not (affected path) || replay observation
+      | Unindexed -> true) observations
+  end else List.for_all replay observations
 
 let has_pinned_files () = not (Paths.is_empty !pinned_files)

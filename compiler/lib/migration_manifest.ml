@@ -24,17 +24,19 @@ let canonical root path =
   if Filename.is_relative path || (path <> root && not (String.starts_with ~prefix path)) ||
      Source_input.canonical_path path <> path then
     reject path "manifest paths must be absolute, canonical and inside the project"
-let kind ~disk path = if disk then (Unix.lstat path).Unix.st_kind else Source_input.kind path
+(* Disk answers are shared with the compilation's memo (Source_input.Disk);
+   a final guard observes disk anew (see [verify_files]). *)
+let kind ~disk path = if disk then (Source_input.Disk.lstat path).Unix.st_kind else Source_input.kind path
 let file_bytes ~disk path =
   match optional (fun () -> kind ~disk path) with
   | None -> None
-  | Some Unix.S_REG -> Some (if disk then In_channel.with_open_bin path In_channel.input_all else Source_input.read path)
+  | Some Unix.S_REG -> Some (if disk then Source_input.Disk.read path else Source_input.read path)
   | Some _ -> reject path "manifest source must be a regular file"
 let names ~disk path =
   match optional (fun () -> kind ~disk path) with
   | None -> None
   | Some Unix.S_DIR ->
-    Some ((if disk then Sys.readdir path else Source_input.readdir path) |> Array.to_list |> List.sort String.compare)
+    Some ((if disk then Source_input.Disk.readdir path else Source_input.readdir path) |> Array.to_list |> List.sort String.compare)
   | Some _ -> reject path "manifest directory must be a directory"
 let normalized_documents root documents =
   let seen = Hashtbl.create 8 in
@@ -47,10 +49,10 @@ let normalized_documents root documents =
   List.sort (fun (a : document) b -> String.compare a.path b.path) documents
 let validate_root root =
   if not (String.is_valid_utf_8 root) || Filename.is_relative root || Source_input.canonical_path root <> root ||
-     Unix.realpath root <> root || (Unix.lstat root).Unix.st_kind <> Unix.S_DIR then
+     Source_input.Disk.realpath root <> root || (Source_input.Disk.lstat root).Unix.st_kind <> Unix.S_DIR then
     reject root "manifest project root must be an existing canonical directory"
 let resolve ~disk source name =
-  if disk then Validation_common.resolve_local_import_path_with ~exists:Sys.file_exists ~realpath:Unix.realpath source name
+  if disk then Validation_common.resolve_local_import_path_with ~exists:Source_input.Disk.exists ~realpath:Source_input.Disk.realpath source name
   else Validation_common.resolve_local_import_path source name
 
 (* Disk evidence of the passes already made within one compilation (Source_input
@@ -78,7 +80,7 @@ let disk_pass () =
     | None -> let r = try Ok (f path) with e -> Error e in Hashtbl.replace table path r;
       (match r with Ok v -> v | Error e -> raise e) in
   fun source name -> Validation_common.resolve_local_import_path_with
-    ~exists:(memo exists Sys.file_exists) ~realpath:(memo real Unix.realpath) source name
+    ~exists:(memo exists Source_input.Disk.exists) ~realpath:(memo real Source_input.Disk.realpath) source name
 
 (* One verification pass resolves each directory's canonical spelling once
    (Source_input.with_path_memo); every file is still read and hashed. A disk
@@ -205,7 +207,7 @@ let create_with ~observed ~project_root:root ~reads ~directories ~imports ~docum
   let t = {root;documents;edits=List.rev edits;files=List.rev files;directories;imports} in
   (* Catch a changed earlier input before publishing the proposal. Apply must
      check again; this is a precondition snapshot, not a filesystem transaction. *)
-  if observed=None then (verify_files t false; verify_files t true); t)
+  if observed=None then (verify_files t false; verify_files ~quick:true t true); t)
 let create = create_with ~observed:None
 let create_observed observed = create_with ~observed:(Some observed)
 
@@ -268,7 +270,7 @@ let verify_observations accumulator =
   } in
   let overlay_root = Option.value (Source_input.project_root ()) ~default:combined.root in
   Source_input.with_overlays ~project_root:overlay_root (overlays combined) (fun () -> ());
-  verify_files combined false; verify_files combined true;
+  verify_files combined false; verify_files ~quick:true combined true;
   combined
 
 let start_combine first ~documents = protect (fun () -> initial_observations first ~documents)

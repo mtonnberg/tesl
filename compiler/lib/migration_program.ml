@@ -18,7 +18,7 @@ type database = {identity:string;family:string;namespace:string;current_version:
  queue_versions:queue_version list}
 type t = {abi:A.t;databases:database list;inputs:(string * string) list;
  queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list;
- row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list;validate:(unit -> unit);
+ row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list Lazy.t;validate:(unit -> unit);
  resumed:bool;records:(string * Migration_records.t) list;resumed_through:(string * int) list}
 let databases t = t.databases
 let contracts t = t.contracts
@@ -321,6 +321,9 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    let queue_bindings=capture_queue_bindings modules databases inventories in
    let row_histories=List.sort compare !row_histories in
    let linked_sources=List.concat_map (fun (_,rows) -> RH.captured_sources rows) row_histories in
+   (* Parsed only by a caller that emits or checks the captured modules; a
+      capture asked for its row histories alone parses none. *)
+   let captured_modules=lazy (
    let captured_modules=if not source_only then [] else List.map (fun (path,bytes) ->
      match List.find_opt (fun (m,_) -> Source_input.canonical_path m.source_file=path) linked_sources with
      | Some (m,captured) when captured=bytes -> m,bytes
@@ -341,7 +344,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
        | Some(path,bytes) -> (parse path bytes,bytes)::additions,import.module_name::seen)
         ([],seen) m.imports in
       with_lifted (captured @ List.rev additions) (rest @ List.rev additions) seen in
-   let captured_modules=with_lifted captured_modules captured_modules [] in
+   with_lifted captured_modules captured_modules []) in
    let validate () =
     abi (A.verify context);
     List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate capture))) integrity;
@@ -404,10 +407,10 @@ let with_source_history ?resume ~entry ~source f =
  capture_history ?resume ~source_only:true ~entry ~source (function
   | None -> f None
   | Some program ->
-   let history={program;active=ref true;lowering=lazy(Go_graph_lowering.lower ~entry (List.map fst program.captured_modules))} in
+   let history={program;active=ref true;lowering=lazy(Go_graph_lowering.lower ~entry (List.map fst (Lazy.force program.captured_modules)))} in
    Fun.protect ~finally:(fun () -> history.active:=false) (fun () -> f (Some history)))
 let source_program source = source.program
-let source_modules source = source.program.captured_modules
+let source_modules source = Lazy.force source.program.captured_modules
 let resumed_through source identity = List.assoc_opt identity source.program.resumed_through
 let records source identity = match List.assoc_opt identity source.program.records with
  | Some records -> records

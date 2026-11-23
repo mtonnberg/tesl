@@ -74,6 +74,18 @@ val reset_disk_memo : unit -> unit
 (** Whether a [with_scope_path_memo] scope is active, and a reset to run when
     the outermost one ends (for per-compilation tables kept elsewhere). *)
 val in_scope : unit -> bool
+(** Whether disk answers are memoized right now: inside a scope and outside any
+    fresh observation ([with_fresh_path_memo]). *)
+val memoizing : unit -> bool
+(** Disk answers, ignoring every source view, shared with the memo of
+    [with_scope_path_memo] while [memoizing] (read anew otherwise). *)
+module Disk : sig
+  val lstat : string -> Unix.stats
+  val read : string -> string
+  val readdir : string -> string array
+  val exists : string -> bool
+  val realpath : string -> string
+end
 (** [memo_in_view key compute]: within a compilation scope (outside fresh or
     bounded path memos), [compute] runs once per source view and key; it must
     depend only on observations made through this module. *)
