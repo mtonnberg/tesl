@@ -7,6 +7,8 @@
     ran: every frozen step then receives the complete check. *)
 val full_history : unit -> bool
 val request_full_history : unit -> unit
+(** [f] with trust disabled in this process only; restored afterwards. *)
+val with_full_history : (unit -> 'a) -> 'a
 
 (** Evidence that one completed step's trust seal verified. *)
 type evidence

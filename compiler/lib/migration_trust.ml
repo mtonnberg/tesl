@@ -49,6 +49,13 @@ let request_full_history () =
      the same choice. *)
   Unix.putenv "TESL_FULL_HISTORY" "1"
 
+(* Disable trust for one scope of this process only (revalidation's complete
+   re-check); child processes are not affected. *)
+let with_full_history f =
+  let previous = !requested in
+  requested := true;
+  Fun.protect ~finally:(fun () -> requested := previous) f
+
 type evidence = { root : string }
 
 let root evidence = evidence.root
