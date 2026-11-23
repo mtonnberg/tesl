@@ -1,6 +1,6 @@
-module CapabilityMissing exposing [Note, NoteDb, addNote]
+module CapabilityMissing exposing [Note, NoteDb, addNote, noteCount]
 
-import Tesl.Prelude exposing [String]
+import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
@@ -20,3 +20,6 @@ database NoteDb = Database {
 fn addNote(id: String, body: String) -> Note
   requires [dbRead Note] =
   insert Note { id: id, body: body }
+
+# Counting notes only reads them, so read access is enough here.
+fn noteCount() -> Int requires [dbRead Note] = selectCount n from Note

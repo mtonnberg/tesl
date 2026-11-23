@@ -525,7 +525,7 @@ test('the original six exercises have applicable edits and preserve stars across
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1')).length)).toBe(6);
 });
 
-test('a debounced edit earns its star before the guide changes source and import cleanup is accepted', async ({ page }) => {
+test('a debounced edit earns its star before the guide changes source and an import edit is accepted', async ({ page }) => {
   await page.goto('/?guide=api');
   await expect(page.locator('#status')).toHaveText('All checks passed');
   const greeting = await page.locator('#src').inputValue();
@@ -536,7 +536,7 @@ test('a debounced edit earns its star before the guide changes source and import
   await page.goto('/?guide=capabilities');
   await expect(page.locator('#diags')).toContainText('V001');
   const source = await page.locator('#src').inputValue();
-  await page.locator('#src').fill(source.replace('requires [dbRead Note]', 'requires [dbWrite Note]').replace('exposing [dbRead, dbWrite]', 'exposing [dbWrite]'));
+  await page.locator('#src').fill(source.replace('requires [dbRead Note]', 'requires [dbWrite Note]').replace('exposing [dbRead, dbWrite]', 'exposing [dbWrite, dbRead]'));
   await page.locator('#journey-next').click();
   await expect(page.locator('#journey-title')).toHaveText('Keep currencies apart');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('tesl-playground-stars-v1') || '[]'))).toContain(4);

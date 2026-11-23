@@ -290,10 +290,24 @@ enterJourneyStep step model =
     in
     ( changed, Cmd.batch [ command, uiEffect "clear-fragment" E.null, uiEffect "focus" (E.string "journey-title") ] )
 
+{-| Apply a suggested edit at its one site. A starter can contain the same
+text elsewhere (another function with the same requires clause), which an
+edit that changes every occurrence would not match.
+-}
+replaceFirst : String -> String -> String -> String
+replaceFirst before after source =
+    case String.indexes before source of
+        index :: _ ->
+            String.left index source ++ after ++ String.dropLeft (index + String.length before) source
+
+        [] ->
+            source
+
+
 exerciseMatches : Int -> Model -> Bool
 exerciseMatches step model =
     let
-        matches index before after = compactSource model.source == compactSource (String.replace before after (exampleSource index model))
+        matches index before after = compactSource model.source == compactSource (replaceFirst before after (exampleSource index model))
         binding fallback =
             String.lines model.source |> List.filterMap (\line -> case String.words line of
                 "let" :: name :: "=" :: "check" :: _ -> Just name
@@ -352,7 +366,7 @@ update msg model =
                 Just step ->
                     let repair = repairFor step in
                     if not (repairApplicable step model.source) then ( model, Cmd.none )
-                    else check True { model | source = String.replace repair.before repair.after model.source, revision = model.revision + 1, diagnostics = [], artifacts = [] }
+                    else check True { model | source = replaceFirst repair.before repair.after model.source, revision = model.revision + 1, diagnostics = [], artifacts = [] }
         RestartJourneyStep ->
             case model.journey of
                 Nothing -> ( model, Cmd.none )
