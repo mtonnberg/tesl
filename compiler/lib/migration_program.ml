@@ -468,6 +468,9 @@ let source_lowering source = protect "<row source artifacts>" (fun () ->
 let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
  let graph=checked(source_lowering source) in
  let expected=Go_graph_lowering.modules graph in
- let order=List.sort (fun a b -> compare a.source_file b.source_file) in
- if order expected <> order modules then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
+ let order=List.stable_sort (fun a b -> compare a.source_file b.source_file) in
+ (* Usually the very modules the lowering produced: comparing them physically
+    first avoids a structural walk of every module's syntax tree. *)
+ let same a b = List.length a = List.length b && List.for_all2 (fun x y -> x == y || x = y) a b in
+ if not (same (order expected) (order modules)) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "row artifact graph differs from the complete captured and lowered source graph")
