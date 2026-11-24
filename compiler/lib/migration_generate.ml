@@ -174,6 +174,15 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
         match checkpoint with
         | None -> (migration.path,attached) :: others
         | Some text ->
+          (* The finished emitted output of the revisions it completes, from
+             one emit of the proposed application with that checkpoint in
+             place (a digest of the same length, so emitted source lines do
+             not move). *)
+          let staged = Migration_closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
+          let staged = sparse (Migration_closure.attach ~file:migration.path ~source staged) in
+          let fragments = overlay root ((migration.path,staged) :: (Migration_closure.checkpoint_file migration.path,text) :: others)
+            (fun () -> Emit_fragment.record ~revisions:(if n=2 then [1;2] else [n])) in
+          let text = Migration_checkpoint.with_fragments text fragments in
           let sealed = Migration_closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
           let source = sparse (Migration_closure.attach ~file:migration.path ~source sealed) in
           (migration.path,source) :: (Migration_closure.checkpoint_file migration.path,text) :: others) in

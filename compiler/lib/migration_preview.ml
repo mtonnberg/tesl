@@ -187,7 +187,8 @@ let generate_reseal ~project_root ~entry_file ~database ~documents = protect ent
         first_error diagnostics; cleanup,diagnostics)) in
     let staged = checked (Migration_reseal.seals_and_closures ~context ~project_root ~family:selection.family) in
     ignore (full_check (Migration_reseal.unchecked_writes staged));
-    let proposal = checked (Migration_reseal.with_checkpoints ?namespace:(T.namespace target_) ~context ~project_root ~family:selection.family staged) in
+    let proposal = checked (Emit_fragment.with_entry entry_file (fun () ->
+      Migration_reseal.with_checkpoints ?namespace:(T.namespace target_) ~context ~project_root ~family:selection.family staged)) in
     let cleanup,diagnostics = full_check proposal.writes in
     let edits = source_guard (M.create ~project_root ~reads:proposal.reads
       ~directories:[selection.migration_directory] ~imports:[] ~documents ~writes:proposal.writes) in

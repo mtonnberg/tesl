@@ -319,11 +319,23 @@ let records_written () = with_history (fun _ path entry ->
     (with_full_history false (fun () -> resumed_through entry));
   check (option int) "full history folds from V1" None (with_full_history true (fun () -> resumed_through entry)))
 
+(* The checkpoint without its stored emitted output (the last element of its
+   state node), so a build renders that revision from its records. *)
+let strip_fragments text =
+  let facts = String.index text '\n' + 1 in
+  let _,facts_end = Migration_canonical.parse_at text ~from:facts in
+  let body = String.sub text (facts_end+1) (String.length text - facts_end - 2) in
+  match Migration_canonical.parse body with
+  | Migration_canonical.Seq children ->
+    let children = List.rev (Migration_canonical.Seq [] :: List.tl (List.rev children)) in
+    String.sub text 0 (facts_end+1) ^ Migration_canonical.encode (Migration_canonical.Seq children) ^ "\n"
+  | Migration_canonical.Bytes _ -> fail "malformed checkpoint"
+
 (* A consistently re-recorded record is published by a normal build (its seal
    is trusted) and refused by the full-history check. *)
 let stored_records_published () = with_history (fun _ path entry ->
   let reference = with_full_history true (fun () -> emit entry) in
-  rewrite_checkpoint path 3 (fun text -> replace "s6:rename" "s6:renamX" text);
+  rewrite_checkpoint path 3 (fun text -> replace "s6:rename" "s6:renamX" (strip_fragments text));
   check bool "the edit changed a stored record" true (contains (read (checkpoint path 3)) "s6:renamX");
   let normal = with_full_history false (fun () -> emit entry) in
   check bool "a normal build publishes the stored record" true
@@ -331,6 +343,43 @@ let stored_records_published () = with_history (fun _ path entry ->
   let full = with_full_history true (fun () -> emit entry) in
   check bool ("full history refuses the edited record:\n" ^ full) true
     (String.starts_with ~prefix:"failed\n" full && contains full "differs from the full-history recomputation"))
+
+let spliced entry = ignore (emit entry); !Emit_fragment.last_spliced
+
+(* Start stores each completed revision's emitted output; a normal emit
+   splices it instead of compiling those revisions, a full-history emit
+   recomputes it, and both emit the same bytes. *)
+let fragments_spliced () = with_history (fun _ path entry ->
+  check int "a normal emit splices every completed revision" 4 (with_full_history false (fun () -> spliced entry));
+  check int "a full-history emit splices none" 0 (with_full_history true (fun () -> spliced entry));
+  check string "the outputs agree" (with_full_history true (fun () -> emit entry)) (with_full_history false (fun () -> emit entry));
+  (* Without V3's stored output only the prefix before it is spliced. *)
+  rewrite_checkpoint path 3 strip_fragments;
+  check int "the spliced prefix stops at a revision without stored output" 2 (with_full_history false (fun () -> spliced entry));
+  check string "the outputs still agree" (with_full_history true (fun () -> emit entry)) (with_full_history false (fun () -> emit entry)))
+
+(* Stored output is keyed on the emission's inputs: a debug emit compiles
+   everything and agrees with its full-history build. *)
+let fragments_keyed () = with_history (fun _ _ entry ->
+  let debug () = Migration_program.with_compilation_cache (fun () ->
+    render_artifacts (Compile.compile_go_source ~debug:true ~path:entry entry (read entry))) in
+  let normal = with_full_history false debug in
+  check int "a debug emit splices nothing" 0 !Emit_fragment.last_spliced;
+  check string "debug outputs agree" (with_full_history true debug) normal)
+
+(* A consistently re-recorded stored output is published by a normal build and
+   refused by the full-history check. *)
+let stored_fragment_published () = with_history (fun _ path entry ->
+  let marker = "not called within this module" in
+  rewrite_checkpoint path 3 (fun text ->
+    check bool "the stored output holds the marker" true (contains text marker);
+    replace marker "not called within this modulX" text);
+  let normal = with_full_history false (fun () -> emit entry) in
+  check bool "a normal build publishes the stored output" true
+    (String.starts_with ~prefix:"ok\n" normal && contains normal "not called within this modulX");
+  let full = with_full_history true (fun () -> emit entry) in
+  check bool ("full history refuses the edited output:\n" ^ full) true
+    (String.starts_with ~prefix:"failed\n" full && contains full "MIG013" && contains full "differs from the full-history recomputation"))
 
 (* Records belong to the namespace they were computed for; another namespace
    folds from V1 and still emits the same artifacts as a full-history build. *)
@@ -345,7 +394,7 @@ let other_namespace () = with_history (fun _ _ entry ->
 (* A checkpoint in an earlier format came from an earlier compiler: ignored. *)
 let earlier_format_ignored () = with_history (fun _ path entry ->
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    replace "tesl-migration-checkpoint-v3\n" "tesl-migration-checkpoint-v2\n" text)) [2;3;4];
+    replace "tesl-migration-checkpoint-v4\n" "tesl-migration-checkpoint-v3\n" text)) [2;3;4];
   check (option int) "an earlier format is not resumed" None (with_full_history false (fun () -> resumed_through entry));
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);
@@ -364,4 +413,7 @@ let () = run "Migration checkpoints" [
   "records", [ test_case "Start stores published records and builds continue from them" `Slow records_written;
                test_case "a stored record is published and full history refuses an edit" `Slow stored_records_published;
                test_case "records of another namespace are not used" `Slow other_namespace ];
+  "emitted output", [ test_case "completed revisions are spliced and agree with full history" `Slow fragments_spliced;
+                      test_case "stored output is keyed on the emission inputs" `Slow fragments_keyed;
+                      test_case "stored output is published and full history refuses an edit" `Slow stored_fragment_published ];
 ]

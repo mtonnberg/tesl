@@ -19,7 +19,11 @@ type database = {identity:string;family:string;namespace:string;current_version:
 type t = {abi:A.t;databases:database list;inputs:(string * string) list;
  queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list;
  row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list Lazy.t;validate:(unit -> unit);
- resumed:bool;records:(string * Migration_records.t) list;resumed_through:(string * int) list}
+ resumed:bool;records:(string * Migration_records.t) list;resumed_through:(string * int) list;
+ (* Per database: the emitted fragments stored with the resumed revisions'
+    records (spliceable), and under --full-history the fragments every
+    recorded checkpoint holds (to recompute and compare). *)
+ fragments:(string * Emit_fragment.t list) list;recorded_fragments:(string * Emit_fragment.t list) list}
 let databases t = t.databases
 let contracts t = t.contracts
 let queue_bindings t = t.queue_bindings
@@ -145,6 +149,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    (* [inputs] were read in this view: pinning them freezes what it observes. *)
    let result = with_integrity integrity (fun () -> let parent = Source_input.view_token () in Source_input.with_pinned_files inputs (fun () -> Source_input.with_equivalent_view parent @@ fun () ->
    let inventories = ref [] and row_histories=ref [] and contracts=ref [] and resumed_any=ref false and records=ref [] and resumed_through=ref [] in
+   let fragments = ref [] and recorded_fragments = ref [] in
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~family) in
@@ -176,18 +181,29 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
          Contract is checked against a plan that contains its predecessor, as
          the current revision's Contract prerequisite requires. *)
       let completed = H.completed_migrations h in
+      (* The newest completed revisions may lack a checkpoint (a revision
+         being frozen has none yet); those revisions are computed like the
+         current one. *)
+      let rec checkpointed = function
+        | [] -> []
+        | (m:H.migration_source) :: rest as newest_first ->
+          if Migration_checkpoint.recorded [m] then List.rev newest_first else checkpointed rest in
+      let completed = checkpointed (List.rev completed) in
       match Migration_checkpoint.load ~project_root:root ~family completed with
       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
       | Some newest when newest.checkpoint.refusal<>None ->
         (match Migration_checkpoint.load_records ~project_root:root ~family ~namespace completed newest with
          | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
          | None -> None
-         | Some records ->
-           match Migration_checkpoint.resumed ~stored_value_compatibility ~gap:2 ~compiler_abi:(A.id context)
+         | Some (records,stored) ->
+           let gap = (H.current h).version - newest.through + 1 in
+           match Migration_checkpoint.resumed ~stored_value_compatibility ~gap ~compiler_abi:(A.id context)
                ~project_root:root ~family h ~through:(H.current h).version with
            | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
            | Some ((usable:Migration_checkpoint.usable),_) as resumed when usable.through=newest.through-1 && usable.checkpoint.refusal<>None ->
-             frozen := Some (newest.through,records); resumed
+             frozen := Some (newest.through,records);
+             fragments := (identity,stored) :: !fragments;
+             resumed
            | _ -> None)
       | _ -> None in
     if resumed<>None && !frozen=None then resumed_any:=true;
@@ -303,7 +319,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         ~contracts:(Lazy.force contracts) ~queue_versions in
       match Migration_checkpoint.verify_all ~project_root:root ~family ~compiler_abi:(A.id context)
           ~stored_value_compatibility ~rows ~plan ~records:(namespace,derive) (H.completed_migrations h) with
-      | () -> ()
+      | stored -> recorded_fragments := (identity,stored) :: !recorded_fragments
       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
     end;
     let generated = match resumed with
@@ -361,7 +377,8 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
     List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
     validated := true) in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate;
-     resumed= !resumed_any;records= !records;resumed_through= !resumed_through} in
+     resumed= !resumed_any;records= !records;resumed_through= !resumed_through;
+     fragments= !fragments;recorded_fragments= !recorded_fragments} in
    let result=f (Some value) in
    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
    result)) in
@@ -422,6 +439,8 @@ let with_source_history ?resume ~entry ~source f =
 let source_program source = source.program
 let source_modules source = Lazy.force source.program.captured_modules
 let resumed_through source identity = List.assoc_opt identity source.program.resumed_through
+let fragments source identity = Option.value (List.assoc_opt identity source.program.fragments) ~default:[]
+let recorded_fragments source identity = Option.value (List.assoc_opt identity source.program.recorded_fragments) ~default:[]
 let records source identity = match List.assoc_opt identity source.program.records with
  | Some records -> records
  | None -> invalid_arg "history records are captured only for source histories" 

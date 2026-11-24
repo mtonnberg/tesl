@@ -18007,6 +18007,29 @@ let relocate_migration_history_by_go_mod artifacts =
     then relocate_migration_history ~project_path:(String.trim (String.sub first 7 (String.length first - 7))) artifacts
     else artifacts
 
+(* How one project emission uses stored revision output (Emit_fragment):
+   [spliced] are the fragments of revisions 1..[covered], which are not
+   compiled; the pieces of [recording] revisions are captured while they are
+   emitted. [revision_dirs k] are the Go package directories of revision k's
+   modules. *)
+type fragment_plan = {
+  spliced : Emit_fragment.t list;
+  covered : int;
+  recording : int list;
+  revision_dirs : int -> string list;
+  mutable rows_captured : (int * Emit_fragment.rows) list;
+  mutable fixtures_captured : (int * (int * string list * (string * string) list)) list;
+  mutable blocks_captured : (int * Emit_fragment.block) list;
+  mutable unrecordable : int list;
+}
+let plan_unrecordable plan revision =
+  if not (List.mem revision plan.unrecordable) then plan.unrecordable <- revision :: plan.unrecordable
+(* A file emitted for revision [revision]'s pieces must lie in its own
+   packages, or a later splice of that revision would lack it. *)
+let plan_owns plan revision package =
+  if List.mem revision plan.recording && not (List.mem package (plan.revision_dirs revision)) then
+    plan_unrecordable plan revision
+
 let compile_project ?(mode=Release) ?(row_storage=false) ?(row_physical=false) ?row_source ?fixture_graph ?(migration_fixtures=[]) ?(queue_conversions=[]) ?(migration_families=[]) ?(migration_queues=[]) ?(queue_codec_records=[]) ~(entry : module_form) (modules : module_form list) =
 let queue_conversion_artifacts graph exports conversions =
  let module Q=Migration_queue_transform in
@@ -18114,16 +18137,27 @@ var Conversion%d = func() *teslrt.CompiledQueueConversion[%s,%s] {
      contents="package " ^ package_name entry.module_name ^ "\n\nimport _ " ^ go_quote(project ^ "/internal/" ^ package) ^ "\n"}] else []) in
 (* Generated tests consume exact checked fixture bindings. They execute only
    under the ordinary test runner, never as registration/startup work. *)
-let fixture_artifacts graph exports checked (records:Migration_records.fixture_transform list) =
+let fixture_artifacts ~plan graph exports checked (records:Migration_records.fixture_transform list) =
  let module T=Migration_transform in
  let loc=Location.dummy_loc entry.source_file in
  let require = function Some x->x | None->unsupported loc "migration fixture lost its exact emitted source binding" in
  let project_path="tesl.generated/" ^ package_name entry.module_name in
  let imports=ref [] in
+ (* The revision whose fixtures are being emitted, and the imports each
+    recorded revision added. *)
+ let revision=ref 0 and revision_imports=Hashtbl.create 4 in
+ let import entry =
+  imports:=entry::!imports;
+  if List.mem !revision plan.recording then
+   Hashtbl.replace revision_imports !revision (entry::Option.value (Hashtbl.find_opt revision_imports !revision) ~default:[]) in
  let bridges=ref [] and references=Hashtbl.create 16 in
  (* A stored fixture names its function; a live one supplies the checked binding. *)
  let function_ref (owner_name,function_name,identity) (live:T.function_binding option) =
-  match Hashtbl.find_opt references identity with Some name->name | None->
+  match Hashtbl.find_opt references identity with
+  | Some (name,owner_revision)->
+    if owner_revision<> !revision then (plan_unrecordable plan owner_revision;plan_unrecordable plan !revision);
+    name
+  | None->
   let owner,declaration=match live with
    | Some binding -> binding.owner,binding.declaration
    | None ->
@@ -18134,12 +18168,22 @@ let fixture_artifacts graph exports checked (records:Migration_records.fixture_t
   let signature=require(Hashtbl.find_opt exported.ex_signatures declaration.name) in
   if signature.sig_needs_scope then unsupported declaration.loc "migration fixture unexpectedly requires runtime capabilities";
   let name=unique_ident exported.ex_taken "TeslCompiledMigrationFixture" in
+  plan_owns plan !revision exported.ex_package;
   bridges:={path="internal/" ^ exported.ex_package ^ "/migration_fixture_" ^ name ^ "_generated.go";
     contents="package " ^ exported.ex_package ^ "\n\nvar " ^ name ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
-  imports:=(exported.ex_package,project_path ^ "/internal/" ^ exported.ex_package)::!imports;
+  import (exported.ex_package,project_path ^ "/internal/" ^ exported.ex_package);
   let reference=exported.ex_package ^ "." ^ name in
-  Hashtbl.add references identity reference;reference in
+  Hashtbl.add references identity (reference,!revision);reference in
  let bodies=ref [] and index=ref 0 in
+ (* Spliced revisions' tests, in order; their records are not emitted again. *)
+ List.iter (fun (f:Emit_fragment.t) ->
+  if f.fixtures<>[] && f.fixture_first<> !index then Emit_fragment.mismatch "spliced fixture tests are out of order";
+  List.iter (fun body -> bodies:=body::!bodies;incr index) f.fixtures;
+  imports:=f.fixture_imports @ !imports) plan.spliced;
+ let stored=List.fold_left (fun n (record:Migration_records.fixture_transform) ->
+   if plan.covered>0 && record.fixture_version<=plan.covered then n+List.fold_left (fun n (row:Migration_records.fixture_row) -> n+List.length row.fixtures) 0 record.rows else n) 0 records in
+ if stored<> !index then Emit_fragment.mismatch "spliced fixture tests differ from the history records";
+ let records=List.filter (fun (record:Migration_records.fixture_transform) -> plan.covered=0 || record.fixture_version>plan.covered) records in
  List.iter(fun transform ->
   Migration_proof_context.revalidate(T.proof_context transform);
   List.iter(fun ((original:Ast.module_form),_) ->
@@ -18151,6 +18195,9 @@ let fixture_artifacts graph exports checked (records:Migration_records.fixture_t
   ()) checked;
  List.iter(fun (record:Migration_records.fixture_transform) ->
   let live=List.find_opt(fun transform->(T.root transform).module_name=record.root) checked in
+  revision:=record.fixture_version;
+  let first= !index in
+  let mine=ref [] in
   List.iteri(fun row_index (row:Migration_records.fixture_row)->
    let live_row=Option.bind live (fun transform->List.nth_opt (T.rows transform) row_index) in
    List.iteri(fun fixture_index (fixture:Migration_records.fixture) ->
@@ -18159,7 +18206,7 @@ let fixture_artifacts graph exports checked (records:Migration_records.fixture_t
    let fixture_ref=function_ref (fixture.fixture_owner,fixture.fixture_name,fixture.fixture_identity) live_fixture in
    let callback=Option.map (fun reference ->
      function_ref reference (Option.bind live_row (fun (row:T.row)->row.function_binding))) row.row_callback in
-   if optional || callback<>None then imports:=("teslrt",project_path ^ "/internal/teslrt")::!imports;
+   if optional || callback<>None then import ("teslrt",project_path ^ "/internal/teslrt");
    let description="migration fixture " ^ fixture.fixture_identity in
    let name="TestTeslMigrationFixture" ^ string_of_int !index in incr index;
    let unwrap=if optional then
@@ -18169,9 +18216,19 @@ let fixture_artifacts graph exports checked (records:Migration_records.fixture_t
      "\tresult := " ^ callback ^ "(row)\n\tswitch result.Tag {\n\tcase " ^
      (if row.fixture_row_change then "teslrt.RowChangeKeep, teslrt.RowChangeReject, teslrt.RowChangeDelete" else "teslrt.MigratedRow, teslrt.MigratedReject") ^
      ":\n\tdefault: t.Fatal(\"migration fixture returned an invalid result tag\")\n\t}\n" in
-   bodies:=(Printf.sprintf "func %s(t *testing.T) {\n\tif wanted := os.Getenv(\"TESL_TEST_NAME\"); wanted != \"\" && wanted != %s && wanted != %s { t.Skip(\"named test filter\") }\n\tif kind := os.Getenv(\"TESL_TEST_KIND\"); kind != \"\" && kind != \"test\" { t.Skip(\"test kind filter\") }\n\tdefer func() { if trapped := recover(); trapped != nil { t.Fatalf(\"%%s trapped: %%v\", %s, trapped) } }()\n%s%s}\n"
-    name (go_quote description) (go_quote name) (go_quote description) unwrap invoke)::!bodies
-  )row.fixtures)record.rows) records;
+   let body=Printf.sprintf "func %s(t *testing.T) {\n\tif wanted := os.Getenv(\"TESL_TEST_NAME\"); wanted != \"\" && wanted != %s && wanted != %s { t.Skip(\"named test filter\") }\n\tif kind := os.Getenv(\"TESL_TEST_KIND\"); kind != \"\" && kind != \"test\" { t.Skip(\"test kind filter\") }\n\tdefer func() { if trapped := recover(); trapped != nil { t.Fatalf(\"%%s trapped: %%v\", %s, trapped) } }()\n%s%s}\n"
+    name (go_quote description) (go_quote name) (go_quote description) unwrap invoke in
+   bodies:=body::!bodies;mine:=body::!mine
+  )row.fixtures)record.rows;
+  if List.mem record.fixture_version plan.recording then begin
+   (* One revision may publish several fixture transforms: they are adjacent. *)
+   let earlier_first,earlier,earlier_imports=match List.assoc_opt record.fixture_version plan.fixtures_captured with
+    | Some captured -> captured | None -> first,[],[] in
+   plan.fixtures_captured <- (record.fixture_version,(earlier_first,earlier @ List.rev !mine,earlier_imports))
+     :: List.remove_assoc record.fixture_version plan.fixtures_captured
+  end) records;
+ plan.fixtures_captured <- List.map (fun (r,(first,bodies,_)) ->
+   r,(first,bodies,List.sort_uniq compare (Option.value (Hashtbl.find_opt revision_imports r) ~default:[]))) plan.fixtures_captured;
  if !bodies=[] then [] else
  let imports=List.sort_uniq compare !imports |> List.map(fun(alias,path)->"\t" ^ alias ^ " " ^ go_quote path ^ "\n") |> String.concat "" in
  List.rev !bridges @ [{path="internal/teslmigrationfixtures/fixtures_test.go";
@@ -18179,7 +18236,10 @@ let fixture_artifacts graph exports checked (records:Migration_records.fixture_t
 (* Internal source-only artifact companion. Names are taken from the very module
    environments that emitted these exact captured declarations, never inferred
    from a callback digest or from source spelling alone. *)
-let compiled_row_artifacts ~entry ~modules:_ ~exports source =
+let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
+ let context={Emit_fragment.spliced=plan.spliced;recording=plan.recording;captured=[];refused=[]} in
+ Emit_fragment.with_context context @@ fun () ->
+ let artifacts=(
  let module P=Migration_program in
  let module RH=Migration_row_history in
  let graph=match P.source_lowering source with Ok graph->graph | Error errors->
@@ -18253,14 +18313,38 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
    contents=Printf.sprintf "package %s\n\nimport teslrt %s\n\nvar _ = teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s)\n"
     exported.ex_package (go_quote (project_path ^ "/internal/teslrt")) (go_quote database.identity) db.db_go_var (go_quote database.family)}::!owners;
   let imports=ref ["teslrt",project_path ^ "/internal/teslrt"] in
-  let legacy_math=lazy (let alias=unique_ident exported.ex_taken "migrationmath" in imports:=(alias,"math")::!imports;alias) in
+  (* What each recorded revision's declarations import and take. *)
+  let revision=ref 0 and revision_imports=Hashtbl.create 4 and revision_taken=Hashtbl.create 4 in
+  let recording ()=List.mem !revision plan.recording in
+  let push table value=Hashtbl.replace table !revision (value::Option.value (Hashtbl.find_opt table !revision) ~default:[]) in
+  let note_import entry=imports:=entry::!imports;if recording () then push revision_imports entry in
+  let take requested=let chosen=unique_ident exported.ex_taken requested in
+   if recording () then push revision_taken (requested,chosen);chosen in
+  let legacy_math=lazy (let alias=take "migrationmath" in note_import (alias,"math");alias) in
   let refname own name = if own=exported.ex_package then name else (
-   imports:=(own,project_path ^ "/internal/" ^ own)::!imports; own ^ "." ^ name) in
+   note_import (own,project_path ^ "/internal/" ^ own); own ^ "." ^ name) in
   let rows=List.assoc database.identity (P.row_histories source) in
   (* Every published binding, from its record; the live checked binding, when
      this build checked it, supplies the reverse writes and conversion
      certificates a stored record never carries. *)
-  let declarations=List.mapi (fun index (record:Migration_records.transform) ->
+  let all_records=(P.records source database.identity).transforms in
+  let stored_rows=List.map (fun (f:Emit_fragment.t) ->
+    match List.filter (fun (r:Emit_fragment.rows) -> r.database=database.identity) f.rows with
+    | [r] -> r | _ -> Emit_fragment.mismatch "revision fragment lacks its row declarations") plan.spliced in
+  List.iter (fun (r:Emit_fragment.rows) ->
+    if r.go_var<>db.db_go_var then Emit_fragment.mismatch "spliced row declarations name another database variable";
+    List.iter (fun (requested,chosen) -> if unique_ident exported.ex_taken requested<>chosen then
+      Emit_fragment.mismatch "a spliced row declaration's name is taken") r.taken;
+    imports:=r.imports @ !imports) stored_rows;
+  let stored=List.concat_map (fun (r:Emit_fragment.rows) -> r.declarations) stored_rows in
+  if List.length (List.filter (fun (record:Migration_records.transform) -> record.migration_version<=plan.covered) all_records)<>List.length stored then
+    Emit_fragment.mismatch "spliced row declarations differ from the history records";
+  let offset=List.length stored in
+  let live_records=List.filter (fun (record:Migration_records.transform) -> record.migration_version>plan.covered) all_records in
+  let declarations=stored @ List.mapi (fun index (record:Migration_records.transform) ->
+   let index=offset+index in
+   revision:=record.migration_version;
+   let declaration=(
    let live=List.find_opt (fun b -> RH.migration_version b=record.migration_version &&
      (RH.current b).identity=record.current.identity) (RH.bindings rows) in
    let previous=record.previous and current=record.current in
@@ -18288,6 +18372,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
    let signature=require (Hashtbl.find_opt function_owner.ex_signatures emitted_declaration.name) in
    if signature.sig_needs_scope then unsupported declaration.loc "row callback unexpectedly requires runtime capabilities";
    let bridge=unique_ident function_owner.ex_taken "TeslCompiledRowCallback" in
+   plan_owns plan !revision function_owner.ex_package;
    bridges:={path="internal/" ^ function_owner.ex_package ^ "/migration_row_" ^ bridge ^ "_generated.go";
     contents="package " ^ function_owner.ex_package ^ "\n\nvar " ^ bridge ^ " = " ^ signature.go_name ^ "\n"}::!bridges;
    refname function_owner.ex_package bridge
@@ -18295,8 +18380,8 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
      (* A Derived mapping is already checked and linked. Lower that mapping
         directly; there is no invented user function or final-AST proof site. *)
      let module MR=Migration_records in
-     let math=lazy (let alias=unique_ident exported.ex_taken "migrationmath" in
-       imports:=(alias,"math")::!imports;alias) in
+     let math=lazy (let alias=take "migrationmath" in
+       note_import (alias,"math");alias) in
      let values=record.fields in
      if List.length values<>List.length target_info.ent_row.rec_fields then
        unsupported loc "Derived mapping lost its complete target inventory";
@@ -18308,7 +18393,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
          let value="row." ^ record_field_go_name previous in
          if type_equal before ty then value else
          match live with
-         | Some binding -> mapping_conversion binding ~reverse:false ~previous ~current:field ~before ~after:ty value refname
+         | Some binding -> plan_unrecordable plan !revision;mapping_conversion binding ~reverse:false ~previous ~current:field ~before ~after:ty value refname
          | None -> unsupported loc "Derived nominal conversion requires its live checked mapping certificate" in
        let value=match MR.derived mapping with
          | Some (MR.Copy_from previous) -> copy previous
@@ -18329,13 +18414,13 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
      Printf.sprintf "func(row %s) teslrt.Migrated[%s] { return teslrt.Migrated[%s]{Tag: teslrt.MigratedRow, RowValue: %s{%s}} }"
        from target target target (String.concat ", " fields)
    | _ -> unsupported loc "row callback mode lost its exact checked source binding" in
-   let handle=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowTransform" ^ string_of_int index) in
+   let handle=take (db.db_go_var ^ "CompiledRowTransform" ^ string_of_int index) in
    let declaration=Printf.sprintf "var %s = teslrt.%s[%s, %s](\n\tteslrt.LookupCompiledRowTransform(teslrt.RegisterDatabaseMigrationHistory(teslrt.RegisterDatabaseIdentity(%s, %s), %s), %s, %d, %s), %s)\n"
     handle (if record.row_change then "RegisterCompiledRowChange"else "RegisterCompiledRowTransform") from target (go_quote database.identity) db.db_go_var (go_quote database.family)
     (go_quote database.family) record.migration_version (go_quote current.identity) fn in
    if not row_storage then declaration else
    let decoder_owner,decoder=adapter_record previous and encoder_owner,encoder=adapter_record current in
-   let name=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowStorage" ^ string_of_int index) in
+   let name=take (db.db_go_var ^ "CompiledRowStorage" ^ string_of_int index) in
    let storage=declaration ^ Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowStorage[%s, %s](%s, %s, %s, %s, %s)\n"
     name from target handle (refname decoder_owner.ex_package decoder.storage_decode) (refname encoder_owner.ex_package encoder.storage_encode) (refname encoder_owner.ex_package encoder.storage_decode) (refname decoder_owner.ex_package decoder.storage_encode) in
    let storage=if not row_physical then storage else
@@ -18346,6 +18431,7 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
    | Some binding ->
    let row=RH.row binding in
    if row.writebacks=[] && row.legacies=[] then storage else begin
+    plan_unrecordable plan !revision;
     let reverse_callback (checked:Migration_transform.function_binding) =
      let emitted,declaration=require (Go_graph_lowering.function_binding graph ~owner:checked.owner checked.declaration) in
      let own=owner emitted.module_name in
@@ -18412,19 +18498,36 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
         | Some (own,name) -> refname own name ^ "(" ^ value ^ ")"
         | None -> unsupported loc "WriteBack reverse identity requires the exact checked nominal Copy/Rename site") in
      record_field_go_name field ^ ": " ^ value) from_info.ent_row.rec_fields in
-    let reverse=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledRowWriteBack" ^ string_of_int index) in
+    let reverse=take (db.db_go_var ^ "CompiledRowWriteBack" ^ string_of_int index) in
      storage ^ (if optional then
        Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowTryWriteBack[%s, %s](%s, func(row %s) teslrt.Maybe[%s] {\n%sreturn teslrt.Something(%s{%s})\n})\n"
          reverse from target name target from (String.concat "" !preparations) from (String.concat ", " values)
        else Printf.sprintf "\nvar %s = teslrt.RegisterCompiledRowWriteBack[%s, %s](%s, func(row %s) %s { return %s{%s} })\n"
          reverse from target name target from from (String.concat ", " values))
-   end) (P.records source database.identity).transforms in
+   end) in
+   if recording () then begin
+     let earlier=match List.assoc_opt !revision plan.rows_captured with
+       | Some (r:Emit_fragment.rows) when r.database=database.identity -> r.declarations | _ -> [] in
+     plan.rows_captured <- (!revision,{Emit_fragment.database=database.identity;go_var=db.db_go_var;
+       declarations=earlier @ [declaration];imports=[];taken=[]})
+       :: List.filter (fun (r,(x:Emit_fragment.rows)) -> r<> !revision || x.database<>database.identity) plan.rows_captured
+   end;
+   declaration) live_records in
+  revision:=0;
+  (* Every recorded revision has its piece, even without declarations here. *)
+  plan.rows_captured <- List.map (fun revision ->
+    let declarations=match List.find_opt (fun (r,(x:Emit_fragment.rows)) -> r=revision && x.database=database.identity) plan.rows_captured with
+      | Some (_,x) -> x.declarations | None -> [] in
+    let get table=List.rev (Option.value (Hashtbl.find_opt table revision) ~default:[]) in
+    revision,{Emit_fragment.database=database.identity;go_var=db.db_go_var;declarations;
+      imports=List.sort_uniq compare (get revision_imports);taken=get revision_taken}) plan.recording
+    @ List.filter (fun (_,(x:Emit_fragment.rows)) -> x.database<>database.identity) plan.rows_captured;
   let declarations=declarations @ if not row_storage then [] else
    List.mapi (fun index ((version:RH.version),(current:RH.entity))->
     let target_owner,target_info=entity current in
     let codec_owner,codec=adapter current in
     let target=refname target_owner.ex_package target_info.ent_row.rec_go_name in
-    let name=unique_ident exported.ex_taken (db.db_go_var ^ "CompiledCurrentStorage" ^ string_of_int index) in
+    let name=take (db.db_go_var ^ "CompiledCurrentStorage" ^ string_of_int index) in
     (* Keep the order witness with its actual original-owner codec functions.
        It can only restrict the selected descriptor, never introduce a field. *)
     let bundle=unique_ident codec_owner.ex_taken "TeslCompiledCurrentCodec" in
@@ -18470,7 +18573,10 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
    Option.fold ~none:"" ~some:(fun json -> "\nconst teslGeneratedContractHistoryJSON = " ^ go_history_literal json) contract_json ^
    "\n\nfunc init() {\n" ^ registrations ^ "\tregisterCompiledQueueHistory(teslGeneratedQueueHistoryJSON)\n\tregisterCompiledRowHistory(teslGeneratedRowHistoryJSON)\n" ^
    (if row_physical then "\tregisterCompiledRowPhysicalHistory(teslGeneratedPhysicalHistoryJSON)\n\tregisterCompiledRowContractHistory(teslGeneratedContractHistoryJSON)\n" else "") ^ "}\n"}]
-
+) in
+ plan.blocks_captured <- context.captured;
+ List.iter (plan_unrecordable plan) context.refused;
+ artifacts
  in
   let row_storage_entities=if not row_storage then [] else match row_source with
    | None -> []
@@ -18646,36 +18752,185 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
   | Ok entity_bindings, Ok ordered_names ->
     let ordered = List.filter_map (fun name ->
       List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
-    let rec emit acc exports = function
+    (* Stored revision output (Emit_fragment). A single versioned database's
+       completed revisions may be spliced from their checkpoints instead of
+       compiled; the revisions a recording emit asks for are captured. *)
+    let metered = Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[] in
+    let stage_preparation = row_physical && Option.is_some row_source in
+    let database = match row_source with
+      | Some source when queue_conversions=[] ->
+        (match Migration_program.databases (Migration_program.source_program source) with [d] -> Some (source,d) | _ -> None)
+      | _ -> None in
+    let by_name = Hashtbl.create (List.length modules) in
+    List.iter (fun (m : module_form) -> if not (Hashtbl.mem by_name m.module_name) then Hashtbl.add by_name m.module_name m) modules;
+    let revision_of name = match database with
+      | Some (_,d) -> Emit_fragment.revision_of_module ~family:d.family name | None -> None in
+    let revision_names = Hashtbl.create 64 in
+    List.iter (fun name -> match revision_of name with
+      | Some k -> Hashtbl.replace revision_names k (name :: Option.value (Hashtbl.find_opt revision_names k) ~default:[])
+      | None -> ()) local_names;
+    let names_of k = List.sort_uniq compare (Option.value (Hashtbl.find_opt revision_names k) ~default:[]) in
+    let revision_dirs k = List.map package_name (names_of k) in
+    let deps name = match Hashtbl.find_opt by_name name with Some m -> dependencies_of m | None -> [] in
+    let closure roots =
+      let seen = Hashtbl.create 16 in
+      let rec visit name = if not (Hashtbl.mem seen name) then (Hashtbl.add seen name (); List.iter visit (deps name)) in
+      List.iter visit roots;
+      Hashtbl.fold (fun name () acc -> name :: acc) seen [] |> List.sort compare in
+    let owned_by name key = String.starts_with ~prefix:(name ^ ".") key in
+    let environment = lazy (match database with
+      | None -> ""
+      | Some (source,d) ->
+        let flag b = if b then "1" else "0" in
+        let p = Migration_program.source_program source in
+        Emit_fragment.digest (["tesl-emit-fragment-v1";Migration_program.compiler_abi p;Migration_program.stored_value_compatibility p;
+          (* Debug output names absolute source paths; release output does not. *)
+          project_path;(if mode=Debug then "debug:" ^ Source_input.canonical_path entry.source_file else "release");flag row_storage;flag row_physical;flag stage_preparation;flag metered;
+          d.identity;d.family;d.namespace] @ queue_codec_records)) in
+    let parameters k =
+      let entity (e:Migration_records.entity) = String.concat "\000" ([e.identity;e.entity_name;e.table;string_of_int e.generation;e.type_hash] @
+        List.concat_map (fun (c:Migration_records.column) -> [c.field;c.column;c.scalar;string_of_bool c.nullable;string_of_bool c.primary_key]) e.columns) in
+      Emit_fragment.digest (Lazy.force environment :: List.concat_map (fun name ->
+        name :: "access" :: List.concat_map (fun (key,fields) -> if owned_by name key then key :: fields else []) row_access_entities
+        @ "storage" :: List.filter_map (fun (e:Migration_records.entity) -> if owned_by name e.entity_name then Some (entity e) else None) row_storage_entities)
+        (closure (names_of k))) in
+    (* Revision k's modules are spliceable when they are their own Go packages
+       and no project-wide binding (database, entity, queue, nominal
+       conversion) names one of them. *)
+    let coverable k =
+      let names = names_of k in
+      names<>[] && List.for_all (fun name ->
+        (match emission_graph with Some graph -> Go_graph_lowering.owner graph name=Some name | None -> true) &&
+        not (List.exists (fun (key,_) -> owned_by name key) entity_bindings) &&
+        not (List.exists (fun (key,_) -> owned_by name key) migration_families) &&
+        not (List.exists (fun (q:Migration_program.queue_binding) -> owned_by name q.application_queue) migration_queues) &&
+        not (List.exists (fun mapping -> emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping)=name) nominal_mappings) &&
+        not (List.exists (fun transport -> emitted_owner emission_graph (Migration_proof_context.nominal_module transport)=name) (nominal_reverses @ nominal_transports)) &&
+        (match Hashtbl.find_opt by_name name with
+         | Some m -> not (List.exists (function DFunc f -> f.kind=MainKind | _ -> false) m.decls)
+         | None -> false)) names in
+    let full_history = Migration_trust.full_history () in
+    let spliced = match database with
+      | Some (source,d) when not full_history ->
+        let rec prefix expected = function
+          | (f:Emit_fragment.t) :: rest when f.revision=expected && coverable expected &&
+              f.environment=Lazy.force environment && f.parameters=parameters expected -> f :: prefix (expected+1) rest
+          | _ -> [] in
+        prefix 1 (Migration_program.fragments source d.identity)
+      | _ -> [] in
+    (* A full-history emit recomputes every stored fragment it can. *)
+    let to_verify = match database with
+      | Some (source,d) when full_history ->
+        List.filter (fun (f:Emit_fragment.t) -> f.environment=Lazy.force environment) (Migration_program.recorded_fragments source d.identity)
+      | _ -> [] in
+    let recording = if database=None then [] else
+      List.sort_uniq compare (!Emit_fragment.requested @ List.map (fun (f:Emit_fragment.t) -> f.revision) to_verify) in
+    let make_plan spliced = {spliced;covered=List.length spliced;recording;revision_dirs;
+      rows_captured=[];fixtures_captured=[];blocks_captured=[];unrecordable=[]} in
+    let dir_of path = match String.split_on_char '/' path with "internal" :: dir :: _ :: _ -> Some dir | _ -> None in
+    let attempt (plan : fragment_plan) =
+      (* Covered revisions' modules are compiled only as dependencies of the
+         modules that are compiled. *)
+      let roots = List.filter (fun name -> match revision_of name with
+        | Some k -> k>plan.covered | None -> true) local_names in
+      let needed = Hashtbl.create 64 in
+      List.iter (fun name -> Hashtbl.replace needed name ()) (closure roots);
+      let compile_list = List.filter (fun (m : module_form) -> Hashtbl.mem needed m.module_name) ordered in
+      let shared = Hashtbl.create 8 in
+      let rec emit acc exports = function
       | [] -> (try
         let fixtures=if fixture_checks=[] && fixture_records=[] then [] else match emission_graph with
-          | Some graph->fixture_artifacts graph exports fixture_checks fixture_records
+          | Some graph->fixture_artifacts ~plan graph exports fixture_checks fixture_records
           | None->unsupported (Location.dummy_loc entry.source_file) "migration fixtures require their complete original source graph" in
         let conversions=if queue_conversions=[] then [] else match emission_graph with
           | Some graph->queue_conversion_artifacts graph exports queue_conversions
           | None->unsupported (Location.dummy_loc entry.source_file) "queue conversions require their complete original source graph" in
-        Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~entry ~modules ~exports) row_source)
+        Ok (List.rev acc @ fixtures @ conversions @ Option.fold ~none:[] ~some:(compiled_row_artifacts ~plan ~entry ~modules ~exports) row_source)
         with Unsupported error -> Error [error])
       | (m : module_form) :: rest ->
-         (match compile_module_internal ~seal:false ~stage_preparation:(row_physical && Option.is_some row_source) ~migration_metered:(Option.is_some row_source || queue_conversions<>[] || fixture_checks<>[]) ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
+         (match compile_module_internal ~seal:false ~stage_preparation ~migration_metered:metered ?emission_graph ~nominal_mappings:(List.filter (fun mapping ->
           emitted_owner emission_graph (Migration_transform.nominal_mapping_owner mapping) = m.module_name) nominal_mappings) ~nominal_reverses:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_reverses) ~nominal_transports:(List.filter (fun transport ->
           emitted_owner emission_graph (Migration_proof_context.nominal_module transport) = m.module_name) nominal_transports)
           ~row_access_entities ~row_storage_entities ~mode ~dependencies:exports ~entity_bindings ~migration_families ~migration_queues ~queue_codec_records ~project_path m with
          | Error errors -> Error errors
          | Ok (artifacts, module_exports) ->
+           (match revision_of m.module_name with
+            | Some k when List.mem k plan.recording ->
+              let own = package_name m.module_name in
+              List.iter (fun (a : artifact) -> if dir_of a.path<>Some own then
+                Hashtbl.replace shared k (a.path :: Option.value (Hashtbl.find_opt shared k) ~default:[])) artifacts
+            | _ -> ());
            emit (List.rev_append artifacts acc) (module_exports :: exports) rest)
-    in
-    (match emit [] [] ordered with
+      in
+      match emit [] [] compile_list with
+      | Error errors -> Error errors
+      | Ok live ->
+        (* A compiled file in a covered revision's package must be exactly
+           the stored one; then the stored files and runtime complete the
+           tree. *)
+        let stored = Hashtbl.create 64 and covered_dirs = Hashtbl.create 64 in
+        List.iter (fun (f : Emit_fragment.t) ->
+          List.iter (fun dir -> Hashtbl.replace covered_dirs dir ()) (revision_dirs f.revision);
+          List.iter (fun (path,contents) -> Hashtbl.replace stored path contents) f.files) plan.spliced;
+        List.iter (fun (a : artifact) -> match dir_of a.path with
+          | Some dir when Hashtbl.mem covered_dirs dir ->
+            if Hashtbl.find_opt stored a.path<>Some a.contents then
+              Emit_fragment.mismatch ("compiled output differs from the stored revision output: " ^ a.path)
+          | _ -> ()) live;
+        let spliced_files = List.concat_map (fun (f : Emit_fragment.t) ->
+          List.map (fun (path,contents) -> {path;contents}) f.files @
+          List.map (fun name -> match List.assoc_opt name Embedded_go_runtime.files with
+            | Some contents -> {path="internal/teslrt/" ^ name;contents}
+            | None -> Emit_fragment.mismatch ("stored revision output names a missing runtime file: " ^ name)) f.runtime) plan.spliced in
+        let artifacts = live @ spliced_files in
+        (* On a duplicate path the FIRST wins, and dependencies are emitted first, so the
+           shared artifacts (the lint config, the runtime files) come from whichever module
+           needed them earliest — those are byte-identical either way. *)
+        let seen = Hashtbl.create 16 in
+        let deduped = List.filter (fun (artifact : artifact) ->
+          if Hashtbl.mem seen artifact.path then false
+          else begin Hashtbl.add seen artifact.path (); true end) artifacts in
+        let fragments = List.filter_map (fun k ->
+          let runtime = Option.value (Hashtbl.find_opt shared k) ~default:[] in
+          let runtime_names = List.filter_map (fun path ->
+            if String.starts_with ~prefix:"internal/teslrt/" path then Some (String.sub path 16 (String.length path - 16)) else None) runtime in
+          let others = List.filter (fun path -> not (String.starts_with ~prefix:"internal/teslrt/" path) &&
+            not (List.mem path ["go.mod";"go.sum";".golangci.yml"])) runtime in
+          if List.mem k plan.unrecordable || others<>[] || not (coverable k) then None else
+          let dirs = revision_dirs k in
+          let first,fixtures,fixture_imports = match List.assoc_opt k plan.fixtures_captured with
+            | Some captured -> captured | None -> 0,[],[] in
+          Some {Emit_fragment.revision=k;environment=Lazy.force environment;parameters=parameters k;
+            files=List.filter_map (fun (a : artifact) -> match dir_of a.path with
+              | Some dir when List.mem dir dirs -> Some (a.path,a.contents) | _ -> None) deduped;
+            runtime=List.sort_uniq compare runtime_names;
+            rows=List.filter_map (fun (r,rows) -> if r=k then Some rows else None) plan.rows_captured
+              |> List.sort (fun (a:Emit_fragment.rows) b -> compare a.database b.database);
+            fixture_first=first;fixtures;fixture_imports;
+            blocks=List.filter_map (fun (r,block) -> if r=k then Some block else None) plan.blocks_captured
+              |> List.sort (fun (a:Emit_fragment.block) b -> compare (a.document,a.database) (b.document,b.database))}) plan.recording in
+        Ok (deduped,fragments) in
+    let first = make_plan spliced in
+    let run plan = try attempt plan with Emit_fragment.Mismatch message ->
+      Error [{loc=Location.dummy_loc entry.source_file;message="stored revision output: " ^ message}] in
+    (* Any refusal of a splicing emit compiles everything instead. *)
+    let outcome = match run first with
+      | Error _ when first.covered>0 -> Emit_fragment.last_spliced := 0; run (make_plan [])
+      | result -> Emit_fragment.last_spliced := first.covered; result in
+    let outcome = match outcome with
+      | Ok (deduped,fragments) ->
+        Emit_fragment.produced := fragments;
+        (match List.find_opt (fun (f : Emit_fragment.t) ->
+           List.find_opt (fun (g : Emit_fragment.t) -> g.revision=f.revision) fragments<>Some f) to_verify with
+         | Some f ->
+           Error [{loc=Location.dummy_loc entry.source_file;message=Printf.sprintf
+             "MIG013: the emitted output stored in the checkpoint of V%d differs from the full-history recomputation; regenerate the checkpoint from the revision's source" f.revision}]
+         | None -> Ok deduped)
+      | Error errors -> Error errors in
+    (match outcome with
      | Error errors -> Error errors
-     | Ok artifacts ->
-       (* On a duplicate path the FIRST wins, and dependencies are emitted first, so the
-          shared artifacts (the lint config, the runtime files) come from whichever module
-          needed them earliest — those are byte-identical either way. *)
-       let seen = Hashtbl.create 16 in
-       let deduped = List.filter (fun (artifact : artifact) ->
-         if Hashtbl.mem seen artifact.path then false
-         else begin Hashtbl.add seen artifact.path (); true end) artifacts in
+     | Ok deduped ->
        (* `go.mod` and `go.sum` are NOT byte-identical across modules: each names the
           dependencies ITS module needs, and taking the first one shipped a manifest missing
           whatever a LATER module required — a project whose database is declared in one module
@@ -18719,7 +18974,9 @@ let compiled_row_artifacts ~entry ~modules:_ ~exports source =
        (match row_source with
         | None -> Ok rebuilt
         | Some source -> match Migration_program.verify_source_history source modules with
-          | Ok () -> Ok rebuilt
+          (* In path order: a build that splices stored revision output
+             (Emit_fragment) assembles the same files in another order. *)
+          | Ok () -> Ok (List.stable_sort (fun (a : artifact) b -> String.compare a.path b.path) rebuilt)
           | Error errors -> Error (List.map (fun (e:Migration_sparse.error) -> {loc=e.loc;message=e.message}) errors)))
 
   ) with

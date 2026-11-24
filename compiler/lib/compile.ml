@@ -2800,6 +2800,19 @@ let compile_go_file ?(debug=false) filename =
   let source = Source_input.read_text filename in
   compile_go_source ~debug ~path:filename filename source
 
+(* Start and re-seal store each completed revision's emitted output in its
+   checkpoint (Emit_fragment): they emit the proposed application in their
+   source view and keep the pieces of the revisions asked for. The proposal's
+   own checks report its diagnostics, so the entry is not re-checked here. *)
+let () = Emit_fragment.recorder := Some (fun ~entry_file ~revisions ->
+  let saved = !Emit_fragment.requested in
+  Emit_fragment.requested := revisions;
+  Emit_fragment.produced := [];
+  Fun.protect ~finally:(fun () -> Emit_fragment.requested := saved; Emit_fragment.produced := []) (fun () ->
+    match compile_go_source ~prechecked:true ~path:entry_file entry_file (Source_input.read_text entry_file) with
+    | GoSuccess _ -> List.filter (fun (f:Emit_fragment.t) -> List.mem f.revision revisions) !Emit_fragment.produced
+    | GoFailure _ -> []))
+
 type compile_result =
   | Success of string
   | Failure of diagnostic list

@@ -30,12 +30,37 @@ type t = {
   contracts : (string, int) Hashtbl.t;  (* hexadecimal contract -> root index *)
   entries : Buffer.t;
   mutable count : int;
+  (* The rendered entries, newest first (for [since]). *)
+  mutable rendered : string list;
 }
 
 let create ~quote =
-  {quote; index=Hashtbl.create 1024; contracts=Hashtbl.create 256; entries=Buffer.create 4096; count=0}
+  {quote; index=Hashtbl.create 1024; contracts=Hashtbl.create 256; entries=Buffer.create 4096; count=0; rendered=[]}
 
 let length t = t.count
+
+let add t entry =
+  let index = t.count in
+  if index > 0 then Buffer.add_char t.entries ',';
+  Buffer.add_string t.entries entry;
+  Hashtbl.add t.index entry index;
+  t.rendered <- entry :: t.rendered;
+  t.count <- index + 1;
+  index
+
+(* Append an entry a stored revision block introduced (Emit_fragment): stored
+   entries are exactly the interned texts, so the table and its index end as
+   if those revisions had been rendered. *)
+let preload t entry =
+  if Hashtbl.mem t.index entry then invalid_arg "a stored canonical node block repeats an entry";
+  ignore (add t entry)
+
+(* The entries appended after the table had [count] of them, in order. *)
+let since t count =
+  let rec take n acc = function
+    | x :: rest when n > 0 -> take (n-1) (x :: acc) rest
+    | _ -> acc in
+  take (t.count - count) [] t.rendered
 
 let atom t value =
   if String.is_valid_utf_8 value then t.quote value
@@ -50,13 +75,7 @@ let rec intern t = function
     let entry = "[" ^ String.concat "," elements ^ "]" in
     match Hashtbl.find_opt t.index entry with
     | Some index -> index
-    | None ->
-      let index = t.count in
-      if index > 0 then Buffer.add_char t.entries ',';
-      Buffer.add_string t.entries entry;
-      Hashtbl.add t.index entry index;
-      t.count <- index + 1;
-      index
+    | None -> add t entry
 
 (* The root index of a published contract, given as the lowercase hexadecimal
    of its canonical bytes (the form history records keep). *)

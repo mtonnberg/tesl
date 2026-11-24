@@ -66,6 +66,10 @@ val records : source_history -> string -> Migration_records.t
 (** The checkpointed revision a publishing capture of this database continued
     from (its [row_histories] then hold only that revision and later ones). *)
 val resumed_through : source_history -> string -> int option
+(** Emitted fragments of the resumed revisions (spliceable, Emit_fragment), and
+    under --full-history those every recorded checkpoint holds. *)
+val fragments : source_history -> string -> Emit_fragment.t list
+val recorded_fragments : source_history -> string -> Emit_fragment.t list
 
 (** Must run inside the capture callback. Revalidates complete source/ABI guards
     and exact ownership-preserving lowered graph, including private helpers. *)
