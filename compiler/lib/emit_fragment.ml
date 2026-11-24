@@ -53,6 +53,9 @@ type t = {
   fixtures : string list;
   fixture_imports : (string * string) list;
   blocks : block list;
+  (* The dependency markers its Go files reference (Emit_go rebuilds go.mod
+     from the markers of every emitted file). *)
+  markers : string list;
 }
 
 let atom s = C.Bytes s
@@ -64,7 +67,8 @@ let encode t =
   C.Seq [int t.revision;atom t.environment;atom t.parameters;pairs t.files;strings t.runtime;
     C.Seq (List.map (fun (r:rows) -> C.Seq [atom r.database;atom r.go_var;strings r.declarations;pairs r.imports;pairs r.taken]) t.rows);
     int t.fixture_first;strings t.fixtures;pairs t.fixture_imports;
-    C.Seq (List.map (fun (b:block) -> C.Seq [atom b.document;atom b.database;strings b.entries;strings b.nodes]) t.blocks)]
+    C.Seq (List.map (fun (b:block) -> C.Seq [atom b.document;atom b.database;strings b.entries;strings b.nodes]) t.blocks);
+    strings t.markers]
 
 let decode node =
   let fail () = invalid_arg "malformed emitted revision fragment" in
@@ -74,7 +78,7 @@ let decode node =
   let strings n = List.map str (items n) in
   let pairs n = List.map (function C.Seq [a;b] -> str a,str b | _ -> fail ()) (items n) in
   match node with
-  | C.Seq [revision;environment;parameters;files;runtime;rows;fixture_first;fixtures;fixture_imports;blocks] ->
+  | C.Seq [revision;environment;parameters;files;runtime;rows;fixture_first;fixtures;fixture_imports;blocks;markers] ->
     {revision=num revision;environment=str environment;parameters=str parameters;files=pairs files;
      runtime=strings runtime;
      rows=List.map (function
@@ -85,7 +89,8 @@ let decode node =
      blocks=List.map (function
        | C.Seq [document;database;entries;nodes] ->
          {document=str document;database=str database;entries=strings entries;nodes=strings nodes}
-       | _ -> fail ()) (items blocks)}
+       | _ -> fail ()) (items blocks);
+     markers=strings markers}
   | _ -> fail ()
 
 (* A digest of already computed values: one SHA-256 over their length-prefixed

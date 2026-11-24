@@ -18007,6 +18007,17 @@ let relocate_migration_history_by_go_mod artifacts =
     then relocate_migration_history ~project_path:(String.trim (String.sub first 7 (String.length first - 7))) artifacts
     else artifacts
 
+(* The runtime references that make go.mod require a dependency. *)
+let password_dependency_markers = [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
+  "teslrt.PasswordHash" ]
+let postgres_dependency_markers = [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ]
+(* The dependency markers [artifacts]' Go files reference. *)
+let referenced_markers ?(found=[]) ?(skip=fun _ -> false) artifacts =
+  List.fold_left (fun found (artifact : artifact) ->
+    let pending = List.filter (fun marker -> not (List.mem marker found)) (password_dependency_markers @ postgres_dependency_markers) in
+    if pending = [] || skip artifact.path || not (Filename.check_suffix artifact.path ".go") then found
+    else go_code_needles artifact.contents pending @ found) found artifacts
+
 (* How one project emission uses stored revision output (Emit_fragment):
    [spliced] are the fragments of revisions 1..[covered], which are not
    compiled; the pieces of [recording] revisions are captured while they are
@@ -18909,8 +18920,13 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
               |> List.sort (fun (a:Emit_fragment.rows) b -> compare a.database b.database);
             fixture_first=first;fixtures;fixture_imports;
             blocks=List.filter_map (fun (r,block) -> if r=k then Some block else None) plan.blocks_captured
-              |> List.sort (fun (a:Emit_fragment.block) b -> compare (a.document,a.database) (b.document,b.database))}) plan.recording in
-        Ok (deduped,fragments) in
+              |> List.sort (fun (a:Emit_fragment.block) b -> compare (a.document,a.database) (b.document,b.database));
+            markers=List.sort_uniq compare (referenced_markers (List.filter_map (fun (a : artifact) -> match dir_of a.path with
+              | Some dir when List.mem dir dirs -> Some a | _ -> None) deduped))}) plan.recording in
+        let stored_paths = Hashtbl.create 64 in
+        List.iter (fun (f : Emit_fragment.t) -> List.iter (fun (path,_) -> Hashtbl.replace stored_paths path ()) f.files) plan.spliced;
+        let stored_markers = List.sort_uniq compare (List.concat_map (fun (f : Emit_fragment.t) -> f.markers) plan.spliced) in
+        Ok (deduped,fragments,stored_paths,stored_markers) in
     let first = make_plan spliced in
     let run plan = try attempt plan with Emit_fragment.Mismatch message ->
       Error [{loc=Location.dummy_loc entry.source_file;message="stored revision output: " ^ message}] in
@@ -18919,32 +18935,29 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       | Error _ when first.covered>0 -> Emit_fragment.last_spliced := 0; run (make_plan [])
       | result -> Emit_fragment.last_spliced := first.covered; result in
     let outcome = match outcome with
-      | Ok (deduped,fragments) ->
+      | Ok (deduped,fragments,stored_paths,stored_markers) ->
         Emit_fragment.produced := fragments;
         (match List.find_opt (fun (f : Emit_fragment.t) ->
            List.find_opt (fun (g : Emit_fragment.t) -> g.revision=f.revision) fragments<>Some f) to_verify with
          | Some f ->
            Error [{loc=Location.dummy_loc entry.source_file;message=Printf.sprintf
              "MIG013: the emitted output stored in the checkpoint of V%d differs from the full-history recomputation; regenerate the checkpoint from the revision's source" f.revision}]
-         | None -> Ok deduped)
+         | None -> Ok (deduped,stored_paths,stored_markers))
       | Error errors -> Error errors in
     (match outcome with
      | Error errors -> Error errors
-     | Ok deduped ->
+     | Ok (deduped,stored_paths,stored_markers) ->
        (* `go.mod` and `go.sum` are NOT byte-identical across modules: each names the
           dependencies ITS module needs, and taking the first one shipped a manifest missing
           whatever a LATER module required — a project whose database is declared in one module
           and whose entry point is another got the pgx runtime files with a go.mod requiring
           nothing, which does not build.  They are rebuilt here from the union of what the
           emitted tree actually references. *)
-       let password_markers = [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
-             "teslrt.PasswordHash" ]
-       and postgres_markers = [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
-       (* Every marker the emitted Go code references, one scan per file. *)
-       let referenced = List.fold_left (fun found (artifact : artifact) ->
-         let pending = List.filter (fun marker -> not (List.mem marker found)) (password_markers @ postgres_markers) in
-         if pending = [] || not (Filename.check_suffix artifact.path ".go") then found
-         else go_code_needles artifact.contents pending @ found) [] deduped in
+       let password_markers = password_dependency_markers
+       and postgres_markers = postgres_dependency_markers in
+       (* Every marker the emitted Go code references, one scan per file;
+          spliced files contribute the markers stored with them. *)
+       let referenced = referenced_markers ~found:stored_markers ~skip:(Hashtbl.mem stored_paths) deduped in
        let references marker = List.mem marker referenced in
        let needs_password = List.exists references password_markers in
         let needs_postgres = queue_conversions<>[] || List.exists references postgres_markers in
