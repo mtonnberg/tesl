@@ -40,6 +40,39 @@ sample them and SQL checks the complete retained set. `seed-workload.json` recor
 seeding time; `rollout.json` records the extra-row count and phase timings. This
 is a modest volume comparison, not a million-row throughput or latency guarantee.
 
+### Restoring an old backup with only the newest release
+
+`restore_catch_up.py` checks the operator guide's backup rule: a restored
+database is the same installation at the version it held, and the newest binary
+alone migrates it. It takes a whole-database `pg_dump` (plus
+`pg_dumpall --globals-only` for the roles) at chosen points of the sequential
+deployment, restores each into a new cluster, and runs only V20:
+`--schema install` as Installer, `--schema catch-up` as Worker, then
+`--schema contract V20`.
+
+```sh
+python3 example/db-twenty-releases/restore_catch_up.py --artifacts .tesl-stuff/tracker-twenty \
+  --evidence .tesl-stuff/tracker-twenty-restore --from 1,5,6,7open,13,19
+```
+
+`N` is a backup after VN's finality; `Nopen` is taken while VN-1 is still
+admitted. For each restored backup it checks that:
+
+- the database UUID and installed state equal the source at dump time;
+- in a finalized backup, VN-1 refuses to start; in an open one, it still serves;
+- V20's Request process does not serve before catch-up;
+- catch-up refuses while the restored version has a recent heartbeat;
+- after catch-up and V20's Contract, V20 serves every restored cohort with the
+  transformed values (V7/V13 metadata, all renames) and the optional fields the
+  SQL observer had seeded; it then passes its five API tests on that data;
+- replaying install, catch-up and Contract changes neither the installed state
+  nor the receipts.
+
+`run.py --backup-at 1,7open,13` keeps such dumps under `EVIDENCE/backups` during
+an ordinary run; `restore_catch_up.py --backups DIR` restores them without
+deploying again. Each restore costs about 31 s of heartbeat wait plus 1–2 minutes
+of catch-up with the race-instrumented binaries.
+
 The runner owns its PostgreSQL cluster and roles. Data/WAL live under the output
 directory; only a short socket path is allocated under `/tmp`. It never
 reuses a developer's application database. Heavy runs on a shared host can use
