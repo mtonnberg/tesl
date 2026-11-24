@@ -91,6 +91,34 @@ let disk_changed () =
     not (String.contains name '.')) |> List.sort String.compare in
   differs disk_listing Sys.readdir (fun a b -> relevant a = relevant b) ||
   !presence_changed ()
+(* Run [run] (inside a compilation scope) and publish its result only when no
+   memoized disk answer changed meanwhile; otherwise forget them and run again,
+   at most [attempts] more times. Inside another such run, whose own check
+   covers every answer this one memoizes, [run] runs once: a change makes the
+   enclosing run start over. *)
+let final_check_pending = ref false
+let with_final_disk_check ~attempts run =
+  if !final_check_pending then run () else begin
+    final_check_pending := true;
+    Fun.protect ~finally:(fun () -> final_check_pending := false) (fun () ->
+      let rec attempt remaining =
+        let result = run () in
+        if remaining = 0 || not (disk_changed ()) then result
+        else (reset_disk_memo (); attempt (remaining - 1)) in
+      attempt attempts)
+  end
+(* The memoized bytes of [path] when its memoized lstat has the identity of
+   [stats] (device, inode, size, modification and change times, kind), while a
+   final disk check is pending: that check reads the memoized bytes from disk
+   again before anything is published, so a pass that observes disk anew may
+   take them in place of a read. *)
+let unchanged_read path (stats : Unix.stats) =
+  if not (!final_check_pending && !scope_memo_active) then None else
+  match Hashtbl.find_opt disk_bytes path, Hashtbl.find_opt disk_lstat path with
+  | Some (Ok bytes), Some (Ok (s : Unix.stats)) when
+      s.st_dev = stats.st_dev && s.st_ino = stats.st_ino && s.st_size = stats.st_size &&
+      s.st_mtime = stats.st_mtime && s.st_ctime = stats.st_ctime && s.st_kind = stats.st_kind -> Some bytes
+  | _ -> None
 let with_fresh_path_memo f =
   let previous = !path_memo in
   path_memo := Some (Hashtbl.create 64);
@@ -293,8 +321,20 @@ let read_using disk path =
     | None -> disk path in
   observe (fun () -> Read (path, contents));
   contents
-let read = read_using (memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all))
-let read_text = read_using (memo_disk disk_text (fun path -> In_channel.with_open_text path In_channel.input_all))
+(* A file's bytes from disk: memoized in a scope; observed anew otherwise,
+   except that a file memoized under an unchanged lstat identity answers its
+   memoized bytes while a final disk check is pending ([unchanged_read]). *)
+let disk_read path =
+  let raw path = In_channel.with_open_bin path In_channel.input_all in
+  if disk_memo_active () || not (!final_check_pending && !scope_memo_active) then memo_disk disk_bytes raw path
+  else match Unix.lstat path with
+    | stats -> (match unchanged_read path stats with Some bytes -> bytes | None -> raw path)
+    | exception (Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _) -> raw path
+let read = read_using disk_read
+(* Text mode translates line endings only on Windows; elsewhere a text read
+   answers the binary bytes, from the same memo (one disk read per file). *)
+let read_text = if not Sys.win32 then read else
+  read_using (memo_disk disk_text (fun path -> In_channel.with_open_text path In_channel.input_all))
 (* Disk existence answers share the canonical-spelling memo (see [real]). *)
 let disk_presence : (string, (bool, exn) result) Hashtbl.t = Hashtbl.create 256
 let () = reset_presence := (fun () -> Hashtbl.reset disk_presence);
@@ -348,12 +388,13 @@ and readdir_unrecorded path = match !active, find path with
 
 module Disk = struct
   let lstat = lstat
-  let read = memo_disk disk_bytes (fun path -> In_channel.with_open_bin path In_channel.input_all)
+  let read = disk_read
   let readdir = listing
   let exists path = if disk_memo_active () then memo_disk disk_presence Sys.file_exists path else Sys.file_exists path
   (* The memo holds one spelling table per source view; disk spellings do not
      depend on the view, so the table of no view is used. *)
   let realpath path = if disk_memo_active () then real path else Unix.realpath path
+  let unchanged_read = unchanged_read
 end
 
 let with_pinned_files inputs f =

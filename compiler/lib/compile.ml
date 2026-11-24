@@ -2664,11 +2664,10 @@ let rec compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="")
  Migration_program.with_compilation_cache (fun () ->
   (* Published only when no input read through the compilation's memoized
      disk answers changed while it ran; otherwise compiled again from fresh
-     reads. *)
-  let result = compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source in
-  if attempts = 0 || not (Source_input.disk_changed ()) then result
-  else (Source_input.reset_disk_memo ();
-    compile_go_source_internal ~debug ~prechecked ~path ~attempts:(attempts - 1) ~queue_conversions filename source))
+     reads. A compile nested in a command (Start's recording emit) is covered
+     by that command's check. *)
+  Source_input.with_final_disk_check ~attempts (fun () ->
+    compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source))
 and compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source =
  (fun f -> f ()) (fun () ->
   let path = if path = "" then filename else path in

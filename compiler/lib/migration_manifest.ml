@@ -384,8 +384,11 @@ let verify_files ?(quick=false) ?(revisit=false) t disk = (if disk then Source_i
     | _ -> match Hashtbl.find_opt digests path with
       | Some digest -> digest
       | None ->
-      let digest = plain_digest ~disk path in
-      (match before with Some id when observed path = before -> remember seen_files path (id,digest) | _ -> ());
+      (* Bytes this command read under the same lstat identity: its final
+         disk check reads them again (Source_input.Disk.unchanged_read). *)
+      let unchanged = match stat path with Ok s -> Source_input.Disk.unchanged_read path s | Error _ -> None in
+      let digest = match unchanged with Some bytes -> hash bytes | None -> plain_digest ~disk path in
+      (match before with Some id when unchanged <> None || observed path = before -> remember seen_files path (id,digest) | _ -> ());
       Hashtbl.replace digests path digest;
       digest in
   List.iter (fun h ->

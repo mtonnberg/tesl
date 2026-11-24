@@ -75,6 +75,12 @@ val with_scope_path_memo : (unit -> 'a) -> 'a
     guard) and, on a change, calls [reset_disk_memo] and computes again. *)
 val disk_changed : unit -> bool
 val reset_disk_memo : unit -> unit
+(** [with_final_disk_check ~attempts run]: run [run] and return its result when
+    [disk_changed] then answers false; otherwise [reset_disk_memo] and run again
+    (at most [attempts] more times; the last result is returned). Nested inside
+    another [with_final_disk_check], whose check covers every memoized answer,
+    [run] runs once. Call it inside the compilation scope. *)
+val with_final_disk_check : attempts:int -> (unit -> 'a) -> 'a
 (** Whether a [with_scope_path_memo] scope is active, and a reset to run when
     the outermost one ends (for per-compilation tables kept elsewhere). *)
 val in_scope : unit -> bool
@@ -89,6 +95,11 @@ module Disk : sig
   val readdir : string -> string array
   val exists : string -> bool
   val realpath : string -> string
+  (** [unchanged_read path stats]: while a [with_final_disk_check] run is
+      pending, the bytes of [path] memoized in this scope when its memoized
+      lstat has the identity of [stats]; that final check reads them from disk
+      again before the run's result is published. *)
+  val unchanged_read : string -> Unix.stats -> string option
 end
 (** [memo_in_view key compute]: within a compilation scope (outside fresh or
     bounded path memos), [compute] runs once per source view and key; it must

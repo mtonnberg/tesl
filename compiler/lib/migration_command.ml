@@ -153,11 +153,7 @@ let generate opts =
      preview. Its final guards observe disk anew (Migration_manifest), and a
      preview computed while a memoized input changed is computed again. *)
   let run () = Migration_program.with_compilation_cache (fun () ->
-    let rec attempt remaining =
-      let response = run () in
-      if remaining = 0 || not (Source_input.disk_changed ()) then response
-      else (Source_input.reset_disk_memo (); attempt (remaining - 1)) in
-    attempt 2) in
+    Source_input.with_final_disk_check ~attempts:2 run) in
   match root with
   | Some root -> Source_input.with_overlays ~project_root:root
       (List.map (fun (file,_,source) -> file,source) overlays) run

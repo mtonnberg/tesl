@@ -71,10 +71,6 @@ let run_once ~filename ~logical_path flag position =
    each history judged once, however many checks of the query ask. *)
 let run ~filename ~logical_path flag position =
   Migration_program.with_compilation_cache @@ fun () ->
-  let rec attempt remaining =
-    let response = run_once ~filename ~logical_path flag position in
-    if remaining = 0 || not (Source_input.disk_changed ()) then response
-    else (Source_input.reset_disk_memo (); attempt (remaining - 1)) in
   (* Sources still changing after two fresh answers: publish the latest, as a
      query observing a moving tree always could. *)
-  attempt 2
+  Source_input.with_final_disk_check ~attempts:2 (fun () -> run_once ~filename ~logical_path flag position)
