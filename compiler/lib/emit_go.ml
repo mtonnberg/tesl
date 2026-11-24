@@ -11147,6 +11147,10 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
 
 (* The [needles] that [contains_go_code haystack] finds, in one scan. *)
 let go_code_needles haystack needles =
+  (* As in [contains_go_code]: only a needle the text contains anywhere can
+     occur in its code, and most files contain none. *)
+  let needles = List.filter (fun needle -> needle = "" || find_substring haystack needle <> None) needles in
+  if needles = [] then [] else
   let length = String.length haystack in
   let found = Array.make (List.length needles) false in
   let needles = Array.of_list needles in

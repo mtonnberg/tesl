@@ -151,11 +151,13 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    let result = with_integrity integrity (fun () -> let parent = Source_input.view_token () in Source_input.with_pinned_files inputs (fun () -> Source_input.with_equivalent_view parent @@ fun () ->
    let inventories = ref [] and row_histories=ref [] and contracts=ref [] and resumed_any=ref false and records=ref [] and resumed_through=ref [] in
    let fragments = ref [] and recorded_fragments = ref [] in
+   let input_bytes = Hashtbl.create (List.length inputs) in
+   List.iter (fun (file,bytes) -> if not (Hashtbl.mem input_bytes file) then Hashtbl.add input_bytes file bytes) inputs;
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~family) in
     List.iter (fun (file,digest) ->
-     if Option.map Migration_hash.digest (List.assoc_opt file inputs) <> Some digest then
+     if Option.map Migration_hash.digest (Hashtbl.find_opt input_bytes file) <> Some digest then
       reject ~code:"MIG013" (Location.dummy_loc file) "history selected a source outside its captured compilation snapshot")
       (H.source_inputs h);
     let schemas = H.frozen h @ [H.current h] in

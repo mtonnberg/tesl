@@ -171,8 +171,6 @@ let same_walks excluded a b =
   let excluded = Path_set.of_list excluded in
   let kept w = w.tree,Option.map (List.filter (fun (path,_) -> not (Path_set.mem path excluded))) w.entries in
   List.length a = List.length b && List.for_all2 (fun x y -> kept x = kept y) a b
-let lookup walks path = List.find_map (fun w ->
-  if inside_tree w.tree path then Some (Option.bind w.entries (List.assoc_opt path)) else None) walks |> Option.join
 let children walks path = List.concat_map (fun w -> match w.entries with
   | Some entries when path = w.tree || inside_tree w.tree path ->
     List.filter_map (fun (entry,_) -> if Filename.dirname entry = path then Some (Filename.basename entry) else None) entries
@@ -184,8 +182,16 @@ let consistent_history t =
   let directories = List.fold_left (fun map g -> Paths.add g.directory g map) Paths.empty t.directories in
   List.iter (fun h ->
     List.iter (fun (walks,digest,listing) ->
+      (* A path's entry: its first one in the first walk whose tree holds it,
+         looked up in one index per walk. *)
+      let indexed = List.map (fun w -> w,Option.map (fun entries ->
+        let index = Hashtbl.create (List.length entries) in
+        List.iter (fun (path,entry) -> if not (Hashtbl.mem index path) then Hashtbl.add index path entry) entries;
+        index) w.entries) walks in
+      let lookup path = List.find_map (fun (w,index) ->
+        if inside_tree w.tree path then Some (Option.bind index (fun index -> Hashtbl.find_opt index path)) else None) indexed |> Option.join in
       List.iter (fun path ->
-        let entry = lookup walks path in
+        let entry = lookup path in
         Option.iter (fun g -> if (match entry, digest g with
             | Some (File d), Some actual -> d <> actual
             | Some Present, Some _ | None, None -> false
