@@ -103,7 +103,59 @@ def build(output, compiler, env, through, resume=False, from_built=None):
         print(f"Built V{version}: {RELEASES[version]} ({record['seconds']:.2f}s)", flush=True)
 
 
-def exercise(artifacts, env, through, evidence=None, seed_tasks=0):
+def optional_values(born, version):
+    """Optional-field fixture values the SQL observer seeds for cohort [born], as read at [version]."""
+    values = {"projects": {}, "tasks": {}, "members": {}, "audits": {}}
+    for introduced, table, field, value in [
+        (2, "tasks", "priority", born*10),
+        (3, "projects", "color", f"color-{born}"),
+        (3, "projects", "timezone" if version < 17 else "zone", f"zone-{born}"),
+        (4, "members", "role", f"role-{born}"),
+        (8, "members", "active", born % 2 == 0),
+        (10, "tasks", "due", f"due-{born}"),
+        (12, "projects", "archived", born % 2 == 0),
+        (14, "audits", "category", f"category-{born}"),
+        (16, "members", "contact", f"contact-{born}"),
+        (19, "projects", "external_code", f"external-{born}"),
+        (19, "members", "note", f"note-{born}"),
+    ]:
+        if introduced <= version and not (field == "role" and version >= 20):
+            values[table][field] = value if born >= introduced else None
+    return values
+
+
+def backup_database(evidence, phase, version, live):
+    """Dump the whole live database and the cluster roles for a later restore
+    (restore_catch_up.py). Records what that restore must find in backup.json."""
+    case = evidence / f"from-v{version}{'-open' if phase == 'open' else ''}"
+    case.mkdir(parents=True)
+    source = dict(live["admin"], PGDATABASE="tracker20")
+    backup = {"phase": phase, "version": version, "case": case, "expected": live["expected"], "identity": live["identity"],
+              "state": command(["psql", "-X", "-Atc", "select row_to_json(s)::text from tracker.tesl_schema_state s"], env=source).strip()}
+    # Whole database (schema + public.tesl_fence_namespaces + database ACLs),
+    # plus the cluster-wide roles a database dump never contains.
+    command(["pg_dump", "--format=custom", "--file", case / "tracker20.dump", "tracker20"], env=source)
+    command(["pg_dumpall", "--globals-only", "--file", case / "globals.sql"], env=source)
+    (case / "backup.json").write_text(json.dumps(dict(backup, case=str(case)), indent=2) + "\n")
+    return backup
+
+
+def parse_backup_points(text):
+    """`N` is a backup after VN's finality; `Nopen` one while VN-1 is still admitted."""
+    points = set()
+    for item in filter(None, text.split(",")):
+        phase = "open" if item.endswith("open") else "final"
+        version = int(item.removesuffix("open"))
+        if not (1 <= version < 20 and (phase == "final" or version > 1)):
+            raise ValueError(f"bad backup point {item}: use N or Nopen with N in 1-19 (Nopen needs N >= 2)")
+        points.add((phase, version))
+    return points
+
+
+def exercise(artifacts, env, through, evidence=None, seed_tasks=0, backup=None):
+    """Deploy V1..[through] in order. [backup](phase, version, state) is called while
+    the database is live: phase "open" with both binaries admitted before
+    retirement, and "final" after that version's finality and restart."""
     output = evidence or artifacts
     output.mkdir(parents=True, exist_ok=True)
     data = Path(tempfile.mkdtemp(prefix="postgres-data-", dir=output))
@@ -172,24 +224,6 @@ def exercise(artifacts, env, through, evidence=None, seed_tasks=0):
             assert t["revision"] == (0 if version < 13 else 13), t
             if born >= 6:
                 assert request(port, "GET", f"/audits/api-v{born}") == {"id": f"api-v{born}", "name": f"Audit v{born}"}
-    def optional_values(born, version):
-        values = {"projects": {}, "tasks": {}, "members": {}, "audits": {}}
-        for introduced, table, field, value in [
-            (2, "tasks", "priority", born*10),
-            (3, "projects", "color", f"color-{born}"),
-            (3, "projects", "timezone" if version < 17 else "zone", f"zone-{born}"),
-            (4, "members", "role", f"role-{born}"),
-            (8, "members", "active", born % 2 == 0),
-            (10, "tasks", "due", f"due-{born}"),
-            (12, "projects", "archived", born % 2 == 0),
-            (14, "audits", "category", f"category-{born}"),
-            (16, "members", "contact", f"contact-{born}"),
-            (19, "projects", "external_code", f"external-{born}"),
-            (19, "members", "note", f"note-{born}"),
-        ]:
-            if introduced <= version and not (field == "role" and version >= 20):
-                values[table][field] = value if born >= introduced else None
-        return values
     def enrich_and_verify(version):
         # Valid non-default fixture values expose lossy optional-field copying.
         # Only this independent observer seeding uses SQL, after Contract/closure;
@@ -264,6 +298,8 @@ def exercise(artifacts, env, through, evidence=None, seed_tasks=0):
             verify_cohorts(current_port, version)
             if predecessor:
                 verify_cohorts(previous_port, version-1)
+            if backup:
+                backup("open", version, {"sockets": sockets, "admin": admin, "expected": expected, "identity": identity})
             stop(predecessor)
             if version in TRANSFORMS:
                 before = sql("select row_to_json(s)::text from tracker.tesl_schema_state s")
@@ -292,6 +328,8 @@ def exercise(artifacts, env, through, evidence=None, seed_tasks=0):
                 metadata = "metadata" if version < 7 else "metadata__v7" if version < 13 else "metadata__v13"
                 key = "text" if version < 13 else "body"
                 assert int(sql(f"select count(*) from tracker.tasks where id like 'stress-%' and title='Stress task' and {metadata}->>'{key}'='stress-content'")) == seed_tasks
+            if backup:
+                backup("final", version, {"sockets": sockets, "admin": admin, "expected": expected, "identity": identity})
             record = {"version": version, "change": RELEASES[version], "apiTests": count, "cohorts": version, "extraTasks": seed_tasks, "seconds": time.monotonic()-began, "databaseUUID": identity}
             evidence.append(record)
             (output / "rollout.json").write_text(json.dumps(evidence, indent=2)+"\n")
@@ -321,11 +359,18 @@ def main():
     parser.add_argument("--recompile-from", type=Path, help="rebuild exact hash-verified source snapshots from a prior run")
     parser.add_argument("--seed-tasks", type=int, default=0, help="additional V1 tasks created through HTTP for row-volume measurement (0–10000)")
     parser.add_argument("--evidence", type=Path, help="separate rollout logs from immutable built releases")
+    parser.add_argument("--backup-at", default="", help="pg_dump the live database at these points (N or Nopen) into EVIDENCE/backups for restore_catch_up.py --backups")
     args = parser.parse_args()
     if not 1 <= args.through <= 20 or args.build_only and args.run_built:
         parser.error("choose 1–20 versions and either build-only or run-built")
     if not 0 <= args.seed_tasks <= 10000:
         parser.error("--seed-tasks must be between 0 and 10000")
+    try:
+        points = parse_backup_points(args.backup_at)
+    except ValueError as error:
+        parser.error(str(error))
+    if any(version > args.through for _, version in points) or points and args.build_only:
+        parser.error("--backup-at points must lie within --through and need a deployment run")
     output, compiler = args.output.resolve(), args.compiler.resolve()
     if output.exists() and not (args.run_built or args.resume_build):
         parser.error("use a new output directory, --run-built or --resume-build")
@@ -334,7 +379,9 @@ def main():
     if not args.run_built:
         build(output, compiler, env, args.through, args.resume_build, args.recompile_from.resolve() if args.recompile_from else None)
     if not args.build_only:
-        exercise(output, env, args.through, args.evidence.resolve() if args.evidence else None, args.seed_tasks)
+        evidence = args.evidence.resolve() if args.evidence else output
+        hook = (lambda phase, version, live: backup_database(evidence / "backups", phase, version, live) if (phase, version) in points else None) if points else None
+        exercise(output, env, args.through, args.evidence.resolve() if args.evidence else None, args.seed_tasks, backup=hook)
 
 
 if __name__ == "__main__":
