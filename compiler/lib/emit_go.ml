@@ -18802,6 +18802,18 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       List.iter visit roots;
       Hashtbl.fold (fun name () acc -> name :: acc) seen [] |> List.sort compare in
     let owned_by name key = String.starts_with ~prefix:(name ^ ".") key in
+    (* The items whose key [owned_by] a module name, in list order, by name:
+       each key is indexed under every prefix ending before one of its dots. *)
+    let owned_index key_of items = lazy (
+      let table = Hashtbl.create 64 in
+      List.iteri (fun index item -> let key = key_of item in
+        String.iteri (fun position c -> if c = '.' then
+          let owner = String.sub key 0 position in
+          Hashtbl.replace table owner ((index,item) :: Option.value (Hashtbl.find_opt table owner) ~default:[])) key) items;
+      table) in
+    let owned index name = List.rev_map snd (Option.value (Hashtbl.find_opt (Lazy.force index) name) ~default:[]) in
+    let access_owned = owned_index fst row_access_entities in
+    let storage_owned = owned_index (fun (e:Migration_records.entity) -> e.entity_name) row_storage_entities in
     let environment = lazy (match database with
       | None -> ""
       | Some (source,d) ->
@@ -18815,8 +18827,8 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       let entity (e:Migration_records.entity) = String.concat "\000" ([e.identity;e.entity_name;e.table;string_of_int e.generation;e.type_hash] @
         List.concat_map (fun (c:Migration_records.column) -> [c.field;c.column;c.scalar;string_of_bool c.nullable;string_of_bool c.primary_key]) e.columns) in
       Emit_fragment.digest (Lazy.force environment :: List.concat_map (fun name ->
-        name :: "access" :: List.concat_map (fun (key,fields) -> if owned_by name key then key :: fields else []) row_access_entities
-        @ "storage" :: List.filter_map (fun (e:Migration_records.entity) -> if owned_by name e.entity_name then Some (entity e) else None) row_storage_entities)
+        name :: "access" :: List.concat_map (fun (key,fields) -> key :: fields) (owned access_owned name)
+        @ "storage" :: List.map entity (owned storage_owned name))
         (closure (names_of k))) in
     (* Revision k's modules are spliceable when they are their own Go packages
        and no project-wide binding (database, entity, queue, nominal
