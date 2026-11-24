@@ -132,6 +132,6 @@ let flat_history t = t.flat_history
 let project_root t = t.root
 let compiler_abi t = t.compiler_abi
 let stored_value_compatibility t = t.stored_value_compatibility
-let verify t ~documents = protect t.selected.entry_file (fun () ->
-  manifest (M.verify_source t.guard ~documents);
-  manifest (M.verify_disk t.guard))
+let verify ?quick t ~documents = protect t.selected.entry_file (fun () ->
+  manifest (M.verify_source ?quick t.guard ~documents);
+  manifest (M.verify_disk ?quick t.guard))

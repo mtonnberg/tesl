@@ -72,7 +72,7 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start_scoped ~flat_history ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let start_scoped ~intermediate ~flat_history ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -201,15 +201,15 @@ let start_scoped ~flat_history ~namespace ~stored_value_compatibility ~compiler_
       List.iter (fun (file,source) -> if Filename.check_suffix file ".tesl" then check file source) writes;
       ignore (history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family)));
     history (H.verify_unchanged h);
-    manifest (M.verify_source source_manifest ~documents);
-    manifest (M.verify_disk source_manifest);
+    manifest (M.verify_source ~quick:intermediate source_manifest ~documents);
+    manifest (M.verify_disk ~quick:intermediate source_manifest);
     {family;frozen_version=n;current_version=next;manifest=source_manifest} |> Result.ok
   with
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
-let start_with_namespace = start_scoped ~flat_history:false
+let start_with_namespace = start_scoped ~intermediate:false ~flat_history:false
 let start_with_compatibility = start_with_namespace ~namespace:None
 let start = start_with_compatibility ~stored_value_compatibility:None
 
@@ -650,7 +650,7 @@ let choose_entry file source before after choice =
  let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),plan.option.replacement])in
  chosen,plan.writes
 
-let refresh_scoped ~flat_history ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let refresh_scoped ~intermediate ~flat_history ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -725,14 +725,14 @@ let refresh_scoped ~flat_history ~choice ~stored_value_compatibility ~compiler_a
       ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path;Filename.chop_suffix migration.path ".tesl"] ~writes:(extra_writes @ column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in
     history (H.verify_unchanged h);
-    manifest (M.verify_source source_manifest ~documents);
-    manifest (M.verify_disk source_manifest);
+    manifest (M.verify_source ~quick:intermediate source_manifest ~documents);
+    manifest (M.verify_disk ~quick:intermediate source_manifest);
     Ok {family;current_version=version;manifest=source_manifest;diagnostics;decisions}
   with
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
-let refresh_with_compatibility = refresh_scoped ~flat_history:false ~choice:None
-let refresh_choice_with_compatibility ~choice = refresh_scoped ~flat_history:false ~choice:(Some choice)
+let refresh_with_compatibility = refresh_scoped ~intermediate:false ~flat_history:false ~choice:None
+let refresh_choice_with_compatibility ~choice = refresh_scoped ~intermediate:false ~flat_history:false ~choice:(Some choice)
 let refresh = refresh_with_compatibility ~stored_value_compatibility:None

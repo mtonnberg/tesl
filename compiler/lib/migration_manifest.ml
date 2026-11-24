@@ -350,8 +350,11 @@ let source_files t = protect (fun () ->
     Option.map (fun source -> guard.file,source) source) t.files @
   (* A read covered by a frozen history walk: its bytes are those the walk
      hashed in the source view. *)
-  List.concat_map (fun h -> List.filter_map (fun path ->
-    match lookup h.source_walk path with
+  List.concat_map (fun h ->
+    let entries = Hashtbl.create 256 in
+    List.iter (fun w -> Option.iter (List.iter (fun (path,entry) -> Hashtbl.replace entries path entry)) w.entries) h.source_walk;
+    List.filter_map (fun path ->
+    match Hashtbl.find_opt entries path with
     | None -> None
     | Some (File digest) ->
       let source = Source_input.read path in
@@ -473,6 +476,15 @@ let create_with ~history ~observed ~project_root:root ~reads ~directories ~impor
         let excluded = List.map (fun g -> g.file) files @ List.map (fun g -> g.directory) directories
           |> List.filter (fun path -> List.exists (fun tree -> inside_tree tree path) trees) |> List.sort_uniq String.compare in
         let digest ~disk path = match observed with
+          | None when disk ->
+            (* Read anew, so the lstat identity it was read under can serve the
+               next quick check (as in [verify_files]). *)
+            let observed path = match Unix.lstat path with
+              | stats -> Some (identity stats) | exception Unix.Unix_error _ -> None in
+            let before = observed path in
+            let digest = hash (In_channel.with_open_bin path In_channel.input_all) in
+            (match before with Some id when observed path = before -> remember seen_files path (id,digest) | _ -> ());
+            digest
           | None -> plain_digest ~disk path
           | Some _ -> (match file_bytes ~disk path with Some bytes -> hash bytes | None -> raise (Unobservable path)) in
         let excluded_set = Path_set.of_list excluded in
@@ -496,8 +508,12 @@ let create_with ~history ~observed ~project_root:root ~reads ~directories ~impor
     | exception Unobservable _ when scope <> None -> build None in
   let t = with_exclusions t in
   (* Catch a changed earlier input before publishing the proposal. Apply must
-     check again; this is a precondition snapshot, not a filesystem transaction. *)
-  if observed=None then (verify_files t false; verify_files ~quick:true t true); t)
+     check again; this is a precondition snapshot, not a filesystem transaction.
+     The source walks were just taken in this view. *)
+  if observed=None then begin
+    List.iter remember_source_view t.history;
+    verify_files ~quick:true t false; verify_files ~quick:true t true
+  end; t)
 let create = create_with ~history:None ~observed:None
 let create_observed observed = create_with ~history:None ~observed:(Some observed)
 let create_scoped history = create_with ~history ~observed:None

@@ -45,4 +45,5 @@ val source_guard : t -> Migration_manifest.t
 val project_root : t -> string
 val compiler_abi : t -> string
 val stored_value_compatibility : t -> string option
-val verify : t -> documents:Migration_manifest.document list -> (unit,error list) result
+(** [quick]: an intermediate check of one command (Migration_manifest). *)
+val verify : ?quick:bool -> t -> documents:Migration_manifest.document list -> (unit,error list) result

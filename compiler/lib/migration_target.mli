@@ -48,7 +48,10 @@ val source_guard : t -> Migration_manifest.t
     the source preview. Rebinding the application's database, changing imports,
     history or document versions invalidates the selection. No files are written.
     The caller still presents/checks the complete application and applies the
-    manifest through the shared, separately implemented apply protocol. *)
+    manifest through the shared, separately implemented apply protocol.
+    Their own guard checks are intermediate checks of the caller's command
+    (Migration_manifest); the caller's final guard re-reads every input, as
+    Migration_preview.verify does before a preview is returned. *)
 val start : t -> documents:Migration_manifest.document list ->
   (Migration_generate.preview,error list) result
 val refresh : t -> documents:Migration_manifest.document list ->

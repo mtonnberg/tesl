@@ -33,7 +33,9 @@ val start_with_namespace : namespace:string option -> stored_value_compatibility
   documents:Migration_manifest.document list -> (preview,error list) result
 (** [start_with_namespace]; with [flat_history] the manifest guards the family's
     frozen history as one scope (Migration_manifest.family_history). *)
-val start_scoped : flat_history:bool -> namespace:string option -> stored_value_compatibility:string option ->
+(** [intermediate]: the proposal's own guard checks are intermediate checks of
+    one command, whose final guard re-reads every input (Migration_manifest). *)
+val start_scoped : intermediate:bool -> flat_history:bool -> namespace:string option -> stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> family:string -> version:int ->
   documents:Migration_manifest.document list -> (preview,error list) result
 
@@ -75,6 +77,6 @@ val refresh_choice_with_compatibility : choice:choice -> stored_value_compatibil
   compiler_abi:string -> project_root:string -> family:string -> version:int ->
   documents:Migration_manifest.document list -> (refresh_preview,error list) result
 (** Refresh with an optional choice; [flat_history] as for [start_scoped]. *)
-val refresh_scoped : flat_history:bool -> choice:choice option -> stored_value_compatibility:string option ->
+val refresh_scoped : intermediate:bool -> flat_history:bool -> choice:choice option -> stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> family:string -> version:int ->
   documents:Migration_manifest.document list -> (refresh_preview,error list) result
