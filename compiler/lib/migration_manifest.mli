@@ -50,8 +50,12 @@ val edits : t -> edit list
 val overlays : t -> (string * string) list
 (** Recheck the source view and open-document versions, including read-only
     dependencies. A new/closed document invalidates the captured document set.
-    This check does not replace the separate disk precondition. *)
-val verify_source : t -> documents:document list -> (unit, error list) result
+    This check does not replace the separate disk precondition. [quick] (an
+    intermediate check of one command, followed by [verify_disk] of the same
+    manifest) accepts a frozen history scope's source walk already verified
+    under the identical source view when it was captured equal to the disk
+    walk: the paths that view does not supply are those the disk check reads. *)
+val verify_source : ?quick:bool -> t -> documents:document list -> (unit, error list) result
 (** [quick] (an intermediate check of one command) accepts files and directories
     whose lstat identity is unchanged since a pass of this compilation read them,
     and imports that pass resolved; the default full pass reads everything anew
@@ -61,6 +65,10 @@ val verify_disk : ?quick:bool -> t -> (unit, error list) result
     A build can pin these bytes while deriving output, then recheck source, disk,
     imports and directory guards after leaving the pinned scope. *)
 val source_files : t -> ((string * string) list,error list) result
+(** Every regular .tesl file a frozen history scope guards (not excluded), with
+    the bytes its source walk hashed; None when the manifest has no scope or
+    imports among its frozen sources keep their own guards. *)
+val frozen_sources : t -> ((string * string) list option,error list) result
 (** Union independent previews, preserving their original source/disk/import and
     directory preconditions. Different roots, document versions, preconditions or
     competing edits refuse. Equal operations are deduplicated deterministically.

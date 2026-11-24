@@ -134,14 +134,15 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
       to these guards; no credentials are copied into the artifact. *)
    let targets = List.map (fun (identity,family,namespace,loc) ->
     let root = target (T.infer_project_root ~entry_file ~database:(Some identity)) in
-    let selected = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+    let selected = target (T.resolve_scoped ~flat_history:true ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~entry_file
       ~database:(Some identity) ~documents:[]) in
     identity,family,namespace,loc,root,selected) selected in
    let guards = List.map (fun (_,_,_,_,_,selected) -> T.source_guard selected) targets in
    let inputs = List.concat_map (fun source_guard -> guard (M.source_files source_guard)) guards |> List.sort_uniq compare in
-   let integrity = List.map (fun (_,_,_,_,root,selected) ->
-    checked(Migration_source_integrity.capture ~project_root:root
+   let integrity = List.map (fun (_,family,_,_,root,selected) ->
+    let history=M.family_history ~project_root:root ~family ~current_version:(T.selection selected).current_version in
+    checked(Migration_source_integrity.capture ~history:(Some history) ~project_root:root
       ~inputs:(guard(M.source_files(T.source_guard selected))))) targets in
    let rec with_integrity captures run = match captures with
     | [] -> run()
@@ -373,7 +374,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
     let quick = !validated in
     abi (A.verify context);
     List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate ~quick capture))) integrity;
-    Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk ~quick source_guard)) guards);
+    Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source ~quick source_guard ~documents:[]);guard (M.verify_disk ~quick source_guard)) guards);
     List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
     validated := true) in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate;
@@ -384,7 +385,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    result)) in
    (* The capture's own closing check; publications run [validate] (full) or
       their own final guard. *)
-   List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk ~quick:true source_guard)) guards;
+   List.iter (fun source_guard -> guard (M.verify_source ~quick:true source_guard ~documents:[]);guard (M.verify_disk ~quick:true source_guard)) guards;
    result))))))
 
 let unresumed t =

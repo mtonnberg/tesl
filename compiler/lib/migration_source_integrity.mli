@@ -2,7 +2,9 @@
     Captures adjacent migration root inventories, recorded schema/closure members,
     and their local imports before the ordinary integrity judgment runs. *)
 type t
-val capture : project_root:string -> inputs:(string * string) list ->
+(** [history]: guard the family's frozen sources as one scope
+    (Migration_manifest.family_history). *)
+val capture : history:Migration_manifest.history option -> project_root:string -> inputs:(string * string) list ->
   (t,Migration_sparse.error list) result
 val revalidate : ?quick:bool -> t -> (unit,Migration_sparse.error list) result
 (** Pins the captured files, preserves discovered directory membership through the

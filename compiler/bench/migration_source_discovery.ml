@@ -9,7 +9,7 @@ let () = List.iter(fun count ->
   let source="module Main exposing []\n" ^ String.concat "" (List.map(fun name -> "import " ^ name ^ "\n")names) in
   let file=Filename.concat root "main.tesl" in write file source;
   let start=Unix.gettimeofday() in
-  match Migration_source_integrity.capture ~project_root:root ~inputs:[file,source] with
+  match Migration_source_integrity.capture ~history:None ~project_root:root ~inputs:[file,source] with
   | Error errors -> failwith(String.concat ";" (List.map(fun (e:Migration_sparse.error)->e.message)errors))
   | Ok token ->
    (match Migration_source_integrity.with_captured token(fun () -> Source_input.read file=source) with Ok true->()|_->failwith"capture differs");

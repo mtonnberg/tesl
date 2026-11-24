@@ -344,7 +344,7 @@ let captured_graph () = with_project (fun root path ->
   let source = "module App exposing []\n" ^ String.concat ""
     (List.map (fun name -> "import " ^ name ^ "\n") leaves) in
   let app = path "app.tesl" in write app source;
-  let capture () = match Migration_source_integrity.capture ~project_root:root ~inputs:[app,source] with
+  let capture () = match Migration_source_integrity.capture ~history:None ~project_root:root ~inputs:[app,source] with
     | Ok token -> token | Error _ -> fail "valid graph refused" in
   let token = capture () in
   (match Migration_source_integrity.with_captured token (fun () -> Source_input.read app) with
@@ -455,6 +455,44 @@ let history_combine () = with_project (fun root path ->
   let again = scoped root path in
   write (path "schema/s/sub/x.tesl") "y";
   refuse (fun () -> M.combine again (scoped root path) ~documents:[]))
+(* A compilation takes the bytes of the frozen sources a scope covers from the
+   walk that hashed them, and a capture can take every frozen source at once. *)
+let history_sources () = with_project (fun root path ->
+  history_layout path;
+  let t = scoped root path in
+  let pairs = list (pair string string) in
+  check pairs "covered reads keep their exact bytes"
+    (List.sort compare (List.map (fun name -> path name, read (path name)) ["schema/s/v-current.tesl";"schema/s/v1.tesl";
+       "schema/s/sub/x.tesl";"migrations/s/v2.tesl";"migrations/s/v3.tesl"]))
+    (get (M.source_files t));
+  check (option pairs) "every frozen source of the trees"
+    (Some (List.map (fun name -> path name, read (path name)) ["migrations/s/v2.tesl";"schema/s/sub/x.tesl";"schema/s/v1.tesl"]))
+    (Option.map (List.sort compare) (get (M.frozen_sources t)));
+  check (option pairs) "no scope, no frozen sources" None (get (M.frozen_sources (proposal ~reads:[path "schema/s/v1.tesl"] root [])));
+  write (path "schema/s/v1.tesl") "ONE";
+  refuse (fun () -> M.source_files t);
+  write (path "schema/s/v1.tesl") "one";
+  mkdir (path "migrations/schema");
+  check (option pairs) "a shadowing parent keeps imports guarded one by one" None (get (M.frozen_sources (scoped root path))))
+(* An intermediate source check reuses a scope's source walk verified in the
+   identical view; the disk check of the same pass still reads the trees. *)
+let history_quick () = with_project (fun root path ->
+  history_layout path;
+  Source_input.with_scope_path_memo (fun () ->
+    let t = scoped root path in
+    get (M.verify_source t ~documents:[]);
+    get (M.verify_disk t);
+    write (path "schema/s/v1.tesl") "ONE";
+    get (M.verify_source ~quick:true t ~documents:[]);
+    refuse (fun () -> M.verify_disk ~quick:true t);
+    refuse (fun () -> M.verify_disk t));
+  (* Another view walks again. *)
+  write (path "schema/s/v1.tesl") "one";
+  Source_input.with_scope_path_memo (fun () ->
+    let t = scoped root path in
+    get (M.verify_source t ~documents:[]);
+    Source_input.with_overlays ~project_root:root [path "schema/s/v1.tesl","ONE"] (fun () ->
+      refuse (fun () -> M.verify_source ~quick:true t ~documents:[]))))
 let family_scope () = with_project (fun root path ->
   let h = M.family_history ~project_root:root ~family:"Schema.Notes" ~current_version:2 in
   check (list string) "trees" [path "schema/notes";path "migrations/notes"] h.history_trees;
@@ -495,4 +533,6 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "unobservable history keeps per-file guards",history_fallback;
    "imports between frozen sources",history_imports;
    "composition keeps the frozen history observations",history_combine;
-   "family history scope",family_scope]]
+   "family history scope",family_scope;
+   "frozen sources come from the scope's walk",history_sources;
+   "an intermediate source check leaves frozen edits to the disk check",history_quick]]
