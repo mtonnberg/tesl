@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = '9852f263b0ce52f78045c3edb266625aa4460674'
 # Fixed before sampling: more independent A/A pairs improve the estimate of
 # hosted-runner variability. Host qualification precedes any candidate samples.
-PAIRS, CALIBRATION_PAIRS, SAMPLES, WARMUP = 8, 12, 1000, 200
+PAIRS, CALIBRATION_PAIRS, SAMPLES, WARMUP = 16, 12, 1000, 200
 CALIBRATION_ATTEMPTS, CALIBRATION_PAUSE_SECONDS = 3, 10
 RELATIVE = .50
 FLOOR_NS = {'p50': 500_000, 'p95': 2_000_000}
