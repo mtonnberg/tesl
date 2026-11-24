@@ -177,14 +177,16 @@ class Cluster:
             time.sleep(.1)
         raise RuntimeError(f"{app} not ready:\n{Path(log.name).read_text()}")
 
-    def close(self):
+    def close(self, keep=False):
+        """Stop the cluster; [keep] retains its data directory for inspection."""
         for proc, log in reversed(self.processes):
             if proc.poll() is None:
                 proc.terminate()
                 proc.wait(timeout=10)
             log.close()
-        subprocess.run(["pg_ctl", "-D", str(self.data), "-m", "immediate", "-w", "stop"], capture_output=True)
-        shutil.rmtree(self.data, ignore_errors=True)
+        subprocess.run(["pg_ctl", "-D", str(self.data), "-m", "fast" if keep else "immediate", "-w", "stop"], capture_output=True)
+        if not keep:
+            shutil.rmtree(self.data, ignore_errors=True)
         shutil.rmtree(self.sockets, ignore_errors=True)
 
 
@@ -207,6 +209,8 @@ def main():
     parser.add_argument("--data-at", type=int, default=1, help="version whose database is backed up")
     parser.add_argument("--gaps", default="", help="comma-separated gap ends (default: the last revision)")
     parser.add_argument("--rows", type=int, default=1000, help="rows per entity written at the data version")
+    parser.add_argument("--resume-failed-catch-up", type=int, default=0, metavar="N",
+                        help="rerun a failed catch-up up to N times, as the operator guide allows, recording each failure (default: fail)")
     args = parser.parse_args()
     gaps = sorted({int(g) for g in args.gaps.split(",") if g} or {args.revisions})
     if not (1 <= args.data_at < gaps[0] and gaps[-1] <= args.revisions):
@@ -272,7 +276,17 @@ def main():
             if time.monotonic() - quiet_since < 31:
                 time.sleep(31 - (time.monotonic() - quiet_since))
             started = time.monotonic()
-            caught = json.loads(cluster.schema(app, "s_worker", "catch-up"))
+            failures = []
+            while True:
+                try:
+                    caught = json.loads(cluster.schema(app, "s_worker", "catch-up"))
+                    break
+                except RuntimeError as error:
+                    failures.append({"afterSeconds": time.monotonic() - started, "error": str(error).strip().splitlines()[-1]})
+                    print(f"FAILED catch-up to V{gap}: {failures[-1]['error']}", flush=True)
+                    if len(failures) > args.resume_failed_catch_up:
+                        raise
+                    command(["pg_dump", "--format=custom", "--file", output / f"restore-v{gap}/failed-{len(failures)}.dump", "scale"], env=dict(cluster.admin, PGDATABASE="scale"))
             catch_up = time.monotonic() - started
             assert caught["kind"] == "schema-caught-up" and caught["currentVersion"] == gap, caught
             started = time.monotonic()
@@ -300,12 +314,15 @@ def main():
             assert call(port, "GET", "/alpha/bulk-7") == {"id": "bulk-7", "name": "n"}
             assert call(port, "POST", "/seed/after-catch-up") == "seeded"
             transforming = sum(1 for v in range(k + 1, gap + 1) if changes[v][1] == "rename")
-            record = {"from": k, "to": gap, "revisions": gap - k, "transformingRevisions": transforming,
+            record = {"from": k, "to": gap, "revisions": gap - k, "transformingRevisions": transforming, "failedAttempts": failures,
                       "catchUpSeconds": catch_up, "finalitySeconds": finish}
             report["gaps"].append(record)
             print(f"PASS V{k} backup -> V{gap}: {gap-k} revisions ({transforming} transforming), catch-up {catch_up:.2f}s, "
                   f"final Contract/closure {finish:.2f}s, {args.rows + 3} rows per entity verified", flush=True)
-        finally:
+        except BaseException:
+            cluster.close(keep=True)
+            raise
+        else:
             cluster.close()
         (output / "long-gap.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PASS: long-gap restore + catch-up from V{k} across {len(gaps)} gap(s)", flush=True)
