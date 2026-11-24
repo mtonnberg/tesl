@@ -370,7 +370,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
       a Go emit is published only when every memoized disk answer still
       matches disk (Compile.compile_go_source). *)
    let validated = ref false in
-   let validate () = Source_input.with_fresh_path_memo (fun () ->
+   let validate () = Source_input.with_fresh_path_memo (fun () -> M.with_pass @@ fun () ->
     let quick = !validated in
     abi (A.verify context);
     List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate ~quick capture))) integrity;

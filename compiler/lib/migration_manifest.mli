@@ -61,6 +61,11 @@ val verify_source : ?quick:bool -> t -> documents:document list -> (unit, error 
     and imports that pass resolved; the default full pass reads everything anew
     and is what a command runs before it writes or reports success. *)
 val verify_disk : ?quick:bool -> t -> (unit, error list) result
+(** Run [f] as one disk pass: the disk checks of frozen history scopes within it
+    observe each tree entry's lstat and each tree directory's listing once,
+    shared by every manifest checked there (for one guard pass over several
+    manifests of the same trees). File bytes are still read per check. *)
+val with_pass : (unit -> 'a) -> 'a
 (** Read exact input bytes and compare each with its original source precondition.
     A build can pin these bytes while deriving output, then recheck source, disk,
     imports and directory guards after leaving the pinned scope. *)

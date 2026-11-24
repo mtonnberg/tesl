@@ -493,6 +493,14 @@ let history_quick () = with_project (fun root path ->
     get (M.verify_source t ~documents:[]);
     Source_input.with_overlays ~project_root:root [path "schema/s/v1.tesl","ONE"] (fun () ->
       refuse (fun () -> M.verify_source ~quick:true t ~documents:[]))))
+(* One disk pass over two manifests of the same trees observes each entry once;
+   an edit made before the pass is refused by both. *)
+let history_pass () = with_project (fun root path ->
+  history_layout path;
+  let a = scoped root path and b = scoped root path in
+  M.with_pass (fun () -> get (M.verify_disk a); get (M.verify_disk b));
+  write (path "schema/s/v1.tesl") "ONE";
+  M.with_pass (fun () -> refuse (fun () -> M.verify_disk a); refuse (fun () -> M.verify_disk b)))
 let family_scope () = with_project (fun root path ->
   let h = M.family_history ~project_root:root ~family:"Schema.Notes" ~current_version:2 in
   check (list string) "trees" [path "schema/notes";path "migrations/notes"] h.history_trees;
@@ -535,4 +543,5 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "composition keeps the frozen history observations",history_combine;
    "family history scope",family_scope;
    "frozen sources come from the scope's walk",history_sources;
-   "an intermediate source check leaves frozen edits to the disk check",history_quick]]
+   "an intermediate source check leaves frozen edits to the disk check",history_quick;
+   "one disk pass over manifests of the same trees",history_pass]]

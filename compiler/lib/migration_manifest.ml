@@ -99,8 +99,9 @@ let newest_checkpoint paths =
    non-excluded regular files. Of the checkpoints only the newest non-excluded
    one is hashed (the one a resumed history reads); an older checkpoint's digest
    is sealed in its frozen migration root, and the walk records its presence. *)
-let walk_all ?kind:kind_of ~disk ~digest ~excluded trees =
+let walk_all ?kind:kind_of ?names:names_of ~disk ~digest ~excluded trees =
   let kind ~disk path = match kind_of with Some f -> f path | None -> kind ~disk path in
+  let names ~disk path = match names_of with Some f -> f path | None -> names ~disk path in
   let collect tree =
     match optional (fun () -> kind ~disk tree) with
     | None -> None
@@ -248,6 +249,12 @@ let disk_pass () =
 (* One verification pass resolves each directory's canonical spelling once
    (Source_input.with_path_memo); every file is still read and hashed. A disk
    pass resolves anew, so it observes a directory replaced during the command. *)
+(* One disk pass over several guards (see [with_pass]): each history entry's
+   lstat and each history directory's listing, observed once. *)
+let pass : ((string, (Unix.stats, exn) result) Hashtbl.t * (string, (string list option, exn) result) Hashtbl.t) option ref = ref None
+let with_pass f = match !pass with
+  | Some _ -> f ()
+  | None -> pass := Some (Hashtbl.create 256,Hashtbl.create 8); Fun.protect ~finally:(fun () -> pass := None) f
 (* Source views in which a history guard's source walk was verified within this
    compilation scope, by the guard's walks (physically: one captured guard). *)
 let verified_views : (walk list * Source_input.view_token) list ref = ref []
@@ -306,7 +313,13 @@ let verify_files ?(quick=false) t disk = (if disk then Source_input.with_fresh_p
   (* One pass over each frozen history tree. A quick pass reuses a file digest
      only under an unchanged lstat identity, as for file guards; on disk each
      entry is lstat'ed once for both its kind and that identity. *)
-  let stats = Hashtbl.create 64 in
+  let stats,listings = match !pass with
+    | Some (stats,listings) when disk -> stats,listings
+    | _ -> Hashtbl.create 64,Hashtbl.create 8 in
+  let listing path = match Hashtbl.find_opt listings path with
+    | Some (Ok names) -> names | Some (Error e) -> raise e
+    | None -> let r = (try Ok (names ~disk path) with e -> Error e) in Hashtbl.replace listings path r;
+      (match r with Ok names -> names | Error e -> raise e) in
   let stat path = match Hashtbl.find_opt stats path with
     | Some s -> s
     | None -> let s = (try Ok (Unix.lstat path) with Unix.Unix_error _ as e -> Error e) in Hashtbl.replace stats path s; s in
@@ -329,7 +342,7 @@ let verify_files ?(quick=false) t disk = (if disk then Source_input.with_fresh_p
        it supplies; every other path is read from disk, and the disk walk of
        the same pass checks those when both views were captured equal. *)
     if not disk && quick_view && h.source_walk = h.disk_walk && verified_source_view h then () else
-    match walk_all ?kind:(if disk then Some disk_kind else None) ~disk ~digest ~excluded:(Path_set.of_list h.excluded) h.trees with
+    match walk_all ?kind:(if disk then Some disk_kind else None) ?names:(if disk then Some listing else None) ~disk ~digest ~excluded:(Path_set.of_list h.excluded) h.trees with
     | actual ->
       if not (same_walks h.excluded actual expected) &&
          history_digest t.root h.excluded actual <> history_digest t.root h.excluded expected then

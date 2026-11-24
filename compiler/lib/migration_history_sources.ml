@@ -119,7 +119,18 @@ let check_inputs history =
     if scan ~optional:true directory <> entries then
       reject ~kind:Changed_source directory "schema history directory changed during discovery") history.revision_directories
 
-let verify_unchanged history = protect history.current.root_file (fun () -> check_inputs history)
+(* Within one compilation scope, while disk answers are memoized, every
+   observation [check_inputs] makes gets the answer it got before under the
+   same source view and disk epoch: a history checked there holds again. A
+   final guard observes disk anew (Migration_manifest, Source_input.disk_changed). *)
+let checked_views : (t * Source_input.view_token) list ref = ref []
+let () = Source_input.on_scope_exit (fun () -> checked_views := [])
+let verify_unchanged history = protect history.current.root_file (fun () ->
+  let memoizing = Source_input.memoizing () in
+  if not (memoizing && List.exists (fun (h,token) -> h == history && Source_input.same_view token) !checked_views) then begin
+    check_inputs history;
+    if memoizing then checked_views := (history,Source_input.view_token ()) :: List.filteri (fun i _ -> i < 31) !checked_views
+  end)
 
 (* What [inspect] needs to rebuild its result for another stored-value label
    or without migrations, without discovering again (see [inspect] below). *)
