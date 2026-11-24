@@ -553,8 +553,8 @@ instead of re-deriving every revision, when:
 
 **History summary.** The newest checkpoint also holds a summary of the frozen
 history as it was when revision N was frozen: one hash over the `schema/<family>`
-and `migrations/<family>` trees through revision N (every source without its
-`# tesl:frozen-migration` block, every checkpoint by presence only, nothing of
+and `migrations/<family>` trees through revision N (every migration root `vK.tesl`
+without its `# tesl:frozen-migration` block, every checkpoint by presence only, nothing of
 revision N+1 or `VCurrent`), the declared name and imports of every frozen module,
 and the revisions whose trust seals held. A command walks and hashes the two trees
 once; when that hash matches and the checkpoint names the running compiler ABI and

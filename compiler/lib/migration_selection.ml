@@ -107,15 +107,19 @@ let resolve_scoped ~flat_history ~stored_value_compatibility ~compiler_abi ~proj
     current_version=current.version;migration_directory=Filename.dirname (Filename.concat root
       (Option.get (Validation_common.schema_module_relative_path (family ^ ".Migrate.V2"))))} in
   let reads = List.map fst sources @ List.map fst (H.source_inputs h) |> List.sort_uniq String.compare in
+  let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:current.version) else None in
+  (* A frozen source's imports are guarded by the scope's trees. *)
+  let importing = match scope with
+    | Some h when M.frozen_imports_determined h -> List.filter (fun file -> not (M.frozen h file)) reads
+    | _ -> reads in
   let imports = List.concat_map (fun file ->
     let imports = match List.assoc_opt file sources with
       | Some (m,_) -> List.map (fun (i : import_decl) -> i.module_name) m.imports
       | None -> (match Migration_closure.imports ~file (Source_input.read file) with Ok imports -> imports | Error e -> reject e.loc e.msg) in
     List.filter_map (fun name ->
-      if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) reads in
+      if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) importing in
   (* The combined guard below and every caller's final verification recheck
      all of these observations. *)
-  let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:current.version) else None in
   let complete = manifest (M.create_observed_scoped scope (M.observations ()) ~project_root:root ~reads ~imports ~documents
     ~directories:[selected.migration_directory;Filename.dirname current.root_file] ~writes:[]) in
   List.iter (fun (file,(_,hash)) ->

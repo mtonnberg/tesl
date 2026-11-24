@@ -388,7 +388,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    result)) in
    (* The capture's own closing check; publications run [validate] (full) or
       their own final guard. *)
-   List.iter (fun source_guard -> guard (M.verify_source ~quick:true source_guard ~documents:[]);guard (M.verify_disk ~quick:true source_guard)) guards;
+   List.iter (fun source_guard -> guard (M.verify_source ~quick:true source_guard ~documents:[]);guard (M.verify_disk ~quick:true ~revisit:true source_guard)) guards;
    result))))))
 
 let unresumed t =

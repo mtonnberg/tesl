@@ -72,6 +72,13 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
+(* The reads whose imports a manifest under [scope] must guard on its own: a
+   frozen source's imports are guarded by the scope's trees when they
+   determine them (Migration_manifest.frozen_imports_determined). *)
+let importing scope reads = match scope with
+  | Some h when M.frozen_imports_determined h -> List.filter (fun file -> not (M.frozen h file)) reads
+  | _ -> reads
+
 let start_scoped ~intermediate ~flat_history ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
@@ -188,12 +195,12 @@ let start_scoped ~intermediate ~flat_history ~namespace ~stored_value_compatibil
           (migration.path,source) :: (Migration_closure.checkpoint_file migration.path,text) :: others) in
     let original_reads = List.map fst (H.source_inputs h) in
     let reads = original_reads @ frozen_inputs in
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
     let imports = List.concat_map (fun file ->
       let imports = match Migration_closure.imports ~file (Source_input.read file) with
         | Ok imports -> imports | Error e -> reject file e.msg in
       List.filter_map (fun name ->
-        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) original_reads in
-    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) (importing scope original_reads) in
     let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads
       ~directories:[Filename.dirname current.root_file;Filename.dirname (module_path root (family ^ ".Migrate.V1"))]
       ~imports ~documents ~writes) in
@@ -712,15 +719,15 @@ let refresh_scoped ~intermediate ~flat_history ~choice ~stored_value_compatibili
     overlay root (extra_writes @ column_writes @ [migration.path,source]) (fun () ->
       List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) untrusted);
     let reads = List.map fst (H.source_inputs h) in
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
     let imports = List.concat_map (fun file ->
       let imports = match Migration_closure.imports ~file (Source_input.read file) with
         | Ok imports -> imports | Error e -> reject file e.msg in
       List.filter_map (fun name ->
-        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) reads in
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) (importing scope reads) in
     let generated_imports=List.concat_map(fun(file,source)->let m=parse file source in
       List.filter_map(fun(i:Ast.import_decl)->if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports)
       ((migration.path,source)::extra_writes)in
-    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
     let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
       ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path;Filename.chop_suffix migration.path ".tesl"] ~writes:(extra_writes @ column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in

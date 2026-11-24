@@ -474,8 +474,8 @@ let history_sources () = with_project (fun root path ->
   write (path "schema/s/v1.tesl") "one";
   mkdir (path "migrations/schema");
   check (option pairs) "a shadowing parent keeps imports guarded one by one" None (get (M.frozen_sources (scoped root path))))
-(* An intermediate source check reuses a scope's source walk verified in the
-   identical view; the disk check of the same pass still reads the trees. *)
+(* An intermediate check repeats no lookup of a frozen history verified within
+   the compilation scope; the full check reads and hashes the trees anew. *)
 let history_quick () = with_project (fun root path ->
   history_layout path;
   Source_input.with_scope_path_memo (fun () ->
@@ -484,8 +484,13 @@ let history_quick () = with_project (fun root path ->
     get (M.verify_disk t);
     write (path "schema/s/v1.tesl") "ONE";
     get (M.verify_source ~quick:true t ~documents:[]);
-    refuse (fun () -> M.verify_disk ~quick:true t);
+    get (M.verify_disk ~quick:true t);
     refuse (fun () -> M.verify_disk t));
+  (* Outside a compilation scope every check reads anew. *)
+  write (path "schema/s/v1.tesl") "one";
+  let t = scoped root path in
+  write (path "schema/s/v1.tesl") "ONE";
+  refuse (fun () -> M.verify_disk ~quick:true t);
   (* Another view walks again. *)
   write (path "schema/s/v1.tesl") "one";
   Source_input.with_scope_path_memo (fun () ->
@@ -543,5 +548,5 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "composition keeps the frozen history observations",history_combine;
    "family history scope",family_scope;
    "frozen sources come from the scope's walk",history_sources;
-   "an intermediate source check leaves frozen edits to the disk check",history_quick;
+   "an intermediate check leaves frozen edits to the full check",history_quick;
    "one disk pass over manifests of the same trees",history_pass]]

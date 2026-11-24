@@ -4,8 +4,9 @@
    (Migration_checkpoint) also records:
    - one digest over the family's schema and migrations trees through V<n>
      ([walk] below): the frozen-history digest of a source manifest's history
-     entry (Migration_manifest), in a variant that hashes every source without
-     its frozen-source block and records every checkpoint's presence only.
+     entry (Migration_manifest), in a variant that hashes every migration root
+     (migrations/<family>/v<k>.tesl) without its frozen-source block and
+     records every checkpoint's presence only.
      A frozen-source block holds the digest of its revision's checkpoint, and
      a checkpoint holds this digest, so neither can be inside it; the block and
      the checkpoint bytes are verified by whoever reads them (the checkpoint
@@ -114,15 +115,19 @@ let scope ~project_root ~family ~through =
     (match first schema path with
      | Some name -> name = "v-current.tesl" || name = "v-current" || later name
      | None -> match first migrations path with Some name -> later name | None -> false) in
-  List.sort String.compare [schema;migrations], exclude
+  let root path = Filename.dirname path = migrations &&
+    (match version (Filename.basename path) with
+     | Some _ -> Filename.check_suffix path ".tesl" && not (Filename.check_suffix path "-contract.tesl")
+     | None -> false) in
+  List.sort String.compare [schema;migrations], exclude, root
 
 (* One walk of the trees in the active source view: the digest, each hashed
-   file's SHA-256 of all its bytes, and of its bytes without a frozen-source
-   block. None when an entry is not a regular file or directory, or a tree's
+   file's SHA-256 of all its bytes, and of the bytes it is summarized by (a
+   migration root's without its frozen-source block, [root]). None when an entry is not a regular file or directory, or a tree's
    parent lists "schema" or "migrations" (an import from inside the trees could
    then resolve elsewhere; as for a manifest scope). *)
 exception Unobservable
-let walk ~project_root ~trees ~exclude =
+let walk ~project_root ~trees ~exclude ~root =
   let shadowed = List.exists (fun tree ->
     match Source_input.readdir (Filename.dirname tree) with
     | names -> Array.exists (fun name -> name = "schema" || name = "migrations") names
@@ -151,7 +156,8 @@ let walk ~project_root ~trees ~exclude =
               | Some Unix.S_REG ->
                 let bytes = Source_input.read path in
                 let digest = Migration_hash.digest bytes in
-                let key = match Migration_closure.without_block ~file:path bytes with
+                let key = if not (root path) then digest else
+                  match Migration_closure.without_block ~file:path bytes with
                   | Some body when String.length body <> String.length bytes -> Migration_hash.digest body
                   | _ -> digest in
                 Hashtbl.replace full path digest; Hashtbl.replace stripped path key;
@@ -196,8 +202,8 @@ let decode ~project_root node =
    modules discovery read, with their parse facts; [sealed] the completed
    revisions whose seals hold. None when the trees cannot be summarized. *)
 let compute ~project_root ~family ~through ~compiler_abi ~stored_value_compatibility ~modules ~sealed =
-  let trees,exclude = scope ~project_root ~family ~through in
-  match walk ~project_root ~trees ~exclude with
+  let trees,exclude,root = scope ~project_root ~family ~through in
+  match walk ~project_root ~trees ~exclude ~root with
   | None -> None
   | Some (digest,_,stripped) ->
     let entries = List.filter_map (fun (path,facts) ->
@@ -252,8 +258,8 @@ let verify ~project_root ~dir =
            if s.through <> n || s.compiler_abi <> Migration_abi.id abi ||
               s.stored_value_compatibility <> Migration_abi.stored_value_compatibility abi ||
               migrations_dir ~project_root ~family:s.family <> Some dir then None else
-           let trees,exclude = scope ~project_root ~family:s.family ~through:n in
-           match walk ~project_root ~trees ~exclude with
+           let trees,exclude,root = scope ~project_root ~family:s.family ~through:n in
+           match walk ~project_root ~trees ~exclude ~root with
            | Some (digest,full,stripped) when digest = s.digest &&
                List.for_all (fun (e:entry) -> Hashtbl.find_opt stripped e.path = Some e.key) s.entries ->
              F.add ~compiler_abi:s.compiler_abi (List.map (fun (e:entry) -> e.key,e.facts) s.entries);

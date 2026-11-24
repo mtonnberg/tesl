@@ -23,6 +23,13 @@ type history = { history_trees : string list; keep : string -> bool }
     files of [current_version] (VCurrent and its private modules, that revision's
     migration, contract, checkpoint and helpers). *)
 val family_history : project_root:string -> family:string -> current_version:int -> history
+(** Whether a path is a frozen source of the scope (inside a tree, not kept). *)
+val frozen : history -> string -> bool
+(** Whether the scope's trees determine imports between frozen sources (no tree
+    parent lists "schema" or "migrations", in the source view or on disk): a
+    scoped manifest then guards them with the trees, and a caller need not pass
+    the imports of frozen sources at all. *)
+val frozen_imports_determined : history -> bool
 (** Capture exact bytes in both the active Source_input view and on disk. Every
     input/output parent directory is guarded, as are explicit discovery directories.
     Open documents require unique signed 32-bit versions. Writes may only target
@@ -51,16 +58,17 @@ val overlays : t -> (string * string) list
 (** Recheck the source view and open-document versions, including read-only
     dependencies. A new/closed document invalidates the captured document set.
     This check does not replace the separate disk precondition. [quick] (an
-    intermediate check of one command, followed by [verify_disk] of the same
-    manifest) accepts a frozen history scope's source walk already verified
-    under the identical source view when it was captured equal to the disk
-    walk: the paths that view does not supply are those the disk check reads. *)
+    intermediate check of one command) accepts a frozen history scope's source
+    walk verified within the compilation scope under the identical view. *)
 val verify_source : ?quick:bool -> t -> documents:document list -> (unit, error list) result
 (** [quick] (an intermediate check of one command) accepts files and directories
     whose lstat identity is unchanged since a pass of this compilation read them,
-    and imports that pass resolved; the default full pass reads everything anew
-    and is what a command runs before it writes or reports success. *)
-val verify_disk : ?quick:bool -> t -> (unit, error list) result
+    and imports that pass resolved, and repeats no walk of a frozen history scope
+    already verified within the compilation scope ([revisit]: walk it again,
+    accepting unchanged lstat identities). The default full pass reads
+    everything anew and is what a command runs before it writes or reports
+    success. *)
+val verify_disk : ?quick:bool -> ?revisit:bool -> t -> (unit, error list) result
 (** Run [f] as one disk pass: the disk checks of frozen history scopes within it
     observe each tree entry's lstat and each tree directory's listing once,
     shared by every manifest checked there (for one guard pass over several
