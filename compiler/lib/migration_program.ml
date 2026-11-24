@@ -96,9 +96,10 @@ let capture_queue_bindings modules databases inventories =
    | _ -> None) m.decls) modules) databases |> List.sort compare
 let verify_bindings expected modules = protect "<migration build>" (fun () ->
  Option.iter (fun t ->
-  let paths = List.map fst t.inputs @ List.map fst (A.source_inputs t.abi) in
+  let paths = Hashtbl.create 256 in
+  List.iter (fun (path,_) -> Hashtbl.replace paths path ()) (t.inputs @ A.source_inputs t.abi);
   List.iter (fun (m:module_form) ->
-   if not (List.mem (Source_input.canonical_path m.source_file) paths) then
+   if not (Hashtbl.mem paths (Source_input.canonical_path m.source_file)) then
     reject ~code:"MIG013" (Location.dummy_loc m.source_file)
      "compilation selected an import outside its captured source history") modules) expected;
  let actual = candidates modules |> List.map (fun (identity,family,namespace,_) -> identity,family,namespace) |> List.sort compare in
@@ -352,8 +353,12 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    (* Parsed only by a caller that emits or checks the captured modules; a
       capture asked for its row histories alone parses none. *)
    let captured_modules=lazy (
+   let linked = Hashtbl.create 64 in
+   (* The first linked source of each canonical path, as List.find_opt answers. *)
+   List.iter (fun ((m:module_form),captured) -> let path = Source_input.canonical_path m.source_file in
+     if not (Hashtbl.mem linked path) then Hashtbl.add linked path (m,captured)) linked_sources;
    let captured_modules=if not source_only then [] else List.map (fun (path,bytes) ->
-     match List.find_opt (fun (m,_) -> Source_input.canonical_path m.source_file=path) linked_sources with
+     match Hashtbl.find_opt linked path with
      | Some (m,captured) when captured=bytes -> m,bytes
      | Some _ -> reject ~code:"MIG013" (Location.dummy_loc path) "linked module differs from captured history"
      | None -> (if path=entry_file then entry else parse path bytes),bytes) inputs in
