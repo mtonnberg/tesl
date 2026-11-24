@@ -130,7 +130,11 @@ tesl migrate generate app.tesl --manifest-json
 ```
 
 This emits the compiler-owned guarded edit preview without writing source files
-or connecting to the application database. CI can retain it as a review artifact,
+or connecting to the application database. The preview records the SHA-256 of
+each application and current-revision file it reads or writes, plus one digest
+over the frozen revisions' schema and migration files and the newest checkpoint,
+so its size does not grow with the history. Applying it refuses if any of those
+bytes changed or a file in those directories was added or removed. CI can retain it as a review artifact,
 alongside compilation and migration fixture results. Editor-side apply is not
 needed to use this workflow.
 

@@ -371,6 +371,99 @@ let incremental_identity () = with_project (fun root path ->
   let fresh = proposal ~reads:[List.hd files] root [] in
   refuse (fun () -> M.add_to_combine accumulator fresh))
 
+
+(* The frozen history scope. The layout and digest match the Go applier's
+   vector (internal/sourceedit/history_test.go). *)
+let history_layout path =
+  List.iter (fun (name,contents) -> write (path name) contents)
+    ["schema/s/v-current.tesl","cur";"schema/s/v1.tesl","one";"schema/s/sub/x.tesl","x";
+     "migrations/s/v2.tesl","m2";"migrations/s/v1.checkpoint","c1";"migrations/s/v2.checkpoint","c2";
+     "migrations/s/v3.tesl","m3"]
+let history_scope path = {M.history_trees=[path "migrations/s";path "schema/s"];
+  keep=(fun file -> file = path "schema/s/v-current.tesl" || file = path "migrations/s/v3.tesl")}
+let history_reads path = List.map path ["schema/s/v-current.tesl";"schema/s/v1.tesl";"schema/s/sub/x.tesl";
+  "migrations/s/v2.tesl";"migrations/s/v3.tesl"]
+let scoped ?(imports=[]) root path =
+  get (M.create_scoped (Some (history_scope path)) ~project_root:root ~reads:(history_reads path)
+    ~directories:[] ~imports ~documents:[] ~writes:[])
+let history_vector () = with_project (fun root path ->
+  history_layout path;
+  let t = scoped root path in
+  let json = M.to_json t in
+  check bool "version 2" true (contains json "{\"version\":2,");
+  check bool "one digest for the frozen files" true
+    (contains json "\"sourceHash\":\"a55a135c5d39d75aeb9fa491a9186a5af7d26ed8c7017ecaeedc06d8a73ae733\",\"diskHash\":\"a55a135c5d39d75aeb9fa491a9186a5af7d26ed8c7017ecaeedc06d8a73ae733\"");
+  check bool "frozen files lose their own guards" false (contains json (path "schema/s/v1.tesl"));
+  check bool "current files keep theirs" true (contains json ("{\"path\":\"" ^ path "migrations/s/v3.tesl" ^ "\",\"sourceHash\""));
+  unchanged t)
+let history_changes () =
+  let refused name change = with_project (fun root path ->
+    history_layout path;
+    let t = scoped root path in
+    change path;
+    match M.verify_disk t with
+    | Error (_::_) -> ()
+    | _ -> fail (name ^ " accepted")) in
+  refused "edited frozen source" (fun path -> write (path "schema/s/v1.tesl") "ONE");
+  refused "edited nested module" (fun path -> write (path "schema/s/sub/x.tesl") "y");
+  refused "added file" (fun path -> write (path "schema/s/sub/y.tesl") "");
+  refused "removed file" (fun path -> Sys.remove (path "migrations/s/v2.tesl"));
+  refused "added directory" (fun path -> mkdir (path "schema/s/v1"));
+  refused "edited newest checkpoint" (fun path -> write (path "migrations/s/v2.checkpoint") "C2");
+  refused "removed older checkpoint" (fun path -> Sys.remove (path "migrations/s/v1.checkpoint"));
+  refused "symbolic link" (fun path -> Unix.symlink "v1.tesl" (path "schema/s/alias.tesl"));
+  refused "edited current source" (fun path -> write (path "migrations/s/v3.tesl") "M3");
+  with_project (fun root path ->
+    history_layout path;
+    let t = scoped root path in
+    write (path "migrations/s/v1.checkpoint") "older";
+    unchanged t)
+let history_fallback () = with_project (fun root path ->
+  history_layout path;
+  Unix.symlink "v1.tesl" (path "schema/s/alias.tesl");
+  let t = scoped root path in
+  let json = M.to_json t in
+  check bool "an unobservable tree keeps per-file guards" true
+    (contains json "\"history\":[]" && contains json (path "schema/s/v1.tesl"));
+  unchanged t)
+let history_imports () = with_project (fun root path ->
+  history_layout path;
+  let frozen = path "migrations/s/v2.tesl" and current = path "schema/s/v-current.tesl" in
+  let t = scoped ~imports:[frozen,"Schema.S.V1";current,"Schema.S.V1"] root path in
+  let json = M.to_json t in
+  check bool "an import between frozen sources is part of the tree" false (contains json ("\"source\":\"" ^ frozen));
+  check bool "a current source's import keeps its guard" true (contains json ("\"source\":\"" ^ current));
+  check bool "and its target keeps a file guard" true (contains json ("{\"path\":\"" ^ path "schema/s/v1.tesl" ^ "\",\"sourceHash\""));
+  unchanged t;
+  (* A parent entry that could begin a deeper candidate keeps every import guard. *)
+  mkdir (path "migrations/schema");
+  let shadowed = scoped ~imports:[frozen,"Schema.S.V1"] root path in
+  check bool "shadowing parent keeps the import guard" true (contains (M.to_json shadowed) ("\"source\":\"" ^ frozen)))
+let history_combine () = with_project (fun root path ->
+  history_layout path;
+  let t = scoped root path in
+  let frozen = path "schema/s/v1.tesl" in
+  let other = proposal ~reads:[frozen] root [] in
+  let combined = get (M.combine t other ~documents:[]) in
+  check bool "a separately guarded frozen file is excluded" true
+    (contains (M.to_json combined) ("\"excluded\":[\"" ^ path "migrations/s/v3.tesl" ^ "\",\"" ^ path "schema/s/v-current.tesl" ^ "\",\"" ^ frozen ^ "\"]"));
+  unchanged combined;
+  write frozen "ONE";
+  let changed = proposal ~reads:[frozen] root [] in
+  refuse (fun () -> M.combine t changed ~documents:[]);
+  write frozen "one";
+  let again = scoped root path in
+  write (path "schema/s/sub/x.tesl") "y";
+  refuse (fun () -> M.combine again (scoped root path) ~documents:[]))
+let family_scope () = with_project (fun root path ->
+  let h = M.family_history ~project_root:root ~family:"Schema.Notes" ~current_version:2 in
+  check (list string) "trees" [path "schema/notes";path "migrations/notes"] h.history_trees;
+  List.iter (fun (name,expected) -> check bool name expected (h.keep (path name)))
+    ["schema/notes/v-current.tesl",true;"schema/notes/v-current/x.tesl",true;"schema/notes/v1.tesl",false;
+     "migrations/notes/v2.tesl",true;"migrations/notes/v2-contract.tesl",true;"migrations/notes/v2.checkpoint",true;
+     "migrations/notes/v2/helper.tesl",true;"migrations/notes/v21.tesl",false;"migrations/notes/v1.checkpoint",false;
+     "app.tesl",true])
+
 let () = run "Migration source manifests" ["guarded proposals", List.map (fun (name,f) -> test_case name `Quick f)
   ["preview never writes sources or directories",no_writes;
    "arbitrary source bytes survive JSON transport",byte_edits;"no-op writes retain guards",noops;
@@ -396,4 +489,10 @@ let () = run "Migration source manifests" ["guarded proposals", List.map (fun (n
    "batch refuses late edit and document conflicts",batch_late_conflicts;
    "batch refuses a replaced path alias",batch_alias;
    "batched graph capture guards helpers and membership",captured_graph;
-   "incremental composition preserves original observations",incremental_identity]]
+   "incremental composition preserves original observations",incremental_identity;
+   "frozen history digest vector",history_vector;
+   "frozen history refuses changed, added and removed entries",history_changes;
+   "unobservable history keeps per-file guards",history_fallback;
+   "imports between frozen sources",history_imports;
+   "composition keeps the frozen history observations",history_combine;
+   "family history scope",family_scope]]

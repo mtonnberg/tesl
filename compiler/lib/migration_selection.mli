@@ -30,6 +30,13 @@ val resolve : compiler_abi:string -> project_root:string -> entry_file:string ->
 val resolve_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> entry_file:string ->
   database:string option -> documents:Migration_manifest.document list -> (t,error list) result
+(** [resolve_with_compatibility] for a source preview: with [flat_history] the
+    selection guards the family's frozen history as one scope
+    (Migration_manifest.family_history), and so do [start] and [refresh]. *)
+val resolve_scoped : flat_history:bool -> stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> entry_file:string ->
+  database:string option -> documents:Migration_manifest.document list -> (t,error list) result
+val flat_history : t -> bool
 val selection : t -> selection
 (** Immutable guards captured by selection, including the complete application
     imports and schema/migration discovery. Consumers recheck source and disk

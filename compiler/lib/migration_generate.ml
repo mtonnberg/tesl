@@ -72,7 +72,7 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let start_scoped ~flat_history ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -184,7 +184,8 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
         | Ok imports -> imports | Error e -> reject file e.msg in
       List.filter_map (fun name ->
         if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) original_reads in
-    let source_manifest = manifest (M.create ~project_root:root ~reads
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
+    let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads
       ~directories:[Filename.dirname current.root_file;Filename.dirname (module_path root (family ^ ".Migrate.V1"))]
       ~imports ~documents ~writes) in
     overlay root (M.overlays source_manifest) (fun () ->
@@ -199,6 +200,7 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
+let start_with_namespace = start_scoped ~flat_history:false
 let start_with_compatibility = start_with_namespace ~namespace:None
 let start = start_with_compatibility ~stored_value_compatibility:None
 
@@ -639,7 +641,7 @@ let choose_entry file source before after choice =
  let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),plan.option.replacement])in
  chosen,plan.writes
 
-let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let refresh_scoped ~flat_history ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -709,7 +711,8 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
     let generated_imports=List.concat_map(fun(file,source)->let m=parse file source in
       List.filter_map(fun(i:Ast.import_decl)->if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports)
       ((migration.path,source)::extra_writes)in
-    let source_manifest = manifest (M.create ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
+    let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
       ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path;Filename.chop_suffix migration.path ".tesl"] ~writes:(extra_writes @ column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in
     history (H.verify_unchanged h);
@@ -721,6 +724,6 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
-let refresh_with_compatibility = refresh_internal ~choice:None
-let refresh_choice_with_compatibility ~choice = refresh_internal ~choice:(Some choice)
+let refresh_with_compatibility = refresh_scoped ~flat_history:false ~choice:None
+let refresh_choice_with_compatibility ~choice = refresh_scoped ~flat_history:false ~choice:(Some choice)
 let refresh = refresh_with_compatibility ~stored_value_compatibility:None

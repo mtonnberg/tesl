@@ -25,21 +25,21 @@ let namespace t =
  | exception (Sys_error _ | Unix.Unix_error _) -> None
 let start t ~documents =
  Result.bind (verify t ~documents) (fun () ->
-  Result.bind (generated (G.start_with_namespace ~namespace:(namespace t) ~stored_value_compatibility:(stored_value_compatibility t)
+  Result.bind (generated (G.start_scoped ~flat_history:(flat_history t) ~namespace:(namespace t) ~stored_value_compatibility:(stored_value_compatibility t)
     ~compiler_abi:(compiler_abi t) ~project_root:(project_root t)
     ~family:(selection t).family ~version:(selection t).current_version ~documents)) (fun preview ->
    Result.map (fun source_manifest -> {preview with G.manifest=source_manifest})
     (manifest (M.combine (source_guard t) preview.manifest ~documents))))
 let refresh t ~documents =
  Result.bind (verify t ~documents) (fun () ->
-  Result.bind (generated (G.refresh_with_compatibility ~stored_value_compatibility:(stored_value_compatibility t)
+  Result.bind (generated (G.refresh_scoped ~flat_history:(flat_history t) ~choice:None ~stored_value_compatibility:(stored_value_compatibility t)
     ~compiler_abi:(compiler_abi t) ~project_root:(project_root t)
     ~family:(selection t).family ~version:(selection t).current_version ~documents)) (fun preview ->
    Result.map (fun source_manifest -> {preview with G.manifest=source_manifest})
     (manifest (M.combine (source_guard t) preview.manifest ~documents))))
 let refresh_choice t ~choice ~documents =
  Result.bind (verify t ~documents) (fun () ->
-  Result.bind (generated (G.refresh_choice_with_compatibility ~choice ~stored_value_compatibility:(stored_value_compatibility t)
+  Result.bind (generated (G.refresh_scoped ~flat_history:(flat_history t) ~choice:(Some choice) ~stored_value_compatibility:(stored_value_compatibility t)
     ~compiler_abi:(compiler_abi t) ~project_root:(project_root t)
     ~family:(selection t).family ~version:(selection t).current_version ~documents)) (fun preview ->
    Result.map (fun source_manifest -> {preview with G.manifest=source_manifest})

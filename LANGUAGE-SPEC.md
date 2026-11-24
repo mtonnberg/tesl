@@ -881,10 +881,10 @@ These integrity checks apply when checking the migration, a recorded schema file
 or an application importing that schema. Unsaved source buffers participate in the
 same checks. A private-only import still checks the recorded revision root.
 
-**Source edit manifest format 1.**
+**Source edit manifest format 2.**
 A manifest describes source operations, not executable database transitions. Its
-JSON object contains `version: 1`, `projectRoot`, `documents`, `inputs`,
-`directories`, `imports`, and `edits`. Paths are absolute canonical UTF-8 paths under one
+JSON object contains `version: 2`, `projectRoot`, `documents`, `inputs`,
+`directories`, `imports`, `history`, and `edits`. Paths are absolute canonical UTF-8 paths under one
 existing project. Each document has `path` and a signed 32-bit `version`. Each input
 has `path`, `sourceHash` and `diskHash`: SHA-256 of the complete source-view and
 saved bytes respectively, or null for absence. Directory entries carry the same
@@ -896,6 +896,27 @@ Each import precondition has `source`, `module`, `sourceResolved`, and
 each resolved path also gets a file precondition. Import guards are sorted by
 source path and module name. This detects resolution changes such as an existing
 dangling import candidate becoming available without changing the old dependency.
+
+A migration preview guards a family's frozen history as one `history` entry
+instead of one input per frozen file. The entry has `trees` (the family's
+`schema/<family>` and `migrations/<family>` directories), `excluded`, and
+`sourceHash`/`diskHash`. Each hash is SHA-256 over `tesl-frozen-history-v1`, then
+for each tree `tree` and its project-relative path, every entry below it that is
+not excluded, sorted by project-relative path with `/` separators, and `end`.
+An entry is `d` and its path for a directory, `f`, its path and the SHA-256 of its
+bytes for a regular file, or `c` and its path for a checkpoint `v<N>.checkpoint`
+other than the newest non-excluded one; an absent tree is `absent`. Every item
+ends with a NUL byte. A symbolic link or special file inside a tree refuses the
+guard; the compiler then keeps one input per file. The files of the current
+revision (`VCurrent`, its private modules, and that revision's migration,
+Contract, checkpoint and helpers), the outputs, open documents and the targets of
+the remaining import guards keep their own inputs. Every path with its own input
+or directory guard inside a tree is listed in `excluded`, and nothing else is.
+Import guards between frozen sources are omitted: the trees' entries, the guarded
+listings of their parent directories (which must not contain `schema` or
+`migrations`) and the project root determine their resolution. An older
+checkpoint's bytes are not hashed; its digest is sealed in its frozen migration
+root, whose bytes are.
 
 Each edit has `path`, `beforeHex`, `afterHex` and `documentVersion`. Replacement
 bytes use lowercase hexadecimal so arbitrary source bytes survive JSON transport;
