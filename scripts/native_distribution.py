@@ -69,6 +69,23 @@ def transient_download_error(error):
         (errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE))
 
 
+def rename_published(source, target, attempts=20, delay=0.5):
+    """Rename the finished artifact directory.
+
+    On Windows a just-exited setup executable, or an antivirus scan of it, can
+    hold a handle inside the directory for a moment, so the rename is refused
+    with access denied. Retry that case briefly; anything else fails at once.
+    """
+    for attempt in range(attempts):
+        try:
+            source.rename(target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def download(source, output):
     """Fetch a declared source with byte, socket, and overall time bounds.
 
@@ -315,7 +332,7 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
             "dune": {"version": plan["sources"]["dune"]["version"], "selection": "verified-source-build", "source_hash_verified": True},
         }
         (artifacts / "distribution-checks.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        artifacts.rename(output)
+        rename_published(artifacts, output)
     return evidence
 
 
