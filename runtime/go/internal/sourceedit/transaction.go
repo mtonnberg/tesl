@@ -316,6 +316,15 @@ func (tx *transaction) verifyProgress() error {
 			return fmt.Errorf("saved source changed during source application: %s", g.Path)
 		}
 	}
+	for _, h := range w.History {
+		actual, err := tx.tree.historyHash(h, func(path string) bool { return added[filepath.Dir(path)][filepath.Base(path)] })
+		if err != nil {
+			return err
+		}
+		if actual != h.DiskHash {
+			return fmt.Errorf("saved frozen history changed during source application: %s", strings.Join(h.Trees, ", "))
+		}
+	}
 	for _, g := range w.Directories {
 		names, exists, err := tx.tree.names(g.Path)
 		if err != nil {
@@ -638,6 +647,11 @@ func (m *Manifest) requireSaved() error {
 	for _, g := range m.wire.Directories {
 		if !same(g.SourceHash, g.DiskHash) {
 			return fmt.Errorf("source directory view differs from saved membership: %s", g.Path)
+		}
+	}
+	for _, h := range m.wire.History {
+		if h.SourceHash != h.DiskHash {
+			return fmt.Errorf("source view of the frozen history differs from saved bytes: %s", strings.Join(h.Trees, ", "))
 		}
 	}
 	for _, g := range m.wire.Imports {

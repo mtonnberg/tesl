@@ -196,6 +196,144 @@ func (t *tree) directoryHash(path string) (*string, error) {
 	return &h, nil
 }
 
+// checkpointVersion parses a generated revision checkpoint name, v<N>.checkpoint.
+func checkpointVersion(path string) (int, bool) {
+	name := filepath.Base(path)
+	if len(name) <= 12 || name[0] != 'v' || !strings.HasSuffix(name, ".checkpoint") {
+		return 0, false
+	}
+	digits := name[1 : len(name)-11]
+	if digits[0] == '0' || len(digits) > 9 {
+		return 0, false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(digits)
+	return n, err == nil
+}
+
+// historyHash is the compiler's frozen history digest (Migration_manifest):
+// SHA-256 over "tesl-frozen-history-v1", then per tree "tree", its
+// project-relative path, every non-excluded entry sorted by project-relative
+// path with '/' separators ("d" for a directory; "f", the path and the SHA-256
+// of a regular file's bytes; "c" for an older checkpoint) or "absent", and
+// "end"; each item ends with NUL. Only the newest non-excluded v<N>.checkpoint
+// contributes its bytes. Symbolic links and special files refuse. skip omits
+// entries the running transaction itself created.
+func (t *tree) historyHash(h historyGuard, skip func(string) bool) (string, error) {
+	excluded := make(map[string]bool, len(h.Excluded))
+	for _, path := range h.Excluded {
+		excluded[path] = true
+	}
+	type entry struct {
+		path string
+		dir  bool
+	}
+	relative := func(path string) string {
+		rel, _ := filepath.Rel(t.path, path)
+		return filepath.ToSlash(rel)
+	}
+	collected := make([][]entry, len(h.Trees))
+	present := make([]bool, len(h.Trees))
+	newest, found := 0, false
+	for i, root := range h.Trees {
+		if skip != nil && skip(root) {
+			continue // created by this transaction: absent when previewed
+		}
+		info, err := t.kind(root)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("history tree is not a directory: %s", root)
+		}
+		present[i] = true
+		var visit func(string) error
+		visit = func(directory string) error {
+			names, exists, err := t.names(directory)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("history directory disappeared: %s", directory)
+			}
+			for _, name := range names {
+				path := filepath.Join(directory, name)
+				if skip != nil && skip(path) {
+					continue
+				}
+				info, err := t.kind(path)
+				if err != nil {
+					return err
+				}
+				switch {
+				case info.IsDir():
+					collected[i] = append(collected[i], entry{path, true})
+					if err := visit(path); err != nil {
+						return err
+					}
+				case info.Mode().IsRegular():
+					collected[i] = append(collected[i], entry{path, false})
+					if n, ok := checkpointVersion(path); ok && !excluded[path] && (!found || n > newest) {
+						newest, found = n, true
+					}
+				default:
+					return fmt.Errorf("history entry is not a regular file or directory: %s", path)
+				}
+			}
+			return nil
+		}
+		if err := visit(root); err != nil {
+			return "", err
+		}
+	}
+	var b strings.Builder
+	b.WriteString("tesl-frozen-history-v1\x00")
+	for i, root := range h.Trees {
+		b.WriteString("tree\x00" + relative(root) + "\x00")
+		if !present[i] {
+			b.WriteString("absent\x00end\x00")
+			continue
+		}
+		type line struct{ rel, text string }
+		var lines []line
+		for _, e := range collected[i] {
+			if excluded[e.path] {
+				continue
+			}
+			rel := relative(e.path)
+			if e.dir {
+				lines = append(lines, line{rel, "d\x00" + rel})
+				continue
+			}
+			if n, ok := checkpointVersion(e.path); ok && n != newest {
+				lines = append(lines, line{rel, "c\x00" + rel})
+				continue
+			}
+			data, exists, err := t.bytes(e.path)
+			if err != nil {
+				return "", err
+			}
+			if !exists {
+				return "", fmt.Errorf("history entry disappeared: %s", e.path)
+			}
+			lines = append(lines, line{rel, "f\x00" + rel + "\x00" + hash(data)})
+		}
+		sort.Slice(lines, func(a, b int) bool { return lines[a].rel < lines[b].rel })
+		for _, l := range lines {
+			b.WriteString(l.text + "\x00")
+		}
+		b.WriteString("end\x00")
+	}
+	return hash([]byte(b.String())), nil
+}
+
 // VerifyDisk checks original saved bytes, directory membership and actual import
 // resolution. It neither checks open-document versions nor applies an edit.
 func (m *Manifest) VerifyDisk() error {
@@ -232,6 +370,15 @@ func (m *Manifest) verifyDisk(t *tree) error {
 		}
 		if !same(actual, g.DiskHash) {
 			return fmt.Errorf("saved directory membership changed after preview: %s", g.Path)
+		}
+	}
+	for _, h := range m.wire.History {
+		actual, err := t.historyHash(h, nil)
+		if err != nil {
+			return err
+		}
+		if actual != h.DiskHash {
+			return fmt.Errorf("saved frozen history changed after preview: %s", strings.Join(h.Trees, ", "))
 		}
 	}
 	return t.verifyRoot()
