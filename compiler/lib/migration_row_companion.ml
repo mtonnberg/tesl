@@ -57,8 +57,11 @@ let base_json ~quote ~go_type source =
      r.version (quote r.previous.identity) (quote (schema_hash (schema (r.version-1))))
      (quote (schema_hash (schema r.version)))) (RH.retirements rows) in
   let nodes=Migration_canonical_nodes.create ~quote in
-  let versions=Emit_fragment.render_entries ~document:"source" ~database:d.identity ~revision:(fun (v:Migration_records.version) -> v.version) nodes
-    (Migration_records.version_json ~quote ~contract:(Migration_canonical_nodes.reference nodes) ~go_type:(go_type d.identity)) (P.records source d.identity).versions in
+  let revision (v:Migration_records.version) = v.version in
+  let earlier,items=Migration_records.entries (P.records source d.identity) ~covered:(Emit_fragment.covered ())
+    ~count:(fun s -> s.version_count) ~items:(fun t -> t.versions) ~revision in
+  let versions=Emit_fragment.render_entries ~earlier ~document:"source" ~database:d.identity ~revision nodes
+    (Migration_records.version_json ~quote ~contract:(Migration_canonical_nodes.reference nodes) ~go_type:(go_type d.identity)) items in
   Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"origins":%s%s,"canonicalNodes":%s}|}
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version
    versions (array origin d.origins) retirements (Migration_canonical_nodes.to_json nodes) in
@@ -117,8 +120,11 @@ let rows_json ?projection ~quote source =
   let shape entry=String.sub entry 0 (String.length entry-1) ^ suffix ^ "}" in
   let unshape entry=if String.ends_with ~suffix:(suffix ^ "}") entry then
     Some (String.sub entry 0 (String.length entry-String.length suffix-1) ^ "}") else None in
-  let transforms=Emit_fragment.render_entries ~shape ~unshape ~document:"rows" ~database:d.identity ~revision:(fun (x:Migration_records.transform) -> x.migration_version) nodes
-    (transform nodes d.identity history) (P.records source d.identity).transforms in
+  let revision (x:Migration_records.transform) = x.migration_version in
+  let earlier,items=Migration_records.entries (P.records source d.identity) ~covered:(Emit_fragment.covered ())
+    ~count:(fun s -> s.transform_count) ~items:(fun t -> t.transforms) ~revision in
+  let transforms=Emit_fragment.render_entries ~earlier ~shape ~unshape ~document:"rows" ~database:d.identity ~revision nodes
+    (transform nodes d.identity history) items in
   Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"transforms":%s%s,"canonicalNodes":%s}|}
    (quote d.identity) (quote d.family) (quote d.namespace) d.current_version
    transforms current (Migration_canonical_nodes.to_json nodes) in

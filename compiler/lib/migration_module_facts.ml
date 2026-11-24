@@ -72,7 +72,7 @@ let add ~compiler_abi entries =
 (* A revision checkpoint (Migration_checkpoint) starts with its format line and
    then this section. [text] must already have verified against its recorded
    digest. *)
-let checkpoint_format = "tesl-migration-checkpoint-v5"
+let checkpoint_format = "tesl-migration-checkpoint-v6"
 let load_checkpoint text =
   let header = checkpoint_format ^ "\n" in
   if not (!disabled ()) && String.starts_with ~prefix:header text then

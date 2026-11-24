@@ -15,8 +15,11 @@ let to_json ~quote source =
   | Error errors -> Error errors
   | Ok _ ->
    let nodes=Migration_canonical_nodes.create ~quote in
-   let versions=Emit_fragment.render_entries ~document:"physical" ~database:database.identity ~revision:(fun (p:Migration_records.physical) -> p.physical_version) nodes
-     (Migration_records.physical_json ~quote ~contract:(Migration_canonical_nodes.reference nodes)) (P.records source database.identity).physical in
+   let revision (p:Migration_records.physical) = p.physical_version in
+   let earlier,items=Migration_records.entries (P.records source database.identity) ~covered:(Emit_fragment.covered ())
+     ~count:(fun s -> s.physical_count) ~items:(fun t -> t.physical) ~revision in
+   let versions=Emit_fragment.render_entries ~earlier ~document:"physical" ~database:database.identity ~revision nodes
+     (Migration_records.physical_json ~quote ~contract:(Migration_canonical_nodes.reference nodes)) items in
    Ok (Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"canonicalNodes":%s}|}
     (quote database.identity) (quote database.family) (quote database.namespace) database.current_version
     versions (Migration_canonical_nodes.to_json nodes)) in

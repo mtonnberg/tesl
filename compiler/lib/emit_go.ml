@@ -18338,7 +18338,7 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
   (* Every published binding, from its record; the live checked binding, when
      this build checked it, supplies the reverse writes and conversion
      certificates a stored record never carries. *)
-  let all_records=(P.records source database.identity).transforms in
+  let published=P.records source database.identity in
   let stored_rows=List.map (fun (f:Emit_fragment.t) ->
     match List.filter (fun (r:Emit_fragment.rows) -> r.database=database.identity) f.rows with
     | [r] -> r | _ -> Emit_fragment.mismatch "revision fragment lacks its row declarations") plan.spliced in
@@ -18348,10 +18348,11 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       Emit_fragment.mismatch "a spliced row declaration's name is taken") r.taken;
     imports:=r.imports @ !imports) stored_rows;
   let stored=List.concat_map (fun (r:Emit_fragment.rows) -> r.declarations) stored_rows in
-  if List.length (List.filter (fun (record:Migration_records.transform) -> record.migration_version<=plan.covered) all_records)<>List.length stored then
+  let earlier,live_records=Migration_records.entries published ~covered:plan.covered ~count:(fun s -> s.transform_count)
+    ~items:(fun t -> t.transforms) ~revision:(fun (record:Migration_records.transform) -> record.migration_version) in
+  if earlier<>List.length stored then
     Emit_fragment.mismatch "spliced row declarations differ from the history records";
   let offset=List.length stored in
-  let live_records=List.filter (fun (record:Migration_records.transform) -> record.migration_version>plan.covered) all_records in
   let declarations=stored @ List.mapi (fun index (record:Migration_records.transform) ->
    let index=offset+index in
    revision:=record.migration_version;
@@ -18592,12 +18593,12 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
   let row_storage_entities=if not row_storage then [] else match row_source with
    | None -> []
    | Some source -> Migration_program.row_histories source |> List.concat_map (fun (identity,_) ->
-     (Migration_program.records source identity).versions |> List.concat_map (fun (version:Migration_records.version) -> version.entities))
-     |> List.sort_uniq (fun (a:Migration_records.entity) (b:Migration_records.entity) -> String.compare a.entity_name b.entity_name) in
+     Migration_records.published_storage_entities (Migration_program.records source identity))
+     |> Migration_records.first_by (fun (e:Migration_records.entity) -> e.entity_name)
+     |> List.stable_sort (fun (a:Migration_records.entity) (b:Migration_records.entity) -> String.compare a.entity_name b.entity_name) in
   let row_access_entities=if not row_physical then [] else match row_source with None -> [] | Some source ->
    Migration_program.row_histories source |> List.concat_map (fun (identity,history) ->
-    let transforming=(Migration_program.records source identity).transforms |> List.map (fun (record:Migration_records.transform) ->
-     record.access_entity,Migration_records.access_fields record) in
+    let transforming=Migration_records.published_access (Migration_program.records source identity) in
     transforming @ List.map (fun (_,entity)->entity.Migration_row_history.table.entity.entity_name,
       List.map (fun (column:Migration_storage.column)->column.field.name) entity.table.columns)
       (Migration_row_companion.current_codecs history)) in
@@ -18610,13 +18611,14 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
    Migration_program.row_histories source |> List.concat_map (fun (identity,history) ->
     let versions=RH.versions history in
     let latest=List.hd (List.rev versions) in
-    let recorded=(Migration_program.records source identity).transforms in
+    let published=Migration_program.records source identity in
     let current_errors=latest.entities |> List.filter_map (fun (entity:RH.entity) ->
-     let own=List.filter (fun (record:Migration_records.transform) -> record.current.identity=entity.identity) recorded in
-     let current=List.filter (fun (record:Migration_records.transform) -> record.migration_version=latest.version &&
-       record.current.entity_name=entity.table.entity.entity_name) own in
+     let own=Migration_records.transformed published entity.identity in
+     (* The latest version is never summarized: it is the current one. *)
+     let current=List.filter (fun (record:Migration_records.transform) -> record.current.identity=entity.identity &&
+       record.migration_version=latest.version && record.current.entity_name=entity.table.entity.entity_name) published.live.transforms in
      let current_codec=List.exists (fun (_,candidate)->candidate.Migration_row_history.table.entity.entity_name=entity.table.entity.entity_name) (Migration_row_companion.current_codecs history) in
-     if own=[] || List.length current=1 || current_codec then None else
+     if not own || List.length current=1 || current_codec then None else
       Some {loc=Location.dummy_loc entry.source_file;message="migration-aware application queries require an exact transforming binding ending at the current schema; additive tails require a checked typed access composition"}) in
     let error message={loc=Location.dummy_loc entry.source_file;message} in
     let sparse errors=List.map (fun (e:Migration_sparse.error)->{loc=e.loc;message=e.message}) errors in
@@ -18661,7 +18663,7 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
        if List.exists (fun (row:Migration_transform.row) -> row.fixtures<>[]) (Migration_transform.rows checked)
        then Some (Migration_records.fixture_transform 0 checked) else None) migration_fixtures
    | Some source -> Migration_program.row_histories source |> List.concat_map (fun (identity,_) ->
-       (Migration_program.records source identity).fixture_transforms)
+       Migration_records.published_fixtures (Migration_program.records source identity))
      |> List.fold_left (fun found (record:Migration_records.fixture_transform) ->
        if List.exists (fun (old:Migration_records.fixture_transform) -> old.root=record.root) found then found else found @ [record]) [] in
   match Migration_transform.with_fixture_sources fixture_checks (fun () ->
@@ -18701,9 +18703,13 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
   let modules = List.filter_map (function Ok m -> Some m | Error _ -> None) lowered in
   let project_path = "tesl.generated/" ^ package_name entry.module_name in
   let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
+  let local_set = Hashtbl.create (List.length local_names) in
+  List.iter (fun name -> Hashtbl.replace local_set name ()) local_names;
   (* The name a local module answers to, which is not always the name the import writes:
      a LIFTED stdlib module is imported as `Tesl.CivilTime` and declares itself `CivilTime`. *)
   let local_named import_name =
+    if import_name <> "Tesl.CivilTime" then
+      (if Hashtbl.mem local_set import_name then Some import_name else None) else
     List.find_opt (fun name ->
       name = import_name
       || (import_name = "Tesl.CivilTime"
@@ -18734,6 +18740,7 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       if List.length names > 1 then (package, List.sort compare names) :: acc else acc)
       by_package []
   in
+  let done_set = Hashtbl.create (List.length local_names) in
   let rec order done_names remaining passes =
     if package_collisions <> [] then
       Error (List.map (fun (package, names) ->
@@ -18750,19 +18757,21 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
                message = "Go backend could not order the module graph" }]
     else
       let ready, blocked = List.partition (fun (m : module_form) ->
-        List.for_all (fun name -> List.mem name done_names) (dependencies_of m)) remaining in
+        List.for_all (fun name -> Hashtbl.mem done_set name) (dependencies_of m)) remaining in
       if ready = [] then
         Error [{ loc = Location.dummy_loc entry.source_file;
                  message = "Go backend could not order the module graph" }]
-      else
+      else begin
+        List.iter (fun (m : module_form) -> Hashtbl.replace done_set m.module_name ()) ready;
         order (List.rev_append (List.map (fun (m : module_form) -> m.module_name) ready)
-                 done_names) blocked (passes - 1)
+                 done_names) blocked (passes - 1) end
   in
   match (project_entity_bindings modules), (order [] modules (List.length modules + 1)) with
   | Error errors, _ | _, Error errors -> Error errors
   | Ok entity_bindings, Ok ordered_names ->
-    let ordered = List.filter_map (fun name ->
-      List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
+    let first_named = Hashtbl.create (List.length modules) in
+    List.iter (fun (m : module_form) -> if not (Hashtbl.mem first_named m.module_name) then Hashtbl.add first_named m.module_name m) modules;
+    let ordered = List.filter_map (Hashtbl.find_opt first_named) ordered_names in
     (* Stored revision output (Emit_fragment). A single versioned database's
        completed revisions may be spliced from their checkpoints instead of
        compiled; the revisions a recording emit asks for are captured. *)

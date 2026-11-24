@@ -60,9 +60,11 @@ val source_program : source_history -> t
 val source_modules : source_history -> (Ast.module_form * string) list
 val row_histories : source_history -> (string * Migration_row_history.t) list
 (** Every per-revision record the capture's artifacts publish for one database
-    (Migration_records): checkpoint records for a resumed prefix followed by
-    records computed for the later revisions. *)
-val records : source_history -> string -> Migration_records.t
+    (Migration_records): for a resumed prefix, the summary of the earlier
+    checkpointed revisions and the newest checkpoint's records, followed by
+    records computed for the later revisions; the full list decodes every
+    checkpoint's records on demand. *)
+val records : source_history -> string -> Migration_records.published
 (** The checkpointed revision a publishing capture of this database continued
     from (its [row_histories] then hold only that revision and later ones). *)
 val resumed_through : source_history -> string -> int option

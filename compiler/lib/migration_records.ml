@@ -222,7 +222,15 @@ let encode t = C.Seq [atom "tesl-history-records-v1";list encode_version t.versi
   list encode_fixture_transform t.fixture_transforms;list encode_physical t.physical;list encode_contract t.contracts;
   list encode_queue_version t.queue_versions]
 
-let decode node =
+type summary = {through:int;version_count:int;transform_count:int;physical_count:int;contract_count:int;
+  storage_entities:entity list;access:(string * string list) list;transformed:string list;
+  fixtures:fixture_transform list;queues:queue_version list}
+
+(* Application fields a transforming binding exposes to migration-aware access. *)
+let access_fields x = List.filter_map (fun f -> match f.kind with
+  | "copy" | "rename" | "revalidate" -> Some f.target | _ -> None) x.fields
+
+let decode_any node =
   let fail () = invalid_arg "malformed history records" in
   let str = function C.Bytes s -> s | C.Seq _ -> fail () in
   let hex n = RH.hex (str n) in
@@ -282,9 +290,78 @@ let decode node =
     | _ -> fail () in
   match node with
   | C.Seq [C.Bytes "tesl-history-records-v1";versions;transforms;fixtures;physicals;contracts;queues] ->
-    {versions=items version versions;transforms=items transform transforms;fixture_transforms=items fixture_transform fixtures;
+    `Records {versions=items version versions;transforms=items transform transforms;fixture_transforms=items fixture_transform fixtures;
      physical=items physical physicals;contracts=items contract contracts;queue_versions=items queue_version queues}
+  | C.Seq [C.Bytes "tesl-history-records-summary-v1";through;versions;transforms;physicals;contracts;entities;access;transformed;fixtures;queues] ->
+    `Summary {through=num through;version_count=num versions;transform_count=num transforms;physical_count=num physicals;
+      contract_count=num contracts;storage_entities=items entity entities;
+      access=items (function C.Seq [entity;fields] -> str entity,items str fields | _ -> fail ()) access;
+      transformed=items str transformed;fixtures=items fixture_transform fixtures;queues=items queue_version queues}
   | _ -> fail ()
+let decode node = match decode_any node with `Records t -> t | `Summary _ -> invalid_arg "malformed history records"
+let decode_summary node = match decode_any node with `Summary s -> s | `Records _ -> invalid_arg "malformed history records summary"
+
+(* What a build that splices revisions (Emit_fragment) still reads from
+   their records: entry counts per generated document, the storage entities
+   of every version (without their type contracts, which no emission input
+   reads), the migration-aware access fields of every transforming binding,
+   the entity identities a binding transforms, the fixture tests of every
+   transformation and the queue versions. Start stores the summary of the
+   revisions a checkpoint completes beside their records
+   (Migration_checkpoint); a later build combines the small summaries of the
+   earlier checkpoints instead of decoding their records. [through] is the
+   newest revision summarized. Combining is exact: the summary of [append a b]
+   is [combine (summarize a) (summarize b)]. *)
+let first_by key items =
+  let seen = Hashtbl.create 16 in
+  List.filter (fun item -> let k = key item in
+    if Hashtbl.mem seen k then false else (Hashtbl.add seen k (); true)) items
+let empty_summary = {through=0;version_count=0;transform_count=0;physical_count=0;contract_count=0;
+  storage_entities=[];access=[];transformed=[];fixtures=[];queues=[]}
+let combine a b =
+  {through=max a.through b.through;version_count=a.version_count+b.version_count;transform_count=a.transform_count+b.transform_count;
+   physical_count=a.physical_count+b.physical_count;contract_count=a.contract_count+b.contract_count;
+   storage_entities=first_by (fun e -> e.entity_name) (a.storage_entities @ b.storage_entities);
+   access=a.access @ b.access;transformed=List.sort_uniq String.compare (a.transformed @ b.transformed);
+   fixtures=first_by (fun f -> f.root) (a.fixtures @ b.fixtures);queues=a.queues @ b.queues}
+let summarize ~through t =
+  {through;version_count=List.length t.versions;transform_count=List.length t.transforms;
+   physical_count=List.length t.physical;contract_count=List.length t.contracts;
+   storage_entities=first_by (fun e -> e.entity_name)
+     (List.concat_map (fun (v:version) -> List.map (fun e -> {e with type_contract=""}) v.entities) t.versions);
+   access=List.map (fun x -> x.access_entity,access_fields x) t.transforms;
+   transformed=List.sort_uniq String.compare (List.map (fun x -> x.current.identity) t.transforms);
+   fixtures=first_by (fun f -> f.root) t.fixture_transforms;queues=t.queue_versions}
+
+let encode_summary s = C.Seq [atom "tesl-history-records-summary-v1";int s.through;int s.version_count;int s.transform_count;
+  int s.physical_count;int s.contract_count;list (fun e -> encode_entity {e with type_contract=""}) s.storage_entities;
+  list (fun (entity,fields) -> C.Seq [atom entity;list atom fields]) s.access;list atom s.transformed;
+  list encode_fixture_transform s.fixtures;list encode_queue_version s.queues]
+
+(* Published records of one database as a build sees them: [summary] covers
+   revisions 1..[summary.through], [live] the later ones, and [full] all of
+   them, decoded only when a build needs the earlier revisions' own records
+   (it splices fewer of them than the summary covers). *)
+type published = {summary:summary;live:t;full:t Lazy.t}
+let published_of_full t = {summary=empty_summary;live=t;full=Lazy.from_val t}
+let published_storage_entities p =
+  first_by (fun e -> e.entity_name) (p.summary.storage_entities @ List.concat_map (fun (v:version) -> v.entities) p.live.versions)
+let published_access p = p.summary.access @ List.map (fun x -> x.access_entity,access_fields x) p.live.transforms
+let published_fixtures p = first_by (fun f -> f.root) (p.summary.fixtures @ p.live.fixture_transforms)
+let published_queues p = p.summary.queues @ p.live.queue_versions
+let transformed p identity =
+  List.exists (String.equal identity) p.summary.transformed || List.exists (fun x -> x.current.identity=identity) p.live.transforms
+(* The items of one record list a document renders when revisions 1..[covered]
+   are spliced: the count of entries at or below [covered] and the items after
+   it. The full list is decoded only when [covered] is below the summary. *)
+let entries p ~covered ~count ~items ~revision =
+  if covered >= p.summary.through then
+    let live = items p.live in
+    count p.summary + List.length (List.filter (fun x -> revision x<=covered) live),
+    List.filter (fun x -> revision x>covered) live
+  else
+    let all = items (Lazy.force p.full) in
+    List.length (List.filter (fun x -> revision x<=covered) all),List.filter (fun x -> revision x>covered) all
 
 (* JSON renderers shared by every artifact emitter, so a record renders
    identically whether it was computed in this build or read from a
@@ -349,9 +426,6 @@ let derived f =
      | _ -> None | exception Invalid_argument _ -> None)
   | _ -> None
 
-(* Application fields a transforming binding exposes to migration-aware access. *)
-let access_fields x = List.filter_map (fun f -> match f.kind with
-  | "copy" | "rename" | "revalidate" -> Some f.target | _ -> None) x.fields
 
 (* A transforming revision that relies on its predecessor's settled shape needs
    that predecessor's exact checked Contract. Checked for versions in

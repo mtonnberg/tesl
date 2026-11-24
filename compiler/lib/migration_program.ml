@@ -19,7 +19,7 @@ type database = {identity:string;family:string;namespace:string;current_version:
 type t = {abi:A.t;databases:database list;inputs:(string * string) list;
  queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list;
  row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list Lazy.t;validate:(unit -> unit);
- resumed:bool;records:(string * Migration_records.t) list;resumed_through:(string * int) list;
+ resumed:bool;records:(string * Migration_records.published) list;resumed_through:(string * int) list;
  (* Per database: the emitted fragments stored with the resumed revisions'
     records (spliceable), and under --full-history the fragments every
     recorded checkpoint holds (to recompute and compare). *)
@@ -229,7 +229,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
      | Some _,Some (through,_) -> queue_versions (List.filter (fun (s:H.schema) -> s.version>through) schemas) edges
      | Some _,None -> queue_versions [H.current h] edges in
     let queue_versions=match !frozen with
-     | Some (_,(records:Migration_records.t)) -> records.queue_versions @ live_queue_versions
+     | Some (_,(records:Migration_records.published)) -> Migration_records.published_queues records @ live_queue_versions
      | None -> live_queue_versions in
      let inventories = List.map H.inventory schemas in
      (match List.rev inventories with
@@ -293,9 +293,15 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         capture computes only the revisions after its checkpoint. *)
      if source_only && (resumed=None || !frozen<>None) then begin
       let plan=checked(Migration_retained_storage.plan rows) in
-      let prefix,low=match !frozen with Some (through,records) -> records,through+1 | None -> Migration_records.empty,1 in
-      records := (identity,Migration_records.append prefix (Migration_records.of_history ~family ~namespace ~low ~high:max_int ~rows ~plan
-        ~contracts:(List.map Migration_contract.record !contracts_of_capture) ~queue_versions:live_queue_versions)) :: !records;
+      let low=match !frozen with Some (through,_) -> through+1 | None -> 1 in
+      let computed=Migration_records.of_history ~family ~namespace ~low ~high:max_int ~rows ~plan
+        ~contracts:(List.map Migration_contract.record !contracts_of_capture) ~queue_versions:live_queue_versions in
+      let published=match !frozen with
+        | None -> Migration_records.published_of_full computed
+        | Some (_,(prefix:Migration_records.published)) ->
+          {prefix with live=Migration_records.append prefix.live computed;
+           full=lazy (Migration_records.append (Lazy.force prefix.full) computed)} in
+      records := (identity,published) :: !records;
       Option.iter (fun (through,_) -> resumed_through := (identity,through) :: !resumed_through) !frozen
      end
      ;if List.exists (fun inventory -> Migration_inventory.staged_indexes inventory<>[]) inventories then begin

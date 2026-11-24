@@ -134,16 +134,23 @@ let with_context context f =
 (* [shape] turns a stored entry into the entry this emission renders, and
    [unshape] the reverse (None when the entry cannot be stored): a document may
    add fields to every entry that depend on later revisions. *)
-let render_entries ?(shape=Fun.id) ?(unshape=Option.some) ~document ~database ~revision nodes render items =
+(* The revisions the active emission splices are 1..[covered ()]. *)
+let covered () = match !active with
+  | None -> 0
+  | Some c -> List.fold_left (fun acc f -> max acc f.revision) 0 c.spliced
+(* [earlier] counts entries of covered revisions that [items] omits (their
+   records were summarized, Migration_records.entries). *)
+let render_entries ?(shape=Fun.id) ?(unshape=Option.some) ?(earlier=0) ~document ~database ~revision nodes render items =
   let spliced = match !active with None -> [] | Some c -> c.spliced in
-  let covered = List.fold_left (fun acc f -> max acc f.revision) 0 spliced in
+  let covered = covered () in
+  let omitted = earlier in
   let stored = List.concat_map (fun f ->
     match List.filter (fun b -> b.document=document && b.database=database) f.blocks with
     | [b] -> List.iter (Migration_canonical_nodes.preload nodes) b.nodes; List.map shape b.entries
     | [] -> mismatch ("revision fragment lacks its " ^ document ^ " block")
     | _ -> mismatch "revision fragment repeats a document block") spliced in
   let earlier = List.filter (fun x -> revision x<=covered) items in
-  if List.length earlier<>List.length stored then mismatch ("spliced " ^ document ^ " entries differ from the history records");
+  if omitted + List.length earlier<>List.length stored then mismatch ("spliced " ^ document ^ " entries differ from the history records");
   let live = List.filter (fun x -> revision x>covered) items in
   let rec groups acc = function
     | [] -> List.rev acc

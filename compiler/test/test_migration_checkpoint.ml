@@ -330,6 +330,28 @@ let records_written () = with_history (fun _ path entry ->
     (with_full_history false (fun () -> resumed_through entry));
   check (option int) "full history folds from V1" None (with_full_history true (fun () -> resumed_through entry)))
 
+(* Each checkpoint stores a summary of its records; a normal emit reads the
+   earlier checkpoints' summaries and decodes only the newest checkpoint's own
+   records, and a summary that disagrees with the
+   complete fold is refused by the full-history check. *)
+let records_summarized () = with_history (fun _ path entry ->
+  List.iter (fun version ->
+    check bool (Printf.sprintf "v%d.checkpoint stores its records summary" version) true
+      (contains (read (checkpoint path version)) ("tesl-history-records-summary-v1s1:" ^ string_of_int version))) [2;3;4];
+  let reference = with_full_history true (fun () -> emit entry) in
+  Migration_checkpoint.decoded_records := 0;
+  check string "the normal emit agrees" reference (with_full_history false (fun () -> emit entry));
+  check int "a normal emit decodes only the newest checkpoint's records" 1 !Migration_checkpoint.decoded_records;
+  let summary = "tesl-history-records-summary-v1s1:3s1:" in
+  rewrite_checkpoint path 3 (fun text ->
+    check bool "v3 summarizes its one version" true (contains text (summary ^ "1"));
+    replace (summary ^ "1") (summary ^ "2") text);
+  check string "a normal emit refuses the summary's count and compiles everything" reference
+    (with_full_history false (fun () -> emit entry));
+  let full = with_full_history true (fun () -> emit entry) in
+  check bool ("full history refuses the edited summary:\n" ^ full) true
+    (String.starts_with ~prefix:"failed\n" full && contains full "differs from the full-history recomputation"))
+
 (* The checkpoint without its stored emitted output (the last element of its
    state node), so a build renders that revision from its records. *)
 let strip_fragments text =
@@ -406,7 +428,7 @@ let other_namespace () = with_history (fun _ _ entry ->
 (* A checkpoint in an earlier format came from an earlier compiler: ignored. *)
 let earlier_format_ignored () = with_history (fun _ path entry ->
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    replace "tesl-migration-checkpoint-v5\n" "tesl-migration-checkpoint-v4\n" text)) [2;3;4];
+    replace "tesl-migration-checkpoint-v6\n" "tesl-migration-checkpoint-v5\n" text)) [2;3;4];
   check (option int) "an earlier format is not resumed" None (with_full_history false (fun () -> resumed_through entry));
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);
@@ -455,6 +477,7 @@ let () = run "Migration checkpoints" [
   "compatibility", [ test_case "histories without checkpoints work" `Slow without_checkpoints;
                      test_case "an earlier checkpoint format is ignored" `Slow earlier_format_ignored ];
   "records", [ test_case "Start stores published records and builds continue from them" `Slow records_written;
+               test_case "a summary stands for the earlier records" `Slow records_summarized;
                test_case "a stored record is published and full history refuses an edit" `Slow stored_records_published;
                test_case "records of another namespace are not used" `Slow other_namespace ];
   "emitted output", [ test_case "completed revisions are spliced and agree with full history" `Slow fragments_spliced;
