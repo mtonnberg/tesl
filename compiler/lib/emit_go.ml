@@ -18946,6 +18946,8 @@ let compiled_row_artifacts ~plan ~entry ~modules:_ ~exports source =
       | Error errors -> Error errors in
     (match outcome with
      | Error errors -> Error errors
+     (* A recording emit (Start) publishes nothing: it needs only the pieces. *)
+     | Ok _ when Emit_fragment.recording () -> Ok []
      | Ok (deduped,stored_paths,stored_markers) ->
        (* `go.mod` and `go.sum` are NOT byte-identical across modules: each names the
           dependencies ITS module needs, and taking the first one shipped a manifest missing

@@ -185,6 +185,7 @@ let record ~revisions =
 
 (* The revisions a recording emit captures, and what it produced. *)
 let requested : int list ref = ref []
+let recording () = !requested<>[]
 let produced : t list ref = ref []
 (* How many revisions the last project emission spliced (a test probe). *)
 let last_spliced = ref 0

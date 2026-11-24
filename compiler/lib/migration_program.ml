@@ -448,7 +448,9 @@ let row_histories source = source.program.row_histories
 let source_lowering source = protect "<row source artifacts>" (fun () ->
  if not !(source.active) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "source-history artifact authority escaped its guarded capture scope";
- source.program.validate ();
+ (* A recording emit (Emit_fragment) publishes no artifact: the source and
+    disk guards of the Start preview that asked for it cover its inputs. *)
+ if not (Emit_fragment.recording ()) then source.program.validate ();
  match Lazy.force source.lowering with Ok graph -> graph | Error message ->
  reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>") message)
 let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
