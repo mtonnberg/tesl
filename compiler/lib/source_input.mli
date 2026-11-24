@@ -18,6 +18,10 @@ val canonical_path : string -> string
 
 val read : string -> string
 val read_text : string -> string
+(** [read] for bytes the caller checks against a digest recorded in other,
+    already verified bytes before each use. Within a compilation scope they are
+    read from disk once and not read again by [disk_changed]. *)
+val read_sealed : string -> string
 val exists : string -> bool
 val is_directory : string -> bool
 val kind : string -> Unix.file_kind

@@ -182,9 +182,21 @@ let decode ~project_root text =
      prefix={RH.through=version;retained=node retained;
        generations=List.map (function C.Seq [i;g] -> str i,num g | _ -> fail ()) (items (node generations))};
      refusal=(match items (node refusal) with [] -> None | [errors] -> Some (List.map error (items errors)) | _ -> fail ());
-     records=(match fst (children_at text ~from:(fst records)) with
-       | [] -> None
-       | [namespace;records] -> Some (str (node namespace),lazy (incr decoded_records; Migration_records.decode (node records)))
+     records=(
+       (* The list's header, then its namespace atom: the records after it are
+          parsed only when read (their structure was checked by the skip). *)
+       let start = fst records in
+       let rec count position acc = match text.[position] with
+         | '0'..'9' as c when acc < 1 lsl 40 -> count (position+1) (acc*10 + Char.code c - 48)
+         | ':' -> acc,position+1
+         | _ -> fail () in
+       if text.[start] <> 'l' then fail ();
+       match count (start+1) 0 with
+       | 0,_ -> None
+       | 2,first ->
+         let namespace_end = skip_at text ~from:first in
+         Some (str (fst (C.parse_at text ~from:first)),
+           lazy (incr decoded_records; Migration_records.decode (fst (C.parse_at text ~from:namespace_end))))
        | _ -> fail ());
      records_summary=(match items (node records_summary) with
        | [] -> None | [summary] -> Some (Migration_records.decode_summary summary) | _ -> fail ());
@@ -274,7 +286,9 @@ let read_recorded ~root ~family ~abi ~stored ~expected_chain (m : H.migration_so
      | None -> None
      | Some digest ->
        let file = Migration_closure.checkpoint_file m.path in
-       let bytes = try Source_input.read file with Sys_error _ | Unix.Unix_error _ ->
+       (* Checked against the digest just below: the final disk check need not
+          read it again. *)
+       let bytes = try Source_input.read_sealed file with Sys_error _ | Unix.Unix_error _ ->
          reject file "a recorded migration checkpoint is missing; restore it from version control" in
        if Migration_hash.digest bytes <> digest then
          reject file "recorded migration checkpoint changed; restore it, or run the full-history check to find which bytes differ";

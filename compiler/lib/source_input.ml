@@ -44,6 +44,8 @@ let reset_presence = ref (fun () -> ())
 let presence_changed = ref (fun () -> false)
 let disk_bytes : (string, (string, exn) result) Hashtbl.t = Hashtbl.create 256
 let disk_text : (string, (string, exn) result) Hashtbl.t = Hashtbl.create 16
+(* See [read_sealed]. *)
+let sealed_bytes : (string, (string, exn) result) Hashtbl.t = Hashtbl.create 64
 let disk_lstat : (string, (Unix.stats, exn) result) Hashtbl.t = Hashtbl.create 256
 let disk_listing : (string, (string array, exn) result) Hashtbl.t = Hashtbl.create 16
 let disk_memo_active () = !scope_memo_active && !fresh_depth = 0
@@ -62,7 +64,7 @@ let disk_epoch = ref 0
 (* Forget every memoized disk answer: the next observation reads disk anew. *)
 let reset_disk_memo () =
   incr disk_epoch;
-  Hashtbl.reset disk_bytes; Hashtbl.reset disk_text; Hashtbl.reset disk_lstat; Hashtbl.reset disk_listing;
+  Hashtbl.reset disk_bytes; Hashtbl.reset disk_text; Hashtbl.reset sealed_bytes; Hashtbl.reset disk_lstat; Hashtbl.reset disk_listing;
   !reset_presence ()
 (* Whether any memoized disk answer differs from what disk answers now. A
    command that publishes a result computed from memoized answers calls this
@@ -331,6 +333,18 @@ let disk_read path =
     | stats -> (match unchanged_read path stats with Some bytes -> bytes | None -> raw path)
     | exception (Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _) -> raw path
 let read = read_using disk_read
+(* Bytes the caller verifies against a digest sealed elsewhere before every
+   use (a recorded migration checkpoint against its frozen-source block):
+   memoized for the scope apart from [disk_bytes], so the final disk check
+   does not read them again. *)
+let read_sealed = read_using (fun path ->
+  if not !scope_memo_active then In_channel.with_open_bin path In_channel.input_all else
+  let result = match Hashtbl.find_opt sealed_bytes path with
+    | Some result -> result
+    | None ->
+      let result = try Ok (In_channel.with_open_bin path In_channel.input_all) with (Sys_error _ | Unix.Unix_error _) as error -> Error error in
+      Hashtbl.replace sealed_bytes path result; result in
+  match result with Ok bytes -> bytes | Error error -> raise error)
 (* Text mode translates line endings only on Windows; elsewhere a text read
    answers the binary bytes, from the same memo (one disk read per file). *)
 let read_text = if not Sys.win32 then read else
