@@ -303,17 +303,17 @@ let current t =
   | Some s when s == t || (s.digest = t.digest && s.through = t.through && s.family = t.family) -> Some s
   | _ -> None
 
-(* Completed revision [file] (V<k>, k at most the summary's revision) with
-   exactly [source], whose seals held under this compiler when the summary was
-   recorded. *)
+(* The module of completed revision [file] (V<k>, k at most the summary's
+   revision) with exactly [source], when its seals held under this compiler
+   when the summary was recorded. *)
 let sealed_edge ~project_root ~compiler:(abi,stored) ~file ~source =
   match find_dir ~project_root ~dir:(Filename.dirname file) with
   | Some s when s.compiler_abi = abi && s.stored_value_compatibility = stored ->
     let name = Filename.basename file in
     let version = if String.length name > 6 && name.[0] = 'v' && Filename.check_suffix name ".tesl"
       then int_of_string_opt (String.sub name 1 (String.length name - 6)) else None in
-    (match version with
-     | Some k when k <= s.through && List.mem k s.sealed ->
-       Hashtbl.find_opt s.files file = Some (Migration_hash.digest source)
-     | _ -> false)
-  | _ -> false
+    (match version, facts s file with
+     | Some k, Some facts when k <= s.through && List.mem k s.sealed &&
+         Hashtbl.find_opt s.files file = Some (Migration_hash.digest source) -> Some facts.F.module_name
+     | _ -> None)
+  | _ -> None

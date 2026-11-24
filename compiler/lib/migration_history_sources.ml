@@ -72,12 +72,14 @@ let file_version path name =
       reject path "schema versions must be V1..V2147483646 without leading zeros"
     else Some (int_of_string digits)
 
-let scan ~optional directory =
+(* [regular]: paths already observed as canonical regular files in this view
+   (by a verified history summary's walk). *)
+let scan ?(regular=fun _ -> false) ~optional directory =
   match Source_input.kind directory with
   | Unix.S_DIR when Source_input.realpath directory = directory ->
     Source_input.readdir directory |> Array.to_list |> List.filter_map (fun name ->
       let path = Filename.concat directory name in
-      Option.map (fun version -> require_regular path; version, path) (file_version path name))
+      Option.map (fun version -> if not (regular path) then require_regular path; version, path) (file_version path name))
     |> List.sort compare
   | _ -> reject directory "schema history directory is not canonical"
   | exception Unix.Unix_error (Unix.ENOENT, _, _) when optional ->
@@ -93,12 +95,12 @@ let contract_file_version path name =
     if digits="" || not (String.for_all (fun c -> c>='0' && c<='9') digits) then None
     else if name<>lower then reject path "contract files must use canonical lowercase v<n>-contract.tesl spelling"
     else file_version path (revision ^ ".tesl")
-let scan_contracts directory =
+let scan_contracts ?(regular=fun _ -> false) directory =
   match Source_input.kind directory with
   | Unix.S_DIR when Source_input.realpath directory=directory ->
     Source_input.readdir directory |> Array.to_list |> List.filter_map(fun name ->
       let path=Filename.concat directory name in
-      Option.map(fun version -> require_regular path;version,path) (contract_file_version path name)) |> List.sort compare
+      Option.map(fun version -> if not (regular path) then require_regular path;version,path) (contract_file_version path name)) |> List.sort compare
   | _ -> reject directory "contract history directory is not canonical"
   | exception Unix.Unix_error(Unix.ENOENT,_,_) -> require_parent(Filename.dirname directory);[]
 
@@ -116,7 +118,8 @@ let check_inputs history =
   let covered = match Option.bind history.summary Migration_history_summary.current with
     | Some s -> Migration_history_summary.covers s
     | None -> fun _ -> None in
-  Option.iter (fun (directory,entries) -> if scan_contracts directory<>entries then
+  let regular path = covered path <> None in
+  Option.iter (fun (directory,entries) -> if scan_contracts ~regular directory<>entries then
     reject ~kind:Changed_source directory "contract directory changed during discovery") history.contract_directory;
   List.iter (fun (path, digest) -> if covered path <> Some digest then begin
     require_regular path;
@@ -127,7 +130,7 @@ let check_inputs history =
        Validation_common.resolve_local_import_path source name <> expected then
       reject ~kind:Changed_source source ("schema history import resolution changed: " ^ name)) history.import_resolutions;
   List.iter (fun (directory, entries) ->
-    if scan ~optional:true directory <> entries then
+    if scan ~regular ~optional:true directory <> entries then
       reject ~kind:Changed_source directory "schema history directory changed during discovery") history.revision_directories
 
 (* Within one compilation scope, while disk answers are memoized, every
@@ -160,9 +163,12 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
     let current_path = module_path (family ^ ".VCurrent") in
     let schema_dir = Filename.dirname current_path in
     let migration_dir = Filename.dirname (module_path (family ^ ".Migrate.V2")) in
-    let snapshots = scan ~optional:false schema_dir in
-    let migration_files = scan ~optional:true migration_dir in
-    let contract_files = if include_migrations then scan_contracts migration_dir else [] in
+    (* A summary verified in this view observed its files as regular. *)
+    let verified = Migration_history_summary.find ~project_root:root ~family in
+    let regular path = match verified with Some s -> Migration_history_summary.file_digest s path <> None | None -> false in
+    let snapshots = scan ~regular ~optional:false schema_dir in
+    let migration_files = scan ~regular ~optional:true migration_dir in
+    let contract_files = if include_migrations then scan_contracts ~regular migration_dir else [] in
     let current_version = match List.rev snapshots with
       | [] -> 1
       | (2147483646, path) :: _ -> reject path
@@ -179,7 +185,7 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
        still holds in this view with this revision current: the frozen modules
        it covers are taken from it instead of being read, parsed, and their
        imports resolved again (Migration_history_summary). *)
-    let summary = match Migration_history_summary.find ~project_root:root ~family with
+    let summary = match verified with
       | Some s when Migration_history_summary.through s < current_version -> Some s
       | _ -> None in
     let summary_digest path = match summary with Some s -> Migration_history_summary.covers s path | None -> None in

@@ -166,12 +166,9 @@ let edge ~project_root ~compiler ~file ~source =
   if full_history () then None else
   (* A completed revision below the newest checkpoint, unchanged since that
      checkpoint's verified history summary recorded that its seals held. *)
-  match compiler with
-  | Some compiler when Migration_history_summary.sealed_edge ~project_root ~compiler ~file ~source ->
-    let root = match Migration_header.read ~file source with
-      | Ok (Some located) -> Migration_header.module_name located | _ -> file in
-    trusted_log := root :: !trusted_log; Some { root }
-  | _ ->
+  match Option.bind compiler (fun compiler -> Migration_history_summary.sealed_edge ~project_root ~compiler ~file ~source) with
+  | Some root -> trusted_log := root :: !trusted_log; Some { root }
+  | None ->
   let key = project_root,file,Migration_hash.digest source,compiler in
   let decide () =
     let token = Source_input.view_token () in
