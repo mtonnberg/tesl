@@ -14,12 +14,18 @@ let to_json ~quote source =
   match R.plan history with
   | Error errors -> Error errors
   | Ok _ ->
-   Ok (Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s}|}
+   let nodes=Migration_canonical_nodes.create ~quote in
+   let revision (p:Migration_records.physical) = p.physical_version in
+   let earlier,items=Migration_records.entries (P.records source database.identity) ~covered:(Emit_fragment.covered ())
+     ~count:(fun s -> s.physical_count) ~items:(fun t -> t.physical) ~revision in
+   let versions=Emit_fragment.render_entries ~earlier ~document:"physical" ~database:database.identity ~revision nodes
+     (Migration_records.physical_json ~quote ~contract:(Migration_canonical_nodes.reference nodes)) items in
+   Ok (Printf.sprintf {|{"database":%s,"family":%s,"namespace":%s,"currentVersion":%d,"versions":%s,"canonicalNodes":%s}|}
     (quote database.identity) (quote database.family) (quote database.namespace) database.current_version
-    (array (Migration_records.physical_json ~quote) (P.records source database.identity).physical)) in
+    versions (Migration_canonical_nodes.to_json nodes)) in
  let databases=List.map database (P.databases program) in
  let errors=List.concat_map (function Error errors -> errors | Ok _ -> []) databases in
  if errors<>[] then Error errors else
- Ok (Printf.sprintf {|{"version":1,"kind":"compiled-retained-physical-history","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
+ Ok (Printf.sprintf {|{"version":1,"kind":"compiled-retained-physical-history","contractEncoding":"tesl-canonical-nodes-v1","compilerAbi":%s,"storedValueCompatibility":%s,"databases":%s}|}
   (quote (P.compiler_abi program)) (quote (P.stored_value_compatibility program))
   (array Fun.id (List.filter_map (function Ok value -> Some value | Error _ -> None) databases)))

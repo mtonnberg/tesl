@@ -7,18 +7,22 @@ module Exprs = Hashtbl.Make(struct
 end)
 type t = { originals:Ast.module_form list; modules:Ast.module_form list;
  entry:Ast.module_form; owners:(string * string) list;
- renamed:((string * string) * string) list; origins:Ast.expr Exprs.t }
+ renamed:((string * string) * string) list; origins:Ast.expr Exprs.t;
+ (* [owners] by name; built from it once, so a lookup does not scan it. *)
+ owner_index:(string,string) Hashtbl.t Lazy.t }
 let original_modules t = t.originals
 let modules t = t.modules
 let entry t = t.entry
-let owner t name = List.assoc_opt name t.owners
+let owner t name = Hashtbl.find_opt (Lazy.force t.owner_index) name
 let symbol t ~owner:source name = Option.map (fun target ->
  target,Option.value(List.assoc_opt (source,name) t.renamed) ~default:name) (owner t source)
 let original_expr t expression = Option.value (Exprs.find_opt t.origins expression) ~default:expression
 let function_binding t ~(owner:Ast.module_form) (declaration:Ast.func_decl) =
- match List.find_opt (fun (m:Ast.module_form)->m.module_name=owner.module_name && m=owner) t.originals,
+ (* Physical equality first: the same value is structurally equal, and the
+    structural comparison of a whole module is costly. *)
+ match List.find_opt (fun (m:Ast.module_form)->m.module_name=owner.module_name && (m==owner || m=owner)) t.originals,
        symbol t ~owner:owner.module_name declaration.name with
- | Some original,Some(target,name) when List.exists(function Ast.DFunc f -> f=declaration | _->false) original.decls ->
+ | Some original,Some(target,name) when List.exists(function Ast.DFunc f -> f==declaration || f=declaration | _->false) original.decls ->
    List.find_map(fun(m:Ast.module_form)->if m.module_name<>target then None else
     List.find_map(function Ast.DFunc f when f.name=name && f.loc=declaration.loc -> Some(m,f) | _->None)m.decls)t.modules
  | _ -> None
@@ -291,17 +295,27 @@ let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
 
 
 let lower ~(entry:Ast.module_form) originals =
- let duplicate=List.exists(fun(m:Ast.module_form)->
-  List.length(List.filter(fun(n:Ast.module_form)->n.module_name=m.module_name)originals)<>1)originals in
+ let duplicate=let seen=Hashtbl.create 64 in List.exists(fun(m:Ast.module_form)->
+  Hashtbl.mem seen m.module_name || (Hashtbl.add seen m.module_name (); false))originals in
  if duplicate then Error "Go graph contains duplicate original module owners" else
- if not(List.exists(fun(m:Ast.module_form)->m=entry)originals) then Error "Go graph lost its exact original entry" else
- let names=List.map(fun(m:Ast.module_form)->m.module_name)originals in
- let local_name name = if List.mem name names then Some name else
-  if name="Tesl.CivilTime" && List.mem "CivilTime" names then Some "CivilTime" else None in
+ if not(List.exists(fun(m:Ast.module_form)->m==entry || m=entry)originals) then Error "Go graph lost its exact original entry" else
+ let names=Hashtbl.create (List.length originals) in
+ List.iter(fun(m:Ast.module_form)->Hashtbl.replace names m.module_name ())originals;
+ let local_name name = if Hashtbl.mem names name then Some name else
+  if name="Tesl.CivilTime" && Hashtbl.mem names "CivilTime" then Some "CivilTime" else None in
+ (* [items] grouped by the component of their name, each group in [items]
+    order: List.filter over [items] for every component, in one pass. *)
+ let grouped components items =
+  let component=Hashtbl.create (List.length items) in
+  List.iteri(fun index names->List.iter(fun name->Hashtbl.replace component name index)names)components;
+  let groups=Array.make (List.length components) [] in
+  List.iter(fun(m:Ast.module_form)->match Hashtbl.find_opt component m.module_name with
+   | Some index -> groups.(index) <- m :: groups.(index) | None -> ())items;
+  Array.to_list (Array.map List.rev groups) in
  let graph=Hashtbl.create 16 in
  List.iter(fun(m:Ast.module_form)->Hashtbl.add graph m.module_name
   (List.filter_map(fun(i:Ast.import_decl)->local_name i.module_name)m.imports |> List.sort_uniq compare))originals;
- let components=tarjan_sccs graph |> List.map(fun names -> List.filter(fun(m:Ast.module_form)->List.mem m.module_name names) originals) in
+ let components=grouped (tarjan_sccs graph) originals in
  let lowered=List.map(Migration_schema.lower_module ~modules:originals)originals in
  let errors=List.concat_map(function Ok _ -> [] | Error errors -> List.map(fun(e:Validation_common.validation_error)->e.message)errors)lowered in
  if errors<>[] then Error(String.concat "\n" errors) else
@@ -310,16 +324,19 @@ let lower ~(entry:Ast.module_form) originals =
  let emitted,renamed=List.fold_left(fun(targets,renamed)members ->
   if List.length members<=1 then targets,renamed else
   let targets,next=alpha_rename_cycle_members origins ~targets members in targets,next@renamed)(ownership,[])components in
- let collapsed=List.map(fun members ->
-  let names=List.map(fun(m:Ast.module_form)->m.module_name)members in
-  match merge_cycle_members(List.filter(fun(m:Ast.module_form)->List.mem m.module_name names)emitted) with
-  | Ok m -> m,names | Error message -> failwith message)components in
+ let component_names=List.map(List.map(fun(m:Ast.module_form)->m.module_name))components in
+ let collapsed=List.map2(fun names members ->
+  match merge_cycle_members members with
+  | Ok m -> m,names | Error message -> failwith message)component_names (grouped component_names emitted) in
  let owners=List.concat_map(fun(m,names)->List.map(fun name->name,m.Ast.module_name)names)collapsed in
+ let owner_index=lazy (let index=Hashtbl.create (List.length owners) in
+   (* assoc_opt answers the first binding of a name. *)
+   List.iter (fun (name,target) -> if not (Hashtbl.mem index name) then Hashtbl.add index name target) owners; index) in
  let rewrite(m:Ast.module_form) =
   {m with imports=List.fold_left(fun acc(i:Ast.import_decl)->
-    let target=Option.value(List.assoc_opt i.module_name owners)~default:i.module_name in
+    let target=Option.value(Hashtbl.find_opt (Lazy.force owner_index) i.module_name)~default:i.module_name in
     if target=m.module_name then acc else add_merged_import acc {i with module_name=target})[]m.imports} in
  let modules=List.map(fun(m,_)->rewrite m)collapsed in
  let entry_owner=List.assoc entry.module_name owners in
  let entry=List.find(fun(m:Ast.module_form)->m.module_name=entry_owner)modules in
- Ok {originals;modules;entry;owners;renamed;origins}
+ Ok {originals;modules;entry;owners;renamed;origins;owner_index}

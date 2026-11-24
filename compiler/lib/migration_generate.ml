@@ -72,7 +72,14 @@ let mark_next file source ~previous ~current =
   match Migration_provenance.annotate view ~previous ~current nodes with
   | Ok source -> source | Error error -> reject file error.message
 
-let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+(* The reads whose imports a manifest under [scope] must guard on its own: a
+   frozen source's imports are guarded by the scope's trees when they
+   determine them (Migration_manifest.frozen_imports_determined). *)
+let importing scope reads = match scope with
+  | Some h when M.frozen_imports_determined h -> List.filter (fun file -> not (M.frozen h file)) reads
+  | _ -> reads
+
+let start_scoped ~intermediate ~flat_history ~namespace ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -85,7 +92,11 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
     (* Every existing edge must already be source-sealed and checked. In particular,
        a changed VCurrent is a refresh decision, not a license to freeze wrong bytes. *)
     let compiler = lazy (Migration_trust.current_compiler ()) in
-    let checked_edges = List.map (fun (migration : H.migration_source) ->
+    (* A trusted completed edge's trust decision verified its header against
+       its adjacent roots and recorded bytes (Migration_trust). *)
+    let checked_edges = List.filter_map (fun (migration : H.migration_source) ->
+      let current_edge = Some migration = existing in
+      if not current_edge && trusted_edge root compiler migration then None else
       let located = match sparse (Header.read ~file:migration.path migration.contents) with
         | Some located -> located | None -> reject migration.path "record the current migration's source seals before starting another revision" in
       let previous,current = Header.roots located in
@@ -97,7 +108,7 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
           (seal (S.verify_sources ~project_root:root recorded))))) [previous_seal;current_seal];
         check migration.path migration.contents
       end;
-      migration,checked) (completed @ Option.to_list existing) in
+      Some (migration,checked)) (completed @ Option.to_list existing) in
     let old_target = match existing with
       | None -> None
       | Some migration ->
@@ -110,7 +121,12 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
     let rewrites = match existing with
       | None -> []
       | Some migration ->
-        let shared = List.concat_map (fun (m : H.migration_source) -> paths (graph m.path m.contents)) completed in
+        (* A trusted completed migration's frozen closure block lists exactly
+           the migration modules its imports reach. *)
+        let shared = List.concat_map (fun (m : H.migration_source) ->
+          match (if trusted_edge root compiler m then Migration_closure.read ~file:m.path m.contents else Ok None) with
+          | Ok (Some closure) -> List.map (fun (name,_) -> module_path root name) (Migration_closure.sources closure)
+          | _ -> paths (graph m.path m.contents)) completed in
         paths (graph migration.path migration.contents) |> List.filter_map (fun file ->
           let source = Source_input.read file in
           let m = parse file source in
@@ -165,30 +181,42 @@ let start_with_namespace ~namespace ~stored_value_compatibility ~compiler_abi ~p
         match checkpoint with
         | None -> (migration.path,attached) :: others
         | Some text ->
+          (* The finished emitted output of the revisions it completes, from
+             one emit of the proposed application with that checkpoint in
+             place (a digest of the same length, so emitted source lines do
+             not move). *)
+          let staged = Migration_closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
+          let staged = sparse (Migration_closure.attach ~file:migration.path ~source staged) in
+          let fragments = overlay root ((migration.path,staged) :: (Migration_closure.checkpoint_file migration.path,text) :: others)
+            (fun () -> Emit_fragment.record ~revisions:(if n=2 then [1;2] else [n])) in
+          let text = Migration_checkpoint.with_fragments text fragments in
           let sealed = Migration_closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
           let source = sparse (Migration_closure.attach ~file:migration.path ~source sealed) in
           (migration.path,source) :: (Migration_closure.checkpoint_file migration.path,text) :: others) in
     let original_reads = List.map fst (H.source_inputs h) in
     let reads = original_reads @ frozen_inputs in
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
     let imports = List.concat_map (fun file ->
-      let m = parse file (Source_input.read file) in
-      List.filter_map (fun (i : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) original_reads in
-    let source_manifest = manifest (M.create ~project_root:root ~reads
+      let imports = match Migration_closure.imports ~file (Source_input.read file) with
+        | Ok imports -> imports | Error e -> reject file e.msg in
+      List.filter_map (fun name ->
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) (importing scope original_reads) in
+    let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads
       ~directories:[Filename.dirname current.root_file;Filename.dirname (module_path root (family ^ ".Migrate.V1"))]
       ~imports ~documents ~writes) in
     overlay root (M.overlays source_manifest) (fun () ->
       List.iter (fun (file,source) -> if Filename.check_suffix file ".tesl" then check file source) writes;
       ignore (history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family)));
     history (H.verify_unchanged h);
-    manifest (M.verify_source source_manifest ~documents);
-    manifest (M.verify_disk source_manifest);
+    manifest (M.verify_source ~quick:intermediate source_manifest ~documents);
+    manifest (M.verify_disk ~quick:intermediate source_manifest);
     {family;frozen_version=n;current_version=next;manifest=source_manifest} |> Result.ok
   with
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
+let start_with_namespace = start_scoped ~intermediate:false ~flat_history:false
 let start_with_compatibility = start_with_namespace ~namespace:None
 let start = start_with_compatibility ~stored_value_compatibility:None
 
@@ -629,7 +657,7 @@ let choose_entry file source before after choice =
  let chosen=source_result file(Syntax.replace view [source_result file(Syntax.range view expression),plan.option.replacement])in
  chosen,plan.writes
 
-let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
+let refresh_scoped ~intermediate ~flat_history ~choice ~stored_value_compatibility ~compiler_abi ~project_root:root ~family ~version ~documents =
   try
     let h = history (H.discover_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~family) in
     let current = H.current h in
@@ -641,7 +669,11 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
       | Some previous -> previous | None -> reject migration.path "refresh requires an adjacent frozen predecessor" in
     if initial.previous_root <> I.root_module (H.inventory previous) || initial.current_root <> I.root_module (H.inventory current) then
       reject migration.path "MIG020: refresh requires the current edge's adjacent frozen/current schema references";
+    let compiler = lazy (Migration_trust.current_compiler ()) in
     List.iter (fun (edge : H.migration_source) ->
+      (* A trusted completed edge's seals were verified by this compiler for
+         exactly these bytes (Migration_trust). *)
+      if not (trusted_edge root compiler edge) then
       let header = match sparse (Header.read ~file:edge.path edge.contents) with
         | Some header -> header | None -> reject edge.path "completed migration is missing its source seals" in
       let old,fresh = Header.roots header in
@@ -687,25 +719,27 @@ let refresh_internal ~choice ~stored_value_compatibility ~compiler_abi ~project_
     overlay root (extra_writes @ column_writes @ [migration.path,source]) (fun () ->
       List.iter (fun (edge : H.migration_source) -> check edge.path edge.contents) untrusted);
     let reads = List.map fst (H.source_inputs h) in
+    let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:version) else None in
     let imports = List.concat_map (fun file ->
-      let m = parse file (Source_input.read file) in
-      List.filter_map (fun (i : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
+      let imports = match Migration_closure.imports ~file (Source_input.read file) with
+        | Ok imports -> imports | Error e -> reject file e.msg in
+      List.filter_map (fun name ->
+        if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) (importing scope reads) in
     let generated_imports=List.concat_map(fun(file,source)->let m=parse file source in
       List.filter_map(fun(i:Ast.import_decl)->if String.starts_with ~prefix:"Tesl." i.module_name then None else Some(file,i.module_name))m.imports)
       ((migration.path,source)::extra_writes)in
-    let source_manifest = manifest (M.create ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
+    let source_manifest = manifest (M.create_scoped scope ~project_root:root ~reads ~imports:(imports @ generated_imports) ~documents
       ~directories:[Filename.dirname current.root_file;Filename.dirname migration.path;Filename.chop_suffix migration.path ".tesl"] ~writes:(extra_writes @ column_writes @ [migration.path,source])) in
     let diagnostics = overlay root (M.overlays source_manifest) (fun () -> Compile.check_source migration.path source) in
     history (H.verify_unchanged h);
-    manifest (M.verify_source source_manifest ~documents);
-    manifest (M.verify_disk source_manifest);
+    manifest (M.verify_source ~quick:intermediate source_manifest ~documents);
+    manifest (M.verify_disk ~quick:intermediate source_manifest);
     Ok {family;current_version=version;manifest=source_manifest;diagnostics;decisions}
   with
   | Invalid errors -> Error errors
   | Sys_error message | Failure message | Invalid_argument message -> Error [{path=root;message}]
   | Unix.Unix_error (error,operation,path) -> Error [{path;message=operation ^ ": " ^ Unix.error_message error}]
 
-let refresh_with_compatibility = refresh_internal ~choice:None
-let refresh_choice_with_compatibility ~choice = refresh_internal ~choice:(Some choice)
+let refresh_with_compatibility = refresh_scoped ~intermediate:false ~flat_history:false ~choice:None
+let refresh_choice_with_compatibility ~choice = refresh_scoped ~intermediate:false ~flat_history:false ~choice:(Some choice)
 let refresh = refresh_with_compatibility ~stored_value_compatibility:None

@@ -1061,8 +1061,9 @@ func registerCompiledRowPhysicalHistory(payload string) {
 			panic(err)
 		}
 	}
-	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	root, err := pgJSONObject(payload, "version", "kind", "contractEncoding", "compilerAbi", "storedValueCompatibility", "databases")
 	must(err)
+	must(pgCanonicalEncodingCheck(root["contractEncoding"]))
 	format, err := pgJSONValue[int](root["version"])
 	must(err)
 	kind, err := pgJSONValue[string](root["kind"])
@@ -1082,7 +1083,9 @@ func registerCompiledRowPhysicalHistory(payload string) {
 	var pending []*pgCompiledRowPhysicalHistory
 	seen := map[string]bool{}
 	for _, raw := range databases {
-		db, err := pgJSONObject(raw, "database", "family", "namespace", "currentVersion", "versions")
+		db, err := pgJSONObject(raw, "database", "family", "namespace", "currentVersion", "versions", "canonicalNodes")
+		must(err)
+		nodes, err := pgReadCanonicalNodes(db["canonicalNodes"])
 		must(err)
 		identity, err := pgJSONValue[string](db["database"])
 		must(err)
@@ -1110,8 +1113,8 @@ func registerCompiledRowPhysicalHistory(payload string) {
 		for _, raw := range versions {
 			encoded, err := pgJSONObject(raw, "contract", "hash")
 			must(err)
-			// The contract text is hex; its exact bytes are checked when parsed.
-			contract, err := pgJSONValue[string](encoded["contract"])
+			// The contract's exact bytes are checked when parsed.
+			contract, err := pgCanonicalReference(nodes, encoded["contract"])
 			must(err)
 			hash, err := pgJSONValue[string](encoded["hash"])
 			must(err)

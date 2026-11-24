@@ -142,9 +142,33 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertEqual(opened.call_args_list[0], opened.call_args_list[1])
         sleep.assert_called_once_with(1)
 
+    def test_published_rename_retries_access_denied_only_on_windows(self):
+        source, target = self.root / "artifacts", self.root / "published"
+        source.mkdir()
+        refusals = [PermissionError(13, "Access is denied")] * 2
+        real = Path.rename
+        def rename(path, destination):
+            if refusals:
+                raise refusals.pop()
+            return real(path, destination)
+        with patch.object(distribution.os, "name", "nt"), patch.object(Path, "rename", rename), \
+             patch.object(distribution.time, "sleep") as sleep:
+            distribution.rename_published(source, target)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(sleep.call_count, 2)
+        other = self.root / "other"
+        other.mkdir()
+        with patch.object(distribution.os, "name", "posix"), \
+             patch.object(Path, "rename", side_effect=PermissionError(13, "denied")), \
+             patch.object(distribution.time, "sleep") as sleep:
+            with self.assertRaises(PermissionError):
+                distribution.rename_published(other, self.root / "elsewhere")
+            sleep.assert_not_called()
+
     def test_download_retries_are_bounded_and_http_refusals_are_not_retried(self):
         for error, attempts in ((TimeoutError("read timed out"), 3),
                                 (HTTPError("https://example.test", 503, "unavailable", {}, None), 3),
+                                (HTTPError("https://example.test", 403, "forbidden", {}, None), 3),
                                 (HTTPError("https://example.test", 404, "missing", {}, None), 1)):
             with self.subTest(error=error), patch.object(distribution, "urlopen", side_effect=error) as opened, \
                  patch.object(distribution.time, "sleep") as sleep:

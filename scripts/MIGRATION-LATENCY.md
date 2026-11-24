@@ -39,7 +39,7 @@ all reads check IDs, metadata and unchanged fields. Timings include HTTP and
 database admission/transactions, not just admission overhead. Startup, installation,
 seeding and readback are excluded. Warmup observations remain in `raw.jsonl`.
 
-Twelve baseline/baseline pairs calibrate noise first. Eight baseline/candidate pairs
+Twelve baseline/baseline pairs calibrate noise first. Sixteen baseline/candidate pairs
 alternate AB/BA order. Metrics are within-run p50/p95 for reads/writes. Comparison
 uses median paired differences and a deterministic 4,000-resample, one-sided 99%
 percentile-bootstrap upper bound, resampling whole pairs, not correlated requests.
@@ -58,6 +58,14 @@ discarded from a trial. Source/build/request/correctness errors fail immediately
 only baseline-versus-itself noise qualifies for another trial. The A/B comparison
 runs once and a failed regression never retries. The evidence audit replays all
 calibration trials, including failures.
+
+The comparison sample increased from eight to sixteen pairs after hosted
+PostgreSQL 18 runs on 5c66020 and 2e7f08a failed write p95 with a stable paired
+delta (0.22 and 0.24 ms, as in passing runs) but 99% upper bounds of 14.0 and
+2.19 ms against the 2 ms limit. With eight pairs, one or two pairs observed
+during a slow interval dominate many bootstrap medians; sixteen independent
+pairs keep the same median statistic, limits and no-discard rule while making
+the bound less sensitive to a single slow interval.
 
 Thresholds, raw request sample counts and the A/B policy are unchanged. Persistent
 noise still fails, with `failure_kind: "calibration-noise"` and the specific

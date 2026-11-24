@@ -125,31 +125,34 @@ let verify_sources ~project_root seal = protect project_root (fun () ->
   let parsed = List.map (fun (name,digest) ->
     let path = path_for project_root name in
     let contents = read path digest in
-    let m = match Parser.parse_module path contents with
-      | Parser.Ok m -> m
-      | Parser.Err error -> raise (Invalid {kind=Invalid_schema;loc=error.loc;message=error.msg}) in
-    if m.Ast.module_name <> name then reject Invalid_schema path ("snapshot source must declare " ^ name);
-    name,m) seal.sources in
+    (* Recorded parse facts of exactly these bytes, else a parse. *)
+    let m = match Migration_module_facts.find digest with
+      | Some facts -> facts
+      | None -> match Parser.parse_module path contents with
+        | Parser.Ok m -> Migration_module_facts.of_module m
+        | Parser.Err error -> raise (Invalid {kind=Invalid_schema;loc=error.loc;message=error.msg}) in
+    if m.module_name <> name then reject Invalid_schema path ("snapshot source must declare " ^ name);
+    name,(path,m)) seal.sources in
   let visited = Hashtbl.create 16 in
   let resolutions = ref [] in
   let rec visit name =
     if not (Hashtbl.mem visited name) then begin
       Hashtbl.add visited name ();
-      let m = match List.assoc_opt name parsed with
+      let source_file,m = match List.assoc_opt name parsed with
         | Some m -> m
         | None -> reject Invalid_record root_file ("snapshot seal omits imported source " ^ name) in
-      List.iter (fun (import : Ast.import_decl) ->
-        if String.starts_with ~prefix:"Tesl." import.module_name then ()
-        else if not (Migration_schema.within seal.root_module import.module_name) then
-          reject Invalid_schema m.source_file ("snapshot import escapes its revision: " ^ import.module_name)
+      List.iter (fun imported ->
+        if String.starts_with ~prefix:"Tesl." imported then ()
+        else if not (Migration_schema.within seal.root_module imported) then
+          reject Invalid_schema source_file ("snapshot import escapes its revision: " ^ imported)
         else begin
-          let expected = path_for project_root import.module_name in
-          let actual = Validation_common.resolve_local_import_path m.source_file import.module_name in
-          if actual <> expected then reject Invalid_layout m.source_file
-            ("snapshot import no longer resolves to its canonical source: " ^ import.module_name);
-          resolutions := (m.source_file,import.module_name,expected) :: !resolutions;
-          visit import.module_name
-        end) m.imports
+          let expected = path_for project_root imported in
+          let actual = Validation_common.resolve_local_import_path source_file imported in
+          if actual <> expected then reject Invalid_layout source_file
+            ("snapshot import no longer resolves to its canonical source: " ^ imported);
+          resolutions := (source_file,imported,expected) :: !resolutions;
+          visit imported
+        end) m.Migration_module_facts.imports
     end in
   visit seal.root_module;
   List.iter (fun (name,_) -> if not (Hashtbl.mem visited name) then

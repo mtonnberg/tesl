@@ -6,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import re
 import socket
+import stat
 import subprocess
 import tempfile
 import time
@@ -23,6 +25,61 @@ def command(args, *, env=None, cwd=None, timeout=120):
     if result.returncode:
         raise RuntimeError(f"{' '.join(map(str, args))}:\n{result.stdout}\n{result.stderr}")
     return result.stdout
+
+
+def checkpoint_version(name):
+    match = re.fullmatch(r"v([1-9][0-9]{0,8})\.checkpoint", name)
+    return int(match.group(1)) if match else None
+
+
+def history_hash(root, guard):
+    """The manifest's frozen history digest; see Migration_manifest."""
+    excluded = set(guard["excluded"])
+    relative = lambda path: path[len(str(root)) + 1:].replace(os.sep, "/")
+    trees = []
+    for tree in guard["trees"]:
+        if not os.path.lexists(tree):
+            trees.append((tree, None))
+            continue
+        entries = []
+
+        def visit(directory):
+            for name in os.listdir(directory):
+                path = os.path.join(directory, name)
+                mode = os.lstat(path).st_mode
+                if stat.S_ISDIR(mode):
+                    entries.append((path, True))
+                    visit(path)
+                elif stat.S_ISREG(mode):
+                    entries.append((path, False))
+                else:
+                    raise RuntimeError(f"stale history: {path}")
+        if not stat.S_ISDIR(os.lstat(tree).st_mode):
+            raise RuntimeError(f"stale history: {tree}")
+        visit(tree)
+        trees.append((tree, entries))
+    versions = [checkpoint_version(os.path.basename(path)) for _, entries in trees for path, directory in entries or []
+                if not directory and path not in excluded]
+    newest = max((v for v in versions if v is not None), default=None)
+    text = "tesl-frozen-history-v1\0"
+    for tree, entries in trees:
+        text += "tree\0" + relative(tree) + "\0"
+        if entries is None:
+            text += "absent\0end\0"
+            continue
+        lines = []
+        for path, directory in entries:
+            if path in excluded:
+                continue
+            rel, version = relative(path), checkpoint_version(os.path.basename(path))
+            if directory:
+                lines.append((rel, "d\0" + rel))
+            elif version is not None and version != newest:
+                lines.append((rel, "c\0" + rel))
+            else:
+                lines.append((rel, "f\0" + rel + "\0" + hashlib.sha256(Path(path).read_bytes()).hexdigest()))
+        text += "".join(line + "\0" for _, line in sorted(lines, key=lambda item: item[0].encode())) + "end\0"
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def apply_preview(compiler, entry, env, *args, timeout=120):
@@ -43,6 +100,9 @@ def apply_preview(compiler, entry, env, *args, timeout=120):
             ("tesl-directory-v1\0" + "\0".join(names) + "\0").encode()).hexdigest()
         if actual != item["diskHash"]:
             raise RuntimeError(f"stale directory: {path}")
+    for guard in manifest["history"]:
+        if history_hash(manifest["projectRoot"], guard) != guard["diskHash"]:
+            raise RuntimeError(f"stale frozen history: {guard['trees']}")
     edits = manifest["edits"]
     for edit in edits:
         path = Path(edit["path"])

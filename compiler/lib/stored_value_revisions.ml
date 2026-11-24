@@ -47,12 +47,12 @@ type family = {
 let families = [
   {name="proof-interpretation"; revision=5; files=[
     "compiler/lib/proof_kernel.ml","3cada1eb90e3954f2003019ed694c1e05971015a284ff630208d9a0c81d6a258";
-    "compiler/lib/proof_checker.ml","5982e9daba0926f4392a062c0f72e899cc9556173aff86a56aaa7f42cd7ca6e8";
+    "compiler/lib/proof_checker.ml","5eedb19a1114d186fe970e36a47d1654dc45208f6f4fd96959c6386dd84e56b4";
     "compiler/lib/proof_discharge.ml","f9f9f14492ffa01bb3bdc0a24dbbca8e5b0c881b21d28280cdc3867563af9917";
     "compiler/lib/validation_proof.ml","457f3c7ff53e09c89347541e87f6d0d48650c2afc619a43598adb3e06f841619";
   ]};
   {name="canonical-storage-mapping"; revision=1; files=[
-    "compiler/lib/migration_canonical.ml","a2d10d8aaa08fcbbe16a6f6e29d0028b36bf9c82f26e1668e6d1bcc5481310c4";
+    "compiler/lib/migration_canonical.ml","5b529b61920c28db7f8cd3f9e735ec2c216f0f6a3f9495afe960977002b14499";
     "compiler/lib/migration_ir.ml","81b88ff91e6f5b76274a36bf2ee263a499993796695556f7aedbf24a308e9828";
     "compiler/lib/migration_storage.ml","f249f603c936ce49f1d46d39a1c804223a1f9b378fff273a8685166fe501f022";
     "compiler/lib/validation_sql_codec.ml","916e37858fcec84d3553907f7a3032a2d93a7adfc03c545fca86216533174241";
@@ -78,7 +78,7 @@ let families = [
     "runtime/go/teslrt/currency_data.go","c1ea387f03c36ec51cbe5866d72412013846bdd6908f953626626dd3e22bec40";
   ]};
   {name="text-and-patterns"; revision=1; files=[
-    "runtime/go/teslrt/string.go","7ff731f248c45597e277d672e11485e9fb049fe2c171c3afa0d0cf23b57396ae";
+    "runtime/go/teslrt/string.go","4556bdbd8361510bfaf533c6521027ec168853c864ede73fd9f1c2d3787eed79";
     "runtime/go/teslrt/regex.go","6b7a859cbbf6a7eeec53dfc8b9096054c16434f01a2677d74fb9c5c269fe4959";
   ]};
   {name="time"; revision=1; files=[

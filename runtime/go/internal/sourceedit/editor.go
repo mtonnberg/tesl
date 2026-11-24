@@ -41,6 +41,11 @@ func (m *Manifest) requireEditor() error {
 			return fmt.Errorf("closed source view differs from saved bytes: %s", input.Path)
 		}
 	}
+	for _, h := range m.wire.History {
+		if h.SourceHash != h.DiskHash {
+			return fmt.Errorf("closed frozen history view differs from saved bytes: %s", strings.Join(h.Trees, ", "))
+		}
+	}
 	for _, edit := range m.wire.Edits {
 		if edit.DocumentVersion != nil && *edit.DocumentVersion == math.MaxInt32 {
 			return fmt.Errorf("editor document version cannot advance: %s", edit.Path)

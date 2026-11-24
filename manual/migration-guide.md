@@ -551,9 +551,52 @@ instead of re-deriving every revision, when:
 | the checkpoint names the running compiler ABI and stored-value identity | it is ignored and history is folded from V1 |
 | its recorded migration hashes equal the files' recorded hashes | `MIG013`: restore the checkpoint written with this revision |
 
+**History summary.** The newest checkpoint also holds a summary of the frozen
+history as it was when revision N was frozen: one hash over the `schema/<family>`
+and `migrations/<family>` trees through revision N (every migration root `vK.tesl`
+without its `# tesl:frozen-migration` block, every checkpoint by presence only, nothing of
+revision N+1 or `VCurrent`), the declared name and imports of every frozen module,
+and the revisions whose trust seals held. A command walks and hashes the two trees
+once; when that hash matches and the checkpoint names the running compiler ABI and
+stored-value identity, it takes the frozen modules and the trust of revisions
+V2..N from the summary instead of reading, parsing and re-checking every revision.
+Anything else (an edited or added file, a newer frozen revision without a
+checkpoint, another compiler, a symbolic link in the trees) leaves the summary
+unused and every revision is checked as before. An older checkpoint's bytes are
+checked against the hash in its revision's frozen-source block where they are
+read (emission, full history), not by every diagnostic. Full-history mode never
+uses the summary, recomputes the newest one, and refuses one that differs
+(`MIG013`).
+
 Independently of checkpoints, a frozen schema snapshot covered by a trusted
-later revision is loaded only when a check needs it. Go emission still folds the complete history from V1 (the emitted program contains
-every revision). Histories that use table Drop, staged unique indexes, queue
+later revision is loaded only when a check needs it, and its modules are not
+type- and proof-checked again: a trusted seal recorded exactly their bytes from
+this compiler's checked inventory.
+
+Within one command, each frozen file is read and hashed when the command first
+needs it, and the history is discovered once. A later step in another source
+view (for example the proposed files of a preview) reuses that work when every
+file it read still has the same bytes and its directories list the same
+entries; otherwise it checks again. Before a command reports success or writes
+anything, its final source and disk guards re-read every input, so an edit made
+while the command runs is still refused.
+
+**Go emission.** The emitted program contains every revision, but a completed
+revision's part of it never changes while its sources and the build's settings
+stay the same. So the checkpoint of revision N also stores revision N's finished
+emitted output: the Go files of its packages (schema snapshot `VN`,
+`Migrate.VN`, `Migrate.VNContract`), its row and fixture registrations and its
+entries in the generated history documents. `tesl --backend go` copies that
+output for every completed revision whose stored output matches the build, and
+compiles only the rest: the current revision, the application and the modules
+they import. Stored output matches when the compiler ABI, the Go project path,
+release mode (debug builds compile everything) and the row-storage settings
+are the same, and when the module-level emission inputs of the revision's
+modules (their row-access and storage projections) are unchanged; otherwise
+that revision and every later one are compiled. The emitted files are
+byte-for-byte the same either way.
+
+Histories that use table Drop, staged unique indexes, queue
 payload conversions or write-backs get no checkpoints and are always folded from
 V1; so are histories frozen before checkpoints existed.
 
@@ -569,6 +612,9 @@ schedule or before a release; when the history is intact its output is
 byte-for-byte the same as a normal build. Full-history mode also recomputes every
 checkpoint written by the running compiler and refuses one that differs
 (`MIG013`), which catches a checkpoint edited together with its recorded hash.
+A full-history Go emit compiles every revision and also compares each stored
+emitted output it can recompute (same project path and settings) with what it
+compiled; a difference is `MIG013`.
 
 ### Re-sealing after a compiler upgrade
 

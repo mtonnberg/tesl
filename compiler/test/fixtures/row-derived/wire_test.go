@@ -1,7 +1,6 @@
 package teslrt
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -44,15 +43,16 @@ func TestDerivedCanonicalMode(t *testing.T) {
 			if err := json.Unmarshal([]byte(teslGeneratedRowHistoryJSON), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			d := envelope["databases"].([]any)[0].(map[string]any)["transforms"].([]any)[0].(map[string]any)
-			document, _, err := pgReadRowCanonical(d["transformContract"].(string))
+			database := envelope["databases"].([]any)[0].(map[string]any)
+			d := database["transforms"].([]any)[0].(map[string]any)
+			document, _, err := pgReadRowCanonical(testCanonicalHex(t, database, d["transformContract"]))
 			if err != nil {
 				t.Fatal(err)
 			}
 			row := &document.children[3].children[3].children[0]
 			tc.change(d, row)
-			raw, hash := pgRowBaselineDocument(document.children[3])
-			d["transformContract"], d["transformContractHash"] = hex.EncodeToString([]byte(raw)), hash
+			_, hash := pgRowBaselineDocument(document.children[3])
+			d["transformContract"], d["transformContractHash"] = testCanonicalAppend(database, document), hash
 			payload, err := json.Marshal(envelope)
 			if err != nil {
 				t.Fatal(err)

@@ -9,25 +9,79 @@ type edit = {
 }
 type error = { path : string; message : string }
 type t
+(** A frozen history scope: canonical directories (a family's schema and
+    migrations trees) whose files are guarded together. Every entry below each
+    tree is observed in both views, as a directory or a regular file with the
+    digest of its bytes; a symbolic link or special file there leaves the manifest
+    without this scope (each input keeps its own guard). Inputs inside a tree lose
+    their own guards unless [keep] selects them (the current revision), they are
+    written or open, or a kept import resolves to them; imports between frozen
+    sources lose theirs when the trees' guarded state determines them. Every path
+    with its own file or directory guard is excluded from the tree digest. *)
+type history = { history_trees : string list; keep : string -> bool }
+(** The scope of one schema family: its schema and migrations trees, keeping the
+    files of [current_version] (VCurrent and its private modules, that revision's
+    migration, contract, checkpoint and helpers). *)
+val family_history : project_root:string -> family:string -> current_version:int -> history
+(** Whether a path is a frozen source of the scope (inside a tree, not kept). *)
+val frozen : history -> string -> bool
+(** Whether the scope's trees determine imports between frozen sources (no tree
+    parent lists "schema" or "migrations", in the source view or on disk): a
+    scoped manifest then guards them with the trees, and a caller need not pass
+    the imports of frozen sources at all. *)
+val frozen_imports_determined : history -> bool
 (** Capture exact bytes in both the active Source_input view and on disk. Every
     input/output parent directory is guarded, as are explicit discovery directories.
     Open documents require unique signed 32-bit versions. Writes may only target
     canonical .tesl files inside the existing project. Nothing is written. *)
+type observations
+(** A fresh observation set for [create_observed]: within it each file and
+    directory is read once, and [create] skips its own recheck. Only for
+    manifests that are combined and finished (which rechecks every guard). *)
+val observations : unit -> observations
+val create_observed : observations -> project_root:string -> reads:string list -> directories:string list ->
+  imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
 val create : project_root:string -> reads:string list -> directories:string list ->
   imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
+(** [create] and [create_observed] under an optional frozen history scope. *)
+val create_scoped : history option -> project_root:string -> reads:string list -> directories:string list ->
+  imports:(string * string) list ->
+  documents:document list -> writes:(string * string) list -> (t, error list) result
+val create_observed_scoped : history option -> observations -> project_root:string -> reads:string list ->
+  directories:string list -> imports:(string * string) list ->
   documents:document list -> writes:(string * string) list -> (t, error list) result
 val project_root : t -> string
 val edits : t -> edit list
 val overlays : t -> (string * string) list
 (** Recheck the source view and open-document versions, including read-only
     dependencies. A new/closed document invalidates the captured document set.
-    This check does not replace the separate disk precondition. *)
-val verify_source : t -> documents:document list -> (unit, error list) result
-val verify_disk : t -> (unit, error list) result
+    This check does not replace the separate disk precondition. [quick] (an
+    intermediate check of one command) accepts a frozen history scope's source
+    walk verified within the compilation scope under the identical view. *)
+val verify_source : ?quick:bool -> t -> documents:document list -> (unit, error list) result
+(** [quick] (an intermediate check of one command) accepts files and directories
+    whose lstat identity is unchanged since a pass of this compilation read them,
+    and imports that pass resolved, and repeats no walk of a frozen history scope
+    already verified within the compilation scope ([revisit]: walk it again,
+    accepting unchanged lstat identities). The default full pass reads
+    everything anew and is what a command runs before it writes or reports
+    success. *)
+val verify_disk : ?quick:bool -> ?revisit:bool -> t -> (unit, error list) result
+(** Run [f] as one disk pass: the disk checks of frozen history scopes within it
+    observe each tree entry's lstat and each tree directory's listing once,
+    shared by every manifest checked there (for one guard pass over several
+    manifests of the same trees). File bytes are still read per check. *)
+val with_pass : (unit -> 'a) -> 'a
 (** Read exact input bytes and compare each with its original source precondition.
     A build can pin these bytes while deriving output, then recheck source, disk,
     imports and directory guards after leaving the pinned scope. *)
 val source_files : t -> ((string * string) list,error list) result
+(** Every regular .tesl file a frozen history scope guards (not excluded), with
+    the bytes its source walk hashed; None when the manifest has no scope or
+    imports among its frozen sources keep their own guards. *)
+val frozen_sources : t -> ((string * string) list option,error list) result
 (** Union independent previews, preserving their original source/disk/import and
     directory preconditions. Different roots, document versions, preconditions or
     competing edits refuse. Equal operations are deduplicated deterministically.
@@ -46,8 +100,9 @@ type accumulator
 val start_combine : t -> documents:document list -> (accumulator,error list) result
 val add_to_combine : accumulator -> t -> (accumulator,error list) result
 val finish_combine : accumulator -> (t,error list) result
-(** Stable version-1 JSON with separate source/disk hashes, hashed directory
-    membership, exact replacement bytes (lowercase hex) and editor versions.
+(** Stable version-2 JSON with separate source/disk hashes, hashed directory
+    membership, one source/disk digest per frozen history scope, exact
+    replacement bytes (lowercase hex) and editor versions.
     Paths are UTF-8. Source bytes need not be. It grants no execution authority.
     This module does not decode/apply an untrusted manifest. *)
 val to_json : t -> string

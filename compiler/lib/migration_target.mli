@@ -30,6 +30,13 @@ val resolve : compiler_abi:string -> project_root:string -> entry_file:string ->
 val resolve_with_compatibility : stored_value_compatibility:string option ->
   compiler_abi:string -> project_root:string -> entry_file:string ->
   database:string option -> documents:Migration_manifest.document list -> (t,error list) result
+(** [resolve_with_compatibility] for a source preview: with [flat_history] the
+    selection guards the family's frozen history as one scope
+    (Migration_manifest.family_history), and so do [start] and [refresh]. *)
+val resolve_scoped : flat_history:bool -> stored_value_compatibility:string option ->
+  compiler_abi:string -> project_root:string -> entry_file:string ->
+  database:string option -> documents:Migration_manifest.document list -> (t,error list) result
+val flat_history : t -> bool
 val selection : t -> selection
 (** The selected database connection's static PostgreSQL namespace, if declared. *)
 val namespace : t -> string option
@@ -41,7 +48,10 @@ val source_guard : t -> Migration_manifest.t
     the source preview. Rebinding the application's database, changing imports,
     history or document versions invalidates the selection. No files are written.
     The caller still presents/checks the complete application and applies the
-    manifest through the shared, separately implemented apply protocol. *)
+    manifest through the shared, separately implemented apply protocol.
+    Their own guard checks are intermediate checks of the caller's command
+    (Migration_manifest); the caller's final guard re-reads every input, as
+    Migration_preview.verify does before a preview is returned. *)
 val start : t -> documents:Migration_manifest.document list ->
   (Migration_generate.preview,error list) result
 val refresh : t -> documents:Migration_manifest.document list ->

@@ -42,7 +42,13 @@ func TestNativeProcessRunner(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			app.Stdout, app.Stderr = &stdout, &stderr
 			app.Environment = toolchain.Setenv(os.Environ(), "TESL_NATIVE_RUNNER_TEST", mode)
-			args := []string{"--internal-run-process", "2", t.TempDir(), testExecutable(t), "-test.run=TestNativeProcessRunnerHelper", "--", "space value", "räksmörgås😀", "$(echo nope)", `quoted"\tail`, ""}
+			// Only "sleep" exercises the timeout; the others get enough time on
+			// slow runners that the timer never decides their outcome.
+			timeout := "60"
+			if mode == "sleep" {
+				timeout = "2"
+			}
+			args := []string{"--internal-run-process", timeout, t.TempDir(), testExecutable(t), "-test.run=TestNativeProcessRunnerHelper", "--", "space value", "räksmörgås😀", "$(echo nope)", `quoted"\tail`, ""}
 			err := app.Run(context.Background(), args)
 			switch mode {
 			case "echo":

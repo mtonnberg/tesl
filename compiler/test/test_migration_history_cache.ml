@@ -76,7 +76,8 @@ let warm_check_is_cold_check () = with_example (fun project ->
     check string ("cached diagnostics for " ^ name) cold warm) files)
 
 (* Inside ONE compilation scope (the widest reuse), warm the plan, then change a
-   frozen revision byte. The hit guard must refuse the entry and the integrity
+   frozen revision byte. The final guard must see it, and after it forgets the
+   memoized disk answers the hit guard must refuse the entry and the integrity
    failure must surface exactly as an uncached check reports it. *)
 let contract_diags project =
   let file = Filename.concat project "migrations/todo/v12-contract.tesl" in
@@ -94,6 +95,10 @@ let tamper_frozen_revision name edit () = with_example (fun project ->
       check int "unchanged history is a hit" misses (plan_misses ());
       let file = Filename.concat project name in
       write file (edit (read file));
+      (* Disk answers are memoized for the scope; the final guard of a command
+         finds the saved change and answers again from fresh reads. *)
+      check bool "the final guard sees the saved change" true (Source_input.disk_changed ());
+      Source_input.reset_disk_memo ();
       let warm = render_diags (contract_diags project) in
       check bool "tampered revision is a miss" true (plan_misses () > misses);
       check bool ("tampered " ^ name ^ " is rejected with a warm cache") true (warm <> "");
@@ -133,6 +138,8 @@ let stdlib_change_is_a_miss () = with_example (fun project ->
           check int "same stdlib is a hit" misses (plan_misses ());
           let file = Filename.concat stdlib "list.tesl" in
           write file (append_comment (read file));
+          check bool "the final guard sees the changed stdlib" true (Source_input.disk_changed ());
+          Source_input.reset_disk_memo ();
           let after = render_diags (contract_diags project) in
           check bool "changed stdlib bytes are a miss" true (plan_misses () > misses);
           let cold = with_cache false (fun () -> render_diags (contract_diags project)) in

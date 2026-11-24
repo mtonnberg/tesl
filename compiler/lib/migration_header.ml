@@ -50,7 +50,7 @@ let reserved text =
   List.exists (fun prefix -> String.starts_with ~prefix text)
     ["# tesl:migration-";"# tesl:snapshot-"]
 
-let read ~file source = protect (fun () ->
+let read_uncached ~file source = protect (fun () ->
   let rec prefix = function
     | line :: rest when String.trim line.text = "" || String.starts_with ~prefix:"#" (String.trim line.text) -> line :: prefix rest
     | _ -> [] in
@@ -84,6 +84,16 @@ let read ~file source = protect (fun () ->
     let header = {previous;current} in
     ignore (validate loc header);
     Some {header;loc;start_offset=first.offset;end_offset=last.stop})
+
+(* A pure function of the file name and bytes, asked for every revision by
+   discovery, trust, checkpoints and source diagnostics: decoded once. *)
+let read_memo : (located option, E.error list) result Migration_hash.Text_table.t = Migration_hash.Text_table.create 64
+let read ~file source = match Migration_hash.Text_table.find_opt read_memo (file,source) with
+  | Some result -> result
+  | None ->
+    let result = read_uncached ~file source in
+    if Migration_hash.Text_table.length read_memo >= 4096 then Migration_hash.Text_table.reset read_memo;
+    Migration_hash.Text_table.replace read_memo (file,source) result; result
 
 let replace ~file ~source header =
   let encoded=Migration_source.source_fragment ~source (encode header)in

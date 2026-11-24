@@ -99,7 +99,7 @@ let check_conversions ~contextual_declarations ~project_root ~before ~after ~ver
      List.iter(fun(owner,bytes,_)->
        if not(List.exists(fun(actual,source)->actual=owner && source=bytes)sources) then
          reject "MIG013" loc "checked repair predecessor source changed before capture") contextual_declarations;
-    let integrity=checked(Integrity.capture ~project_root
+    let integrity=checked(Integrity.capture ~history:None ~project_root
       ~inputs:(List.map(fun(m,source)->m.source_file,source)sources)) in
     checked(Integrity.with_captured integrity (fun () ->
     checked(T.with_captured captured (fun () -> abi(A.with_snapshot context (fun () ->
@@ -239,7 +239,7 @@ let check_discard_source ~project_root ~contextual_declarations ~rejected ~revis
     let sources=T.captured_source_texts captured in
     List.iter(fun(owner,bytes,_)->if not(List.exists(fun(actual,text)->actual=owner && text=bytes)sources) then
       reject "MIG013" loc "discard predecessor source changed before capture")contextual_declarations;
-    let integrity=checked(Integrity.capture ~project_root ~inputs:(List.map(fun(m,text)->m.source_file,text)sources)) in
+    let integrity=checked(Integrity.capture ~history:None ~project_root ~inputs:(List.map(fun(m,text)->m.source_file,text)sources)) in
     checked(Integrity.with_captured integrity(fun()->checked(T.with_captured captured(fun()->
       ignore(ir(G.check sources));
       let semantic=conversion_semantic rejected in

@@ -171,6 +171,11 @@ than row 1, so the +3 218 B between them is mostly ordinary compiler growth: the
 `teslExplain` export itself cost **+640 B raw / +288 B gzipped**, measured by
 building the same tree with and without it. The 2 MB ceiling is untouched.
 
+The ceiling in `playground/checker-bundle-ceiling` is 2 300 000 B. Ordinary compiler
+growth (the migration history summary and splicing) brought the shipping artifact
+to 2 110 354 B; a stray `Embedded_docs` reference (+~2.3 MB) or a statically linked
+`Embedded_go_runtime` (+~850 KB) still exceeds it by a wide margin.
+
 `build.sh` re-reports the first row on every build; prefer its output to this
 table if they disagree.
 

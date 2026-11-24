@@ -37,8 +37,12 @@ let chain write =
   List.iter (fun revision -> ignore (schema write revision)) ["V1"; "V2"; "VCurrent"];
   ignore (migration ~target:"V2" write 2); ignore (migration write 3)
 (* Inside one source view a cached history is verified once; every call here is
-   its own step (a fresh, empty overlay view), as separate commands are. *)
+   its own step (a fresh, empty overlay view), as separate commands are. Disk
+   answers memoized by an enclosing compilation scope are forgotten first, as a
+   command's final guard does when it finds a saved file changed (see
+   Source_input.disk_changed); the cached discovery must then notice. *)
 let discover ?(family="NotesSchema") root =
+  Source_input.reset_disk_memo ();
   let run () = discover ~compiler_abi:"test-compiler-1" ~project_root:root ~family in
   match Source_input.with_overlays ~project_root:root [] run with
   | result -> result
@@ -244,6 +248,10 @@ let discovery_scope () = with_project (fun root write ->
   ignore (write "migrations/notes/v3.tesl" (header "NotesSchema.Migrate.V3" ^ prelude ^ "fn bad() -> Int = \"no\"\n"));
   ignore (get (discover root)))
 
+(* [verify_unchanged] observes the active source view; inside a compilation
+   scope that view memoizes disk answers until the command's final guard
+   forgets them (Source_input.reset_disk_memo), which each check does here. *)
+let verify_unchanged history = Source_input.reset_disk_memo (); verify_unchanged history
 let stale_inputs () =
   List.iter (fun relative -> with_project (fun root write ->
     chain write;

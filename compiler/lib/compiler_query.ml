@@ -15,7 +15,7 @@ let valid_args flag position =
   else if List.mem flag (position_flags @ workspace_flags) then List.length position = 2
   else List.mem flag file_flags && position = []
 
-let run ~filename ~logical_path flag position =
+let run_once ~filename ~logical_path flag position =
   if not (valid_args flag position) then invalid_arg "invalid source query arguments";
   if List.mem flag workspace_flags then
     { json = Workspace_index.run ~filename flag position; exit_code = 0 }
@@ -62,3 +62,15 @@ let run ~filename ~logical_path flag position =
   | "--selection-range-json" -> ok (Compile.selection_ranges_response_to_json (Compile.selection_range_source path source line col))
   | "--type-definition-json" -> ok (Compile.type_definition_response_to_json (Compile.type_definition_source path source line col))
   | _ -> invalid_arg "unsupported source query"
+
+(* Inside one compilation scope, disk answers are memoized (Source_input), so a
+   file saved while the query runs is not seen by its intermediate judgments.
+   Before publishing, the query compares every memoized answer with disk; on a
+   change it forgets them and answers again from fresh reads. *)
+(* The whole query is one compilation scope: each source is read, parsed and
+   each history judged once, however many checks of the query ask. *)
+let run ~filename ~logical_path flag position =
+  Migration_program.with_compilation_cache @@ fun () ->
+  (* Sources still changing after two fresh answers: publish the latest, as a
+     query observing a moving tree always could. *)
+  Source_input.with_final_disk_check ~attempts:2 (fun () -> run_once ~filename ~logical_path flag position)

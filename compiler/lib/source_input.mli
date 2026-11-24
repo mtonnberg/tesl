@@ -18,6 +18,10 @@ val canonical_path : string -> string
 
 val read : string -> string
 val read_text : string -> string
+(** [read] for bytes the caller checks against a digest recorded in other,
+    already verified bytes before each use. Within a compilation scope they are
+    read from disk once and not read again by [disk_changed]. *)
+val read_sealed : string -> string
 val exists : string -> bool
 val is_directory : string -> bool
 val kind : string -> Unix.file_kind
@@ -37,3 +41,72 @@ val without_pinned_files : (unit -> 'a) -> 'a
 type view_token
 val view_token : unit -> view_token
 val same_view : view_token -> bool
+(** Run [f], declaring the current scope equivalent to the view [parent] was
+    taken in: only for a scope entered to freeze bytes that view supplied (an
+    overlay or pinned resources holding exactly the bytes read there). *)
+val with_equivalent_view : view_token -> (unit -> 'a) -> 'a
+
+(** A filesystem observation made through this module, with its answer. *)
+type observation
+(** Run [f] and return every observation it made through [read], [read_text],
+    [exists], [kind], [realpath] and [readdir], with the answers it got. *)
+val recording : (unit -> 'a) -> 'a * observation list
+(** A judgment (taken under [token]) whose filesystem observations were
+    exactly [observations] observes the same inputs now: each observation,
+    repeated in the current view, gets the same answer (equal bytes for a
+    read). *)
+val same_reads : view_token -> observation list -> bool
+(** Run [f] without recording its observations into the judgments recording
+    around it. Only for an answer whose dependence those judgments check on
+    their own when they reuse it (Migration_history_summary). *)
+val unrecorded : (unit -> 'a) -> 'a
+(** Whether compiler resources are pinned in the current scope. *)
+val has_pinned_files : unit -> bool
+
+(** Run [f] computing each directory's canonical spelling at most once (see
+    source_input.ml). For one bounded judgment; never around a final guard. *)
+val with_path_memo : (unit -> 'a) -> 'a
+(** Run [f] resolving canonical spellings with one fresh table, independent of
+    any enclosing memo: for checks that must observe the filesystem anew. *)
+val with_fresh_path_memo : (unit -> 'a) -> 'a
+(** Run [f] with one canonical-spelling table per source view for the whole
+    scope (one compilation). [with_fresh_path_memo] still observes anew. *)
+val with_scope_path_memo : (unit -> 'a) -> 'a
+(** Inside [with_scope_path_memo], disk answers (file bytes, lstat, directory
+    listings, existence) are read from disk once and shared by every source view
+    of the scope; [with_fresh_path_memo] observes disk anew. A command that
+    publishes a result computed from them checks [disk_changed] first (its final
+    guard) and, on a change, calls [reset_disk_memo] and computes again. *)
+val disk_changed : unit -> bool
+val reset_disk_memo : unit -> unit
+(** [with_final_disk_check ~attempts run]: run [run] and return its result when
+    [disk_changed] then answers false; otherwise [reset_disk_memo] and run again
+    (at most [attempts] more times; the last result is returned). Nested inside
+    another [with_final_disk_check], whose check covers every memoized answer,
+    [run] runs once. Call it inside the compilation scope. *)
+val with_final_disk_check : attempts:int -> (unit -> 'a) -> 'a
+(** Whether a [with_scope_path_memo] scope is active, and a reset to run when
+    the outermost one ends (for per-compilation tables kept elsewhere). *)
+val in_scope : unit -> bool
+(** Whether disk answers are memoized right now: inside a scope and outside any
+    fresh observation ([with_fresh_path_memo]). *)
+val memoizing : unit -> bool
+(** Disk answers, ignoring every source view, shared with the memo of
+    [with_scope_path_memo] while [memoizing] (read anew otherwise). *)
+module Disk : sig
+  val lstat : string -> Unix.stats
+  val read : string -> string
+  val readdir : string -> string array
+  val exists : string -> bool
+  val realpath : string -> string
+  (** [unchanged_read path stats]: while a [with_final_disk_check] run is
+      pending, the bytes of [path] memoized in this scope when its memoized
+      lstat has the identity of [stats]; that final check reads them from disk
+      again before the run's result is published. *)
+  val unchanged_read : string -> Unix.stats -> string option
+end
+(** [memo_in_view key compute]: within a compilation scope (outside fresh or
+    bounded path memos), [compute] runs once per source view and key; it must
+    depend only on observations made through this module. *)
+val memo_in_view : string -> (unit -> string) -> string
+val on_scope_exit : (unit -> unit) -> unit

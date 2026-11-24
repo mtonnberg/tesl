@@ -5,8 +5,25 @@ type error = { path : string; message : string }
 type file_guard = { file : string; source_digest : string option; disk_digest : string option }
 type directory_guard = { directory : string; source_names : string list option; disk_names : string list option }
 type import_guard = { source : string; name : string; source_path : string; disk_path : string }
+(* One observation of a frozen history tree: every entry below each tree root, in
+   lstat terms: a directory, a regular file with its bytes' digest, or a regular
+   file whose bytes the history digest leaves out ([Present]: excluded, or an
+   older checkpoint). Any other kind (a symbolic link, a device) cannot be
+   observed this way. *)
+type entry = Dir | File of string | Present
+type walk = { tree : string; entries : (string * entry) list option (* None: the tree is absent *) }
+(* The frozen part of a family's history as one precondition: [excluded] paths
+   carry their own file or directory guard instead (the current revision, the
+   outputs, open documents). [source_walk]/[disk_walk] are complete walks in each view;
+   only their non-excluded entries are hashed. [covered] are the reads whose own
+   file guards the walks replace: [source_files] delivers their bytes against
+   the digest the source walk recorded (it is no precondition of its own). *)
+type history_guard = { trees : string list; excluded : string list; source_walk : walk list; disk_walk : walk list;
+                       covered : string list }
+type history = { history_trees : string list; keep : string -> bool }
 type t = { root : string; documents : document list; edits : edit list;
-           files : file_guard list; directories : directory_guard list; imports : import_guard list }
+           files : file_guard list; directories : directory_guard list; imports : import_guard list;
+           history : history_guard list }
 exception Invalid of error
 let reject path message = raise (Invalid {path;message})
 let protect f = try Ok (f ()) with
@@ -24,17 +41,19 @@ let canonical root path =
   if Filename.is_relative path || (path <> root && not (String.starts_with ~prefix path)) ||
      Source_input.canonical_path path <> path then
     reject path "manifest paths must be absolute, canonical and inside the project"
-let kind ~disk path = if disk then (Unix.lstat path).Unix.st_kind else Source_input.kind path
+(* Disk answers are shared with the compilation's memo (Source_input.Disk);
+   a final guard observes disk anew (see [verify_files]). *)
+let kind ~disk path = if disk then (Source_input.Disk.lstat path).Unix.st_kind else Source_input.kind path
 let file_bytes ~disk path =
   match optional (fun () -> kind ~disk path) with
   | None -> None
-  | Some Unix.S_REG -> Some (if disk then In_channel.with_open_bin path In_channel.input_all else Source_input.read path)
+  | Some Unix.S_REG -> Some (if disk then Source_input.Disk.read path else Source_input.read path)
   | Some _ -> reject path "manifest source must be a regular file"
 let names ~disk path =
   match optional (fun () -> kind ~disk path) with
   | None -> None
   | Some Unix.S_DIR ->
-    Some ((if disk then Sys.readdir path else Source_input.readdir path) |> Array.to_list |> List.sort String.compare)
+    Some ((if disk then Source_input.Disk.readdir path else Source_input.readdir path) |> Array.to_list |> List.sort String.compare)
   | Some _ -> reject path "manifest directory must be a directory"
 let normalized_documents root documents =
   let seen = Hashtbl.create 8 in
@@ -47,46 +66,426 @@ let normalized_documents root documents =
   List.sort (fun (a : document) b -> String.compare a.path b.path) documents
 let validate_root root =
   if not (String.is_valid_utf_8 root) || Filename.is_relative root || Source_input.canonical_path root <> root ||
-     Unix.realpath root <> root || (Unix.lstat root).Unix.st_kind <> Unix.S_DIR then
+     Source_input.Disk.realpath root <> root || (Source_input.Disk.lstat root).Unix.st_kind <> Unix.S_DIR then
     reject root "manifest project root must be an existing canonical directory"
 let resolve ~disk source name =
-  if disk then Validation_common.resolve_local_import_path_with ~exists:Sys.file_exists ~realpath:Unix.realpath source name
+  if disk then Validation_common.resolve_local_import_path_with ~exists:Source_input.Disk.exists ~realpath:Source_input.Disk.realpath source name
   else Validation_common.resolve_local_import_path source name
-let verify_files t disk =
+
+(* Frozen history trees. A walk observes every entry below a tree root in lstat
+   terms; a symbolic link or special file refuses the observation, so a walk is
+   determined by bytes, names and kinds inside the tree alone. Entry identities
+   are project-relative with '/' separators on every platform. *)
+exception Unobservable of string
+let relative root path =
+  let prefix = if Filename.dirname root = root then root else root ^ Filename.dir_sep in
+  let rel = if path = root then "" else String.sub path (String.length prefix) (String.length path - String.length prefix) in
+  if Sys.win32 then String.map (function '\\' -> '/' | c -> c) rel else rel
+let inside_tree tree path = String.starts_with ~prefix:(tree ^ Filename.dir_sep) path
+module Path_set = Set.Make(String)
+(* "v<N>.checkpoint": a generated revision checkpoint. *)
+let checkpoint_version path =
+  let name = Filename.basename path in
+  let n = String.length name in
+  if n > 12 && name.[0] = 'v' && Filename.check_suffix name ".checkpoint" then
+    let digits = String.sub name 1 (n - 12) in
+    if digits.[0] <> '0' && String.length digits <= 9 && String.for_all (function '0'..'9' -> true | _ -> false) digits
+    then Some (int_of_string digits) else None
+  else None
+let newest_checkpoint paths =
+  List.fold_left (fun newest path -> match checkpoint_version path, newest with
+    | Some n, Some m when n <= m -> newest | Some n, _ -> Some n | None, _ -> newest) None paths
+(* One walk of every tree: the kinds of all entries, then the digests of the
+   non-excluded regular files. Of the checkpoints only the newest non-excluded
+   one is hashed (the one a resumed history reads); an older checkpoint's digest
+   is sealed in its frozen migration root, and the walk records its presence. *)
+let collect_trees ?kind:kind_of ?names:names_of ~disk trees =
+  let kind ~disk path = match kind_of with Some f -> f path | None -> kind ~disk path in
+  let names ~disk path = match names_of with Some f -> f path | None -> names ~disk path in
+  let collect tree =
+    match optional (fun () -> kind ~disk tree) with
+    | None -> None
+    | Some Unix.S_DIR ->
+      let entries = ref [] in
+      let rec visit directory =
+        match names ~disk directory with
+        | None -> raise (Unobservable directory)
+        | Some names -> List.iter (fun name ->
+          let path = Filename.concat directory name in
+          match kind ~disk path with
+          | Unix.S_DIR -> entries := (path,true) :: !entries; visit path
+          | Unix.S_REG -> entries := (path,false) :: !entries
+          | _ -> raise (Unobservable path)
+          | exception Unix.Unix_error (Unix.ENOENT,_,_) -> raise (Unobservable path)) names in
+      visit tree; Some (List.rev !entries)
+    | Some _ -> raise (Unobservable tree) in
+  List.map (fun tree -> tree,collect tree) trees
+let derive_walks ~digest ~excluded collected =
+  let newest = newest_checkpoint (List.concat_map (fun (_,entries) ->
+    List.filter_map (fun (path,dir) -> if dir || excluded path then None else Some path)
+      (Option.value entries ~default:[])) collected) in
+  List.map (fun (tree,entries) -> {tree;entries=Option.map (List.map (fun (path,dir) ->
+    if dir then path,Dir
+    else if excluded path then path,Present
+    else match checkpoint_version path with
+      | Some n when Some n <> newest -> path,Present
+      | _ -> path,File (digest path))) entries}) collected
+let walk_all ?kind ?names ~disk ~digest ~excluded trees =
+  derive_walks ~digest ~excluded (collect_trees ?kind ?names ~disk trees)
+let plain_digest ~disk path =
+  hash (if disk then Source_input.Disk.read path else Source_input.read path)
+(* The hashed form of one view: every non-excluded entry, sorted by identity. *)
+let history_lines root excluded walks =
+  let excluded = Path_set.of_list excluded in
+  let kept = List.map (fun w -> w,Option.map (List.filter (fun (path,_) -> not (Path_set.mem path excluded))) w.entries) walks in
+  let newest = newest_checkpoint (List.concat_map (fun (_,entries) ->
+    List.filter_map (fun (path,entry) -> if entry = Dir then None else Some path) (Option.value entries ~default:[])) kept) in
+  List.concat_map (fun (w,entries) ->
+    let body = match entries with
+      | None -> ["absent"]
+      | Some entries -> List.map (fun (path,entry) ->
+          let rel = relative root path in
+          rel,(match entry,checkpoint_version path with
+            | Dir,_ -> "d\000" ^ rel
+            | (File _ | Present),Some n when Some n <> newest -> "c\000" ^ rel
+            | File digest,_ -> "f\000" ^ rel ^ "\000" ^ digest
+            | Present,_ -> reject path "the frozen history scope no longer observes these bytes")) entries
+        |> List.sort (fun (a,_) (b,_) -> String.compare a b) |> List.map snd in
+    ("tree\000" ^ relative root w.tree) :: body @ ["end"]) kept
+let history_digest root excluded walks =
+  hash ("tesl-frozen-history-v1\000" ^ String.concat "" (List.map (fun line -> line ^ "\000") (history_lines root excluded walks)))
+(* The first differing entry, for a precise refusal. *)
+let history_difference root excluded expected actual =
+  let rec first = function
+    | a :: rest, b :: rest' when a = b -> first (rest,rest')
+    | a :: _, b :: _ -> Some (min a b)
+    | a :: _, [] | [], a :: _ -> Some a
+    | [], [] -> None in
+  match first (history_lines root excluded expected, history_lines root excluded actual) with
+  | None -> None
+  | Some line -> Some (match String.split_on_char '\000' line with
+    | ("d" | "f" | "c" | "tree") :: rel :: _ -> rel | _ -> String.concat "/" (List.map (fun w -> relative root w.tree) expected))
+(* Walks equal on every non-excluded entry have equal digests (the digest
+   depends on nothing else); a cheap test before hashing both. *)
+let same_walks excluded a b =
+  let excluded = Path_set.of_list excluded in
+  let kept w = w.tree,Option.map (List.filter (fun (path,_) -> not (Path_set.mem path excluded))) w.entries in
+  List.length a = List.length b && List.for_all2 (fun x y -> kept x = kept y) a b
+let children walks path = List.concat_map (fun w -> match w.entries with
+  | Some entries when path = w.tree || inside_tree w.tree path ->
+    List.filter_map (fun (entry,_) -> if Filename.dirname entry = path then Some (Filename.basename entry) else None) entries
+  | _ -> []) walks |> List.sort String.compare
+(* Each excluded path's own guard must agree with what the walk of the same view
+   observed there; otherwise excluding it would drop an original observation. *)
+let consistent_history t =
+  let files = List.fold_left (fun map g -> Paths.add g.file g map) Paths.empty t.files in
+  let directories = List.fold_left (fun map g -> Paths.add g.directory g map) Paths.empty t.directories in
+  List.iter (fun h ->
+    List.iter (fun (walks,digest,listing) ->
+      (* A path's entry: its first one in the first walk whose tree holds it,
+         looked up in one index per walk. *)
+      let indexed = List.map (fun w -> w,Option.map (fun entries ->
+        let index = Hashtbl.create (List.length entries) in
+        List.iter (fun (path,entry) -> if not (Hashtbl.mem index path) then Hashtbl.add index path entry) entries;
+        index) w.entries) walks in
+      let lookup path = List.find_map (fun (w,index) ->
+        if inside_tree w.tree path then Some (Option.bind index (fun index -> Hashtbl.find_opt index path)) else None) indexed |> Option.join in
+      List.iter (fun path ->
+        let entry = lookup path in
+        Option.iter (fun g -> if (match entry, digest g with
+            | Some (File d), Some actual -> d <> actual
+            | Some Present, Some _ | None, None -> false
+            | _ -> true)
+          then reject path "conflicting history precondition") (Paths.find_opt path files);
+        Option.iter (fun g -> if listing g <> (match entry with Some Dir -> Some (children walks path) | None -> None | Some (File _ | Present) -> Some [""])
+          then reject path "conflicting history precondition") (Paths.find_opt path directories)) h.excluded)
+      [h.source_walk,(fun g -> g.source_digest),(fun g -> g.source_names);
+       h.disk_walk,(fun g -> g.disk_digest),(fun g -> g.disk_names)]) t.history
+(* Exclude every path that has its own guard: the file and directory guards and
+   the history then never describe one path twice. *)
+let with_exclusions t =
+  let guarded = List.map (fun g -> g.file) t.files @ List.map (fun g -> g.directory) t.directories in
+  let history = List.map (fun h ->
+    let own = List.filter (fun path -> List.exists (fun tree -> inside_tree tree path) h.trees) guarded in
+    let excluded = List.sort_uniq String.compare (h.excluded @ own) in
+    let excluded_set = Path_set.of_list excluded in
+    {h with excluded;covered=List.filter (fun path -> not (Path_set.mem path excluded_set)) h.covered}) t.history in
+  let t = {t with history} in consistent_history t; t
+
+let family_history ~project_root ~family ~current_version =
+  let tree name = match Validation_common.schema_module_relative_path (family ^ name) with
+    | Some relative -> Filename.dirname (Filename.concat project_root relative)
+    | None -> invalid_arg ("not a schema family: " ^ family) in
+  let schema = tree ".VCurrent" and migrations = tree ".Migrate.V2" in
+  let first tree path =
+    let rest = String.sub path (String.length tree + 1) (String.length path - String.length tree - 1) in
+    match String.index_opt rest Filename.dir_sep.[0] with Some i -> String.sub rest 0 i | None -> rest in
+  let revision = "v" ^ string_of_int current_version in
+  let keep path =
+    if inside_tree schema path then List.mem (first schema path) ["v-current.tesl";"v-current"]
+    else if inside_tree migrations path then
+      List.mem (first migrations path) [revision ^ ".tesl";revision ^ "-contract.tesl";revision ^ ".checkpoint";revision]
+    else true in
+  {history_trees=[schema;migrations];keep}
+
+(* A frozen source of [h]: inside one of its trees and not kept. *)
+let frozen (h:history) path = not (h.keep path) && List.exists (fun tree -> inside_tree tree path) h.history_trees
+(* Whether imports between frozen sources are determined by the trees: no tree
+   parent lists an entry that could begin a module path, in either view (the
+   condition under which a scoped manifest drops their own guards). *)
+let frozen_imports_determined (h:history) =
+  List.for_all (fun tree -> List.for_all (fun disk ->
+    match names ~disk (Filename.dirname tree) with
+    | None -> true
+    | Some entries -> not (List.mem "schema" entries || List.mem "migrations" entries)) [false;true]) h.history_trees
+
+(* Disk evidence of the passes already made within one compilation (Source_input
+   scope): for each file, the lstat identity under which its bytes had a digest;
+   each directory's listing under its lstat identity; each import resolution
+   found on disk. A quick pass (an intermediate check of a command) accepts a
+   file or directory whose lstat identity is unchanged and an import already
+   resolved to its expected path; a full pass (the default, and every final guard)
+   reads, hashes, lists and resolves everything anew. *)
+type identity = int * int * int * float * float * Unix.file_kind
+let identity (s : Unix.stats) : identity = s.st_dev,s.st_ino,s.st_size,s.st_mtime,s.st_ctime,s.st_kind
+let seen_files : (string, identity * string) Hashtbl.t = Hashtbl.create 64
+let seen_names : (string, identity * string list) Hashtbl.t = Hashtbl.create 16
+let seen_imports : (string * string, string) Hashtbl.t = Hashtbl.create 64
+let () = Source_input.on_scope_exit (fun () ->
+  Hashtbl.reset seen_files; Hashtbl.reset seen_names; Hashtbl.reset seen_imports)
+let remember table key value = if Source_input.in_scope () then Hashtbl.replace table key value
+
+(* One disk pass observes each path once: import resolution probes the same
+   ancestors for many imports. *)
+let disk_pass () =
+  let exists = Hashtbl.create 64 and real = Hashtbl.create 16 in
+  let memo table f path = match Hashtbl.find_opt table path with
+    | Some (Ok v) -> v | Some (Error e) -> raise e
+    | None -> let r = try Ok (f path) with e -> Error e in Hashtbl.replace table path r;
+      (match r with Ok v -> v | Error e -> raise e) in
+  fun source name -> Validation_common.resolve_local_import_path_with
+    ~exists:(memo exists Source_input.Disk.exists) ~realpath:(memo real Source_input.Disk.realpath) source name
+
+(* One verification pass resolves each directory's canonical spelling once
+   (Source_input.with_path_memo); every file is still read and hashed. A disk
+   pass resolves anew, so it observes a directory replaced during the command. *)
+(* One disk pass over several guards (see [with_pass]): each history entry's
+   lstat and each history directory's listing, observed once. *)
+let pass : ((string, (Unix.stats, exn) result) Hashtbl.t * (string, (string list option, exn) result) Hashtbl.t *
+  (string, string) Hashtbl.t) option ref = ref None
+let with_pass f = match !pass with
+  | Some _ -> f ()
+  | None -> pass := Some (Hashtbl.create 256,Hashtbl.create 8,Hashtbl.create 256); Fun.protect ~finally:(fun () -> pass := None) f
+(* Source views in which a history guard's source walk was verified within this
+   compilation scope, by the guard's walks (physically: one captured guard). *)
+let verified_views : (walk list * Source_input.view_token) list ref = ref []
+let () = Source_input.on_scope_exit (fun () -> verified_views := [])
+let verified_source_view h =
+  List.exists (fun (walks,token) -> walks == h.source_walk && Source_input.same_view token) !verified_views
+let remember_source_view h = if Source_input.in_scope () && not (verified_source_view h) then
+  verified_views := (h.source_walk,Source_input.view_token ()) :: List.filteri (fun i _ -> i < 31) !verified_views
+(* Disk walks of history guards verified within this compilation scope. *)
+let verified_disk : walk list list ref = ref []
+let () = Source_input.on_scope_exit (fun () -> verified_disk := [])
+let verified_disk_walk h = List.exists (fun walks -> walks == h.disk_walk) !verified_disk
+let remember_disk_walk h = if Source_input.in_scope () && not (verified_disk_walk h) then
+  verified_disk := h.disk_walk :: List.filteri (fun i _ -> i < 31) !verified_disk
+(* Walks of one compilation scope, by view (overlays, pinned resources and disk
+   epoch), trees and exclusions, while disk answers are memoized: the same
+   view answers every observation of a walk as before. *)
+let walks_memo : ((bool * string list * string list) * Source_input.view_token * walk list) list ref = ref []
+let collected_memo : ((bool * string list) * Source_input.view_token * (string * (string * bool) list option) list) list ref = ref []
+let () = Source_input.on_scope_exit (fun () -> walks_memo := []; collected_memo := [])
+(* The entries of the trees, observed once per view and scope; each exclusion
+   derives its walk from them (file digests are memoized by bytes). *)
+let memo_walk ~disk ~trees ~excluded ~digest =
+  let excluded_set = Path_set.of_list excluded in
+  let derive collected = derive_walks ~digest ~excluded:(fun p -> Path_set.mem p excluded_set) collected in
+  if not (Source_input.memoizing ()) then derive (collect_trees ~disk trees) else
+  let key = disk,trees,excluded in
+  match List.find_opt (fun (k,token,_) -> k = key && Source_input.same_view token) !walks_memo with
+  | Some (_,_,walks) -> walks
+  | None ->
+    let collected = match List.find_opt (fun (k,token,_) -> k = (disk,trees) && Source_input.same_view token) !collected_memo with
+      | Some (_,_,collected) -> collected
+      | None ->
+        let collected = collect_trees ~disk trees in
+        collected_memo := ((disk,trees),Source_input.view_token (),collected) :: List.filteri (fun i _ -> i < 7) !collected_memo;
+        collected in
+    let walks = derive collected in
+    walks_memo := (key,Source_input.view_token (),walks) :: List.filteri (fun i _ -> i < 15) !walks_memo;
+    walks
+let verify_files ?(quick=false) ?(revisit=false) t disk = (if disk then Source_input.with_fresh_path_memo else Source_input.with_path_memo) @@ fun () ->
+  let quick_view = quick && Source_input.in_scope () in
+  let quick = quick_view && disk in
   validate_root t.root;
+  let resolve_disk = disk_pass () in
   List.iter (fun guard ->
     let expected = if disk then guard.disk_path else guard.source_path in
-    if resolve ~disk guard.source guard.name <> expected then
-      reject guard.source ("import resolution changed since preview: " ^ guard.name)) t.imports;
+    let key = guard.source,guard.name in
+    if not (quick && Hashtbl.find_opt seen_imports key = Some expected) then begin
+      let resolved = if disk then resolve_disk guard.source guard.name else resolve ~disk guard.source guard.name in
+      if resolved <> expected then
+        reject guard.source ("import resolution changed since preview: " ^ guard.name);
+      if disk then remember seen_imports key resolved
+    end) t.imports;
+  let observed path = match Unix.lstat path with
+    | stats -> Some (identity stats) | exception Unix.Unix_error _ -> None in
   List.iter (fun guard ->
     canonical t.root guard.file;
     let expected = if disk then guard.disk_digest else guard.source_digest in
-    if Option.map hash (file_bytes ~disk guard.file) <> expected then
-      reject guard.file (if disk then "saved source changed since preview" else "source view changed since preview")) t.files;
+    let before = if disk then observed guard.file else None in
+    let unchanged = quick && (match before, expected, Hashtbl.find_opt seen_files guard.file with
+      | Some now, Some digest, Some (recorded, recorded_digest) -> now = recorded && digest = recorded_digest
+      | _ -> false) in
+    if not unchanged then begin
+      let actual = Option.map hash (file_bytes ~disk guard.file) in
+      if actual <> expected then
+        reject guard.file (if disk then "saved source changed since preview" else "source view changed since preview");
+      (* Recorded only when the file kept one identity around its read. *)
+      match before, actual with
+      | Some id, Some digest when disk && observed guard.file = before -> remember seen_files guard.file (id,digest)
+      | _ -> ()
+    end) t.files;
   List.iter (fun guard ->
     canonical t.root guard.directory;
     let expected = if disk then guard.disk_names else guard.source_names in
-    if names ~disk guard.directory <> expected then
-      reject guard.directory (if disk then "saved directory membership changed since preview" else "source directory membership changed since preview")) t.directories
-let verify_source t ~documents = protect (fun () ->
+    let before = if disk then observed guard.directory else None in
+    let unchanged = quick && (match before, expected, Hashtbl.find_opt seen_names guard.directory with
+      | Some now, Some names, Some (recorded, recorded_names) -> now = recorded && names = recorded_names
+      | _ -> false) in
+    if not unchanged then begin
+      let actual = names ~disk guard.directory in
+      if actual <> expected then
+        reject guard.directory (if disk then "saved directory membership changed since preview" else "source directory membership changed since preview");
+      match before, actual with
+      | Some id, Some names when disk && observed guard.directory = before -> remember seen_names guard.directory (id,names)
+      | _ -> ()
+    end) t.directories;
+  (* One pass over each frozen history tree. A quick pass reuses a file digest
+     only under an unchanged lstat identity, as for file guards; on disk each
+     entry is lstat'ed once for both its kind and that identity. *)
+  let stats,listings,digests = match !pass with
+    | Some (stats,listings,digests) when disk -> stats,listings,digests
+    | _ -> Hashtbl.create 64,Hashtbl.create 8,Hashtbl.create 64 in
+  let listing path = match Hashtbl.find_opt listings path with
+    | Some (Ok names) -> names | Some (Error e) -> raise e
+    | None -> let r = (try Ok (names ~disk path) with e -> Error e) in Hashtbl.replace listings path r;
+      (match r with Ok names -> names | Error e -> raise e) in
+  let stat path = match Hashtbl.find_opt stats path with
+    | Some s -> s
+    | None -> let s = (try Ok (Unix.lstat path) with Unix.Unix_error _ as e -> Error e) in Hashtbl.replace stats path s; s in
+  let disk_kind path = match stat path with Ok s -> s.Unix.st_kind | Error e -> raise e in
+  let digest path =
+    if not disk then plain_digest ~disk path else
+    let before = match stat path with Ok s -> Some (identity s) | Error _ -> None in
+    match before, Hashtbl.find_opt seen_files path with
+    | Some now, Some (recorded,digest) when quick && now = recorded -> digest
+    | _ -> match Hashtbl.find_opt digests path with
+      | Some digest -> digest
+      | None ->
+      (* Bytes this command read under the same lstat identity: its final
+         disk check reads them again (Source_input.Disk.unchanged_read). *)
+      let unchanged = match stat path with Ok s -> Source_input.Disk.unchanged_read path s | Error _ -> None in
+      let digest = match unchanged with Some bytes -> hash bytes | None -> plain_digest ~disk path in
+      (match before with Some id when unchanged <> None || observed path = before -> remember seen_files path (id,digest) | _ -> ());
+      Hashtbl.replace digests path digest;
+      digest in
+  List.iter (fun h ->
+    let expected = if disk then h.disk_walk else h.source_walk in
+    let changed detail = reject (List.hd h.trees)
+      ((if disk then "saved frozen history changed since preview: " else "source frozen history changed since preview: ") ^ detail) in
+    (* An intermediate check repeats no lookup of a frozen history already
+       verified within this compilation scope (in this source view, for the
+       source walk): the full checks before a command publishes or reports
+       success read and hash the trees anew. *)
+    if quick_view && not revisit && (if disk then verified_disk_walk h else verified_source_view h) then () else
+    let excluded = let set = Path_set.of_list h.excluded in fun p -> Path_set.mem p set in
+    (* The source view answers as before within one view of the scope. *)
+    match (if disk then walk_all ~kind:disk_kind ~names:listing ~disk ~digest ~excluded h.trees
+           else memo_walk ~disk ~trees:h.trees ~excluded:h.excluded ~digest) with
+    | actual ->
+      if not (same_walks h.excluded actual expected) &&
+         history_digest t.root h.excluded actual <> history_digest t.root h.excluded expected then
+        changed (Option.value (history_difference t.root h.excluded expected actual) ~default:"");
+      if disk then remember_disk_walk h else remember_source_view h
+    | exception Unobservable path -> changed (relative t.root path ^ " is not a regular file or directory")) t.history
+let verify_source ?quick t ~documents = protect (fun () ->
   let documents = normalized_documents t.root documents in
   if documents <> t.documents then reject t.root "open document set or version changed since preview";
-  verify_files t false)
-let verify_disk t = protect (fun () -> verify_files t true)
+  verify_files ?quick t false)
+let verify_disk ?quick ?revisit t = protect (fun () -> verify_files ?quick ?revisit t true)
 let source_files t = protect (fun () ->
   List.filter_map (fun guard ->
     canonical t.root guard.file;
     let source = file_bytes ~disk:false guard.file in
     if Option.map hash source <> guard.source_digest then
       reject guard.file "source changed before capturing compilation bytes";
-    Option.map (fun source -> guard.file,source) source) t.files)
-let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () ->
-  validate_root root;
+    Option.map (fun source -> guard.file,source) source) t.files @
+  (* A read covered by a frozen history walk: its bytes are those the walk
+     hashed in the source view. *)
+  List.concat_map (fun h ->
+    let entries = Hashtbl.create 256 in
+    List.iter (fun w -> Option.iter (List.iter (fun (path,entry) -> Hashtbl.replace entries path entry)) w.entries) h.source_walk;
+    List.filter_map (fun path ->
+    match Hashtbl.find_opt entries path with
+    | None -> None
+    | Some (File digest) ->
+      let source = Source_input.read path in
+      if hash source <> digest then reject path "source changed before capturing compilation bytes";
+      Some (path,source)
+    | Some (Dir | Present) -> reject path "manifest source must be a regular file") h.covered) t.history
+  |> List.sort_uniq (fun (a,_) (b,_) -> String.compare a b))
+(* Every source module of the frozen history scopes, with the bytes their source
+   walks hashed: None without a scope, or when a tree's parent listing could
+   hide an import candidate (then imports among frozen sources keep their own
+   guards, and a caller that did not collect them must not rely on the scope). *)
+let frozen_sources t = protect (fun () ->
+  let determined tree = match List.find_opt (fun g -> g.directory = Filename.dirname tree) t.directories with
+    | None -> false
+    | Some g -> List.for_all (function
+        | None -> true
+        | Some names -> not (List.mem "schema" names || List.mem "migrations" names)) [g.source_names;g.disk_names] in
+  if t.history = [] || not (List.for_all (fun h -> List.for_all determined h.trees) t.history) then None else
+  Some (List.concat_map (fun h ->
+    let excluded = Path_set.of_list h.excluded in
+    List.concat_map (fun w -> List.filter_map (fun (path,entry) ->
+      match entry with
+      | File digest when Filename.check_suffix path ".tesl" && not (Path_set.mem path excluded) ->
+        let source = Source_input.read path in
+        if hash source <> digest then reject path "source changed before capturing compilation bytes";
+        Some (path,source)
+      | _ -> None) (Option.value w.entries ~default:[])) h.source_walk) t.history))
+(* Observations shared by the manifests of one capture: each file and directory
+   is read once, and every later manifest records that original observation.
+   The capture's final union rechecks every guard against fresh reads. *)
+type observations = { observed_files : (bool * string, string option) Hashtbl.t;
+  observed_names : (bool * string, string list option) Hashtbl.t;
+  observed_roots : (string, unit) Hashtbl.t;
+  (* One disk pass for every manifest of the set (each path probed once). *)
+  observed_resolver : (string -> string -> string) Lazy.t }
+let observations () = { observed_files=Hashtbl.create 64; observed_names=Hashtbl.create 16;
+  observed_roots=Hashtbl.create 1; observed_resolver=lazy (disk_pass ()) }
+let create_with ~history ~observed ~project_root:root ~reads ~directories ~imports ~documents ~writes = protect (fun () -> Source_input.with_path_memo @@ fun () ->
+  let memo table compute key = match observed with
+    | None -> compute key
+    | Some o -> let table = table o in
+      match Hashtbl.find_opt table key with
+      | Some value -> value
+      | None -> let value = compute key in Hashtbl.replace table key value; value in
+  let file_bytes ~disk path = memo (fun o -> o.observed_files) (fun (disk,path) -> file_bytes ~disk path) (disk,path) in
+  let names ~disk path = memo (fun o -> o.observed_names) (fun (disk,path) -> names ~disk path) (disk,path) in
+  (* Manifests sharing one observation set validate their common root once. *)
+  (match observed with
+   | Some o when Hashtbl.mem o.observed_roots root -> ()
+   | Some o -> validate_root root; Hashtbl.replace o.observed_roots root ()
+   | None -> validate_root root);
+  let resolve_disk = match observed with Some o -> Lazy.force o.observed_resolver | None -> disk_pass () in
   let documents = normalized_documents root documents in
   let imports = List.sort_uniq compare imports |> List.map (fun (source,name) ->
     canonical root source;
     if not (String.is_valid_utf_8 name) then reject source "import names must be valid UTF-8";
-    {source;name;source_path=resolve ~disk:false source name;disk_path=resolve ~disk:true source name}) in
+    {source;name;source_path=resolve ~disk:false source name;disk_path=resolve_disk source name}) in
   let writes = List.fold_left (fun map (path,source) ->
     canonical root path;
     (* Generated revision checkpoints are written beside their migration root. *)
@@ -95,31 +494,96 @@ let create ~project_root:root ~reads ~directories ~imports ~documents ~writes = 
     if Paths.mem path map then reject path "duplicate output path";
     Paths.add path source map) Paths.empty writes in
   let overlay_root = Option.value (Source_input.project_root ()) ~default:root in
-  Source_input.with_overlays ~project_root:overlay_root (Paths.bindings writes) (fun () -> ());
+  (* Validates the proposed output paths in a source view; no writes, no view. *)
+  if not (Paths.is_empty writes) then
+    Source_input.with_overlays ~project_root:overlay_root (Paths.bindings writes) (fun () -> ());
   let paths = reads @ List.map fst (Paths.bindings writes) @ List.map (fun (d : document) -> d.path) documents @
     List.concat_map (fun g -> [g.source;g.source_path;g.disk_path]) imports
     |> List.sort_uniq String.compare in
-  let files,edits = List.fold_left (fun (files,edits) path ->
-    canonical root path;
-    let source = file_bytes ~disk:false path and saved = file_bytes ~disk:true path in
-    let guard = {file=path;source_digest=Option.map hash source;disk_digest=Option.map hash saved} in
-    let edits = match Paths.find_opt path writes with
-      | Some after when source <> Some after ->
-        let document_version = List.find_opt (fun (d : document) -> d.path = path) documents |> Option.map (fun d -> d.version) in
-        {path;before=source;after;document_version} :: edits
-      | _ -> edits in
-    guard :: files,edits) ([],[]) paths in
-  let rec parents directory acc =
-    canonical root directory;
-    if directory = root then directory :: acc else parents (Filename.dirname directory) (directory :: acc) in
-  let directories = List.concat_map (fun path -> parents (Filename.dirname path) []) paths @
-    List.concat_map (fun directory -> parents directory []) directories @ [root]
-    |> List.sort_uniq String.compare
-    |> List.map (fun directory -> {directory;source_names=names ~disk:false directory;disk_names=names ~disk:true directory}) in
-  let t = {root;documents;edits=List.rev edits;files=List.rev files;directories;imports} in
+  (* A frozen history scope replaces the file guards of its frozen sources, and
+     the import guards among them, with one walk of each tree per view. *)
+  let build scope =
+    let all_reads = paths in
+    let paths,imports,trees = match scope with
+      | None -> paths,imports,[]
+      | Some (h,trees) ->
+        let inside path = List.exists (fun tree -> inside_tree tree path) trees in
+        let documented = List.fold_left (fun set (d : document) -> Path_set.add d.path set) Path_set.empty documents in
+        let primary path = not (inside path) || h.keep path || Paths.mem path writes || Path_set.mem path documented in
+        let regular ~disk path = match kind ~disk path with
+          | Unix.S_REG -> true | _ -> false | exception Unix.Unix_error _ -> false in
+        (* Resolution from a tree probes only that tree, then the tree's parent
+           (its guarded listing), then the project root, where an existing
+           candidate ends the search. A parent entry that can begin a module path
+           ("schema", "migrations") could hide a deeper candidate from that
+           listing; then every import keeps its own guard. *)
+        let unshadowed = List.for_all (fun tree -> List.for_all (fun disk ->
+          match names ~disk (Filename.dirname tree) with
+          | None -> true
+          | Some entries -> not (List.mem "schema" entries || List.mem "migrations" entries)) [false;true]) trees in
+        let covered g = unshadowed && inside g.source && not (primary g.source) &&
+          inside g.source_path && inside g.disk_path && regular ~disk:false g.source_path && regular ~disk:true g.disk_path in
+        let kept = List.filter (fun g -> not (covered g)) imports in
+        let endpoints = List.fold_left (fun set g -> Path_set.add g.source (Path_set.add g.source_path (Path_set.add g.disk_path set))) Path_set.empty kept in
+        List.filter (fun path -> primary path || Path_set.mem path endpoints) paths,kept,trees in
+    let directories = directories @ trees in
+    let files,edits = List.fold_left (fun (files,edits) path ->
+      canonical root path;
+      let source = file_bytes ~disk:false path and saved = file_bytes ~disk:true path in
+      let guard = {file=path;source_digest=Option.map hash source;disk_digest=Option.map hash saved} in
+      let edits = match Paths.find_opt path writes with
+        | Some after when source <> Some after ->
+          let document_version = List.find_opt (fun (d : document) -> d.path = path) documents |> Option.map (fun d -> d.version) in
+          {path;before=source;after;document_version} :: edits
+        | _ -> edits in
+      guard :: files,edits) ([],[]) paths in
+    let rec parents directory acc =
+      canonical root directory;
+      if directory = root then directory :: acc else parents (Filename.dirname directory) (directory :: acc) in
+    let directories = List.concat_map (fun path -> parents (Filename.dirname path) []) paths @
+      List.concat_map (fun directory -> parents directory []) directories @ [root]
+      |> List.sort_uniq String.compare
+      |> List.map (fun directory -> {directory;source_names=names ~disk:false directory;disk_names=names ~disk:true directory}) in
+    let history = match trees with
+      | [] -> []
+      | trees ->
+        let excluded = List.map (fun g -> g.file) files @ List.map (fun g -> g.directory) directories
+          |> List.filter (fun path -> List.exists (fun tree -> inside_tree tree path) trees) |> List.sort_uniq String.compare in
+        let digest ~disk path = match observed with
+          | None -> plain_digest ~disk path
+          | Some _ -> (match file_bytes ~disk path with Some bytes -> hash bytes | None -> raise (Unobservable path)) in
+        let excluded_set = Path_set.of_list excluded in
+        ignore excluded_set;
+        let walk ~disk = memo_walk ~disk ~trees ~excluded ~digest:(digest ~disk) in
+        let guarded = Path_set.of_list (List.map (fun g -> g.file) files) in
+        let covered = List.filter (fun path -> not (Path_set.mem path guarded) &&
+          List.exists (fun tree -> inside_tree tree path) trees) all_reads in
+        [{trees;excluded;source_walk=walk ~disk:false;disk_walk=walk ~disk:true;covered}] in
+    {root;documents;edits=List.rev edits;files=List.rev files;directories;imports;history} in
+  let scope = Option.map (fun h ->
+    let trees = List.sort_uniq String.compare h.history_trees in
+    List.iter (fun tree ->
+      canonical root tree;
+      if tree = root || List.exists (fun other -> other <> tree && (inside_tree other tree || inside_tree tree other)) trees then
+        reject tree "history trees must be distinct directories inside the project") trees;
+    h,trees) history in
+  (* A symbolic link or special file inside a tree cannot be observed by a walk:
+     then every input keeps its own guard. *)
+  let t = match build scope with
+    | t -> t
+    | exception Unobservable _ when scope <> None -> build None in
+  let t = with_exclusions t in
   (* Catch a changed earlier input before publishing the proposal. Apply must
-     check again; this is a precondition snapshot, not a filesystem transaction. *)
-  verify_files t false; verify_files t true; t)
+     check again; this is a precondition snapshot, not a filesystem transaction.
+     The source walks were just taken in this view. *)
+  if observed=None then begin
+    List.iter (fun h -> remember_source_view h; remember_disk_walk h) t.history;
+    verify_files ~quick:true t false; verify_files ~quick:true t true
+  end; t)
+let create = create_with ~history:None ~observed:None
+let create_observed observed = create_with ~history:None ~observed:(Some observed)
+let create_scoped history = create_with ~history ~observed:None
+let create_observed_scoped history observed = create_with ~history ~observed:(Some observed)
 
 (** Combine independently computed operations without taking a new snapshot of
     their inputs. Re-capturing after target selection could bless changed source
@@ -132,6 +596,7 @@ type accumulator = {
   combine_directories : directory_guard Paths.t;
   combine_imports : import_guard Import_paths.t;
   combine_edits : edit Paths.t;
+  combine_history : history_guard list;
 }
 
 (* Deduplicate original observations as they arrive, including repeated directory
@@ -160,14 +625,25 @@ let merge_observations accumulator (manifest : t) =
     ) accumulator.combine_imports manifest.imports in
   let combine_edits = add_paths "source edit" (fun (e : edit) -> e.path) (fun e -> e.path)
       manifest.edits accumulator.combine_edits in
-  {accumulator with combine_files;combine_directories;combine_imports;combine_edits}
+  (* The same trees must carry the same walks; their exclusions are united and
+     rechecked against those walks when the union is finished. *)
+  let combine_history = List.fold_left (fun histories (h : history_guard) ->
+    let overlaps (other : history_guard) = List.exists (fun a -> List.exists (fun b ->
+      a = b || inside_tree a b || inside_tree b a) other.trees) h.trees in
+    match List.partition (fun (other : history_guard) -> other.trees = h.trees) histories with
+    | [previous],rest when previous.source_walk = h.source_walk && previous.disk_walk = h.disk_walk ->
+      {previous with excluded=List.sort_uniq String.compare (previous.excluded @ h.excluded);
+        covered=List.sort_uniq String.compare (previous.covered @ h.covered)} :: rest
+    | [],_ when not (List.exists overlaps histories) -> h :: histories
+    | _ -> reject (List.hd h.trees) "conflicting history precondition between previews") accumulator.combine_history manifest.history in
+  {accumulator with combine_files;combine_directories;combine_imports;combine_edits;combine_history}
 
 let initial_observations (first : t) ~documents =
   let documents = normalized_documents first.root documents in
   merge_observations {
     combine_root=first.root;combine_documents=documents;
     combine_files=Paths.empty;combine_directories=Paths.empty;
-    combine_imports=Import_paths.empty;combine_edits=Paths.empty
+    combine_imports=Import_paths.empty;combine_edits=Paths.empty;combine_history=[]
   } first
 
 let verify_observations accumulator =
@@ -176,11 +652,12 @@ let verify_observations accumulator =
     files=List.map snd (Paths.bindings accumulator.combine_files);
     directories=List.map snd (Paths.bindings accumulator.combine_directories);
     imports=List.map snd (Import_paths.bindings accumulator.combine_imports);
-    edits=List.map snd (Paths.bindings accumulator.combine_edits)
-  } in
+    edits=List.map snd (Paths.bindings accumulator.combine_edits);
+    history=List.sort (fun (a : history_guard) b -> compare a.trees b.trees) accumulator.combine_history
+  } |> with_exclusions in
   let overlay_root = Option.value (Source_input.project_root ()) ~default:combined.root in
   Source_input.with_overlays ~project_root:overlay_root (overlays combined) (fun () -> ());
-  verify_files combined false; verify_files combined true;
+  verify_files combined false; verify_files ~quick:true combined true;
   combined
 
 let start_combine first ~documents = protect (fun () -> initial_observations first ~documents)
@@ -216,13 +693,16 @@ let hex bytes =
   Bytes.unsafe_to_string result
 let directory_hash names = hash ("tesl-directory-v1\000" ^ String.concat "\000" names ^ "\000")
 let to_json t = object_ [
-  "version","1"; "projectRoot",quote t.root;
+  "version","2"; "projectRoot",quote t.root;
   "documents",array (fun (d : document) -> object_ ["path",quote d.path;"version",string_of_int d.version]) t.documents;
   "imports",array (fun g -> object_ ["source",quote g.source;"module",quote g.name;
     "sourceResolved",quote g.source_path;"diskResolved",quote g.disk_path]) t.imports;
   "inputs",array (fun g -> object_ ["path",quote g.file;"sourceHash",nullable quote g.source_digest;"diskHash",nullable quote g.disk_digest]) t.files;
   "directories",array (fun g -> object_ ["path",quote g.directory;"sourceHash",nullable (fun names -> quote (directory_hash names)) g.source_names;
     "diskHash",nullable (fun names -> quote (directory_hash names)) g.disk_names]) t.directories;
+  "history",array (fun h -> object_ ["trees",array quote h.trees;"excluded",array quote h.excluded;
+    "sourceHash",quote (history_digest t.root h.excluded h.source_walk);
+    "diskHash",quote (history_digest t.root h.excluded h.disk_walk)]) t.history;
   "edits",array (fun (e : edit) -> object_ ["path",quote e.path;"beforeHex",nullable (fun bytes -> quote (hex bytes)) e.before;
     "afterHex",quote (hex e.after);"documentVersion",nullable string_of_int e.document_version]) t.edits]
 let digest t = hash (to_json t)

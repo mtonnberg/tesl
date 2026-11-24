@@ -14,7 +14,8 @@ type selection = {
 }
 type candidate = { database_name : string; database_file : string }
 type error = { loc : Location.loc; message : string; candidates : candidate list }
-type t = { selected : selection; compiler_abi : string; stored_value_compatibility : string option; root : string; guard : M.t }
+type t = { selected : selection; compiler_abi : string; stored_value_compatibility : string option; root : string; guard : M.t;
+  flat_history : bool }
 let selection t = t.selected
 let source_guard t = t.guard
 exception Invalid of error list
@@ -90,7 +91,7 @@ let infer_project_root ~entry_file ~database = protect entry_file (fun () ->
   require_root root m binding;
   List.iter (fun (file,_) -> require_path root file) sources;
   root)
-let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
+let resolve_scoped ~flat_history ~stored_value_compatibility ~compiler_abi ~project_root:root ~entry_file ~database ~documents = protect entry_file (fun () ->
   (* Validate the project and capture selection inputs before interpreting them.
      All subsequently discovered dependencies retain their separately read hashes. *)
   let initial = manifest (M.create ~project_root:root ~reads:[entry_file] ~directories:[] ~imports:[] ~documents ~writes:[]) in
@@ -106,13 +107,20 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
     current_version=current.version;migration_directory=Filename.dirname (Filename.concat root
       (Option.get (Validation_common.schema_module_relative_path (family ^ ".Migrate.V2"))))} in
   let reads = List.map fst sources @ List.map fst (H.source_inputs h) |> List.sort_uniq String.compare in
+  let scope = if flat_history then Some (M.family_history ~project_root:root ~family ~current_version:current.version) else None in
+  (* A frozen source's imports are guarded by the scope's trees. *)
+  let importing = match scope with
+    | Some h when M.frozen_imports_determined h -> List.filter (fun file -> not (M.frozen h file)) reads
+    | _ -> reads in
   let imports = List.concat_map (fun file ->
-    let m = match List.assoc_opt file sources with
-      | Some (m,_) -> m
-      | None -> (match Parser.parse_module file (Source_input.read file) with Ok m -> m | Err e -> reject e.loc e.msg) in
-    List.filter_map (fun (i : import_decl) ->
-      if String.starts_with ~prefix:"Tesl." i.module_name then None else Some (file,i.module_name)) m.imports) reads in
-  let complete = manifest (M.create ~project_root:root ~reads ~imports ~documents
+    let imports = match List.assoc_opt file sources with
+      | Some (m,_) -> List.map (fun (i : import_decl) -> i.module_name) m.imports
+      | None -> (match Migration_closure.imports ~file (Source_input.read file) with Ok imports -> imports | Error e -> reject e.loc e.msg) in
+    List.filter_map (fun name ->
+      if String.starts_with ~prefix:"Tesl." name then None else Some (file,name)) imports) importing in
+  (* The combined guard below and every caller's final verification recheck
+     all of these observations. *)
+  let complete = manifest (M.create_observed_scoped scope (M.observations ()) ~project_root:root ~reads ~imports ~documents
     ~directories:[selected.migration_directory;Filename.dirname current.root_file] ~writes:[]) in
   List.iter (fun (file,(_,hash)) ->
     require_path root file;
@@ -120,12 +128,14 @@ let resolve_with_compatibility ~stored_value_compatibility ~compiler_abi ~projec
       file_error file "target source changed during database selection") sources;
   history (H.verify_unchanged h);
   let guard = manifest (M.combine initial complete ~documents) in
-  {selected;compiler_abi;stored_value_compatibility;root;guard})
+  {selected;compiler_abi;stored_value_compatibility;root;guard;flat_history})
 
+let resolve_with_compatibility = resolve_scoped ~flat_history:false
 let resolve = resolve_with_compatibility ~stored_value_compatibility:None
+let flat_history t = t.flat_history
 let project_root t = t.root
 let compiler_abi t = t.compiler_abi
 let stored_value_compatibility t = t.stored_value_compatibility
-let verify t ~documents = protect t.selected.entry_file (fun () ->
-  manifest (M.verify_source t.guard ~documents);
-  manifest (M.verify_disk t.guard))
+let verify ?quick t ~documents = protect t.selected.entry_file (fun () ->
+  manifest (M.verify_source ?quick t.guard ~documents);
+  manifest (M.verify_disk ?quick t.guard))

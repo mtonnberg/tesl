@@ -16,8 +16,16 @@ let owned_scopes container file =
   walk "" (Filename.dirname file) []
 let scopes = owned_scopes "schema"
 
+(* A completed migration whose trust seal verifies in the current view
+   (Migration_trust.edge) passes both its header and its closure checks: the
+   decision verified exactly those. Its result is shared with every other
+   judgment of the command that asked about the same edge. *)
+let trusted ~compiler ~project_root ~root_file root_source =
+  Migration_trust.edge ~project_root ~compiler:(Lazy.force compiler) ~file:root_file ~source:root_source <> None
+
 let check_schema_source ?(skip_headers=[]) ?(overlay=true) ?query_file ~file source =
   let query_file = Option.value query_file ~default:file in
+  let compiler = lazy (Migration_trust.current_compiler ()) in
   (* Retain an unfollowed spelling as well: replacing a recorded schema path
      with a symlink must not hide it by moving the query outside schema/. Only
      collapse '.', since collapsing '..' across a symlink changes its meaning. *)
@@ -63,12 +71,13 @@ let check_schema_source ?(skip_headers=[]) ?(overlay=true) ?query_file ~file sou
               let expected = Filename.concat project_root
                 (Option.get (Validation_common.schema_module_relative_path migration_module)) in
               if path <> expected then reject path "migration history header does not match its canonical module path";
-              if H.mentions_file ~project_root ~file located then Some (migration_module,located) else None
+              if H.mentions_file ~project_root ~file located then Some (migration_module,located,path) else None
             | None -> None end) in
       if headers = [] then [] else
         let overlay_root = Option.value (Source_input.project_root ()) ~default:project_root in
         let verify () =
-          List.concat_map (fun (migration_module,located) ->
+          List.concat_map (fun (migration_module,located,path) ->
+            if trusted ~compiler ~project_root ~root_file:path (Source_input.read path) then [] else
             let previous,current = H.roots located in
             match H.verify ~project_root ~migration_module ~previous ~current located with
             | Ok _ -> [] | Error errors -> errors) headers in
@@ -118,6 +127,7 @@ let is_migration_root file =
    when the edited helper is no longer parseable or declares a different name. *)
 let check_closure_source ?(skip_roots=[]) ?(overlay=true) ?query_file ~file source =
   let query_file = Option.value query_file ~default:file in
+  let compiler = lazy (Migration_trust.current_compiler ()) in
   let absolute = if Filename.is_relative file then Filename.concat (Sys.getcwd ()) file else file in
   (* Keep the unfollowed alias witness, but `./` is only a spelling difference.
      Never collapse `..` across a symlink or discard the unfollowed path. *)
@@ -155,6 +165,7 @@ let check_closure_source ?(skip_roots=[]) ?(overlay=true) ?query_file ~file sour
             | Some located ->
               (* Validate membership before trusting it to select a query. A
                  removed helper entry must not hide that helper from checking. *)
+              if trusted ~compiler ~project_root ~root_file root_source then [] else
               (match Migration_closure.verify ~project_root ~root_file ~source:root_source located with
                | Ok () -> [] | Error errors -> errors) end) in
       try

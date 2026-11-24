@@ -57,6 +57,7 @@ func TestPgRowTableDropCompiledQueueSource(t *testing.T) {
 		if err := json.Unmarshal([]byte(queueJSON), &companion); err != nil {
 			t.Fatal(err)
 		}
+		source = pgTestExpandHistory(t, source)
 		db := rowTestDB(source)
 		h := PgCompiledMigrationHistory{Database: db["database"].(string), Family: db["family"].(string), Namespace: db["namespace"].(string), CurrentVersion: int(db["currentVersion"].(float64)), SourceCompilerABI: source["compilerAbi"].(string), StoredValueCompatibility: source["storedValueCompatibility"].(string)}
 		if loss {

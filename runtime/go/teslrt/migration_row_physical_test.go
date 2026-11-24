@@ -41,7 +41,11 @@ type rowPhysicalSeedEnvelope struct {
 func rowPhysicalSeed(t testing.TB) rowPhysicalSeedEnvelope {
 	t.Helper()
 	var seed rowPhysicalSeedEnvelope
-	if err := json.Unmarshal([]byte(rowPhysicalCompilerSeed), &seed); err != nil {
+	expanded, err := json.Marshal(pgTestExpandHistoryJSON(t, rowPhysicalCompilerSeed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(expanded, &seed); err != nil {
 		t.Fatal(err)
 	}
 	if len(seed.Databases) != 1 || len(seed.Databases[0].Versions) != 2 {

@@ -1102,6 +1102,7 @@ let print_batch_results (results : (string * Compile.diagnostic list) list) =
 (* ── Root-path discovery ─────────────────────────────────────────────────── *)
 
 let () =
+  Hash_native.install ();
   let args = Array.to_list Sys.argv |> List.tl in
   (* `--full-history` (anywhere on the command line) re-checks every frozen
      migration step instead of trusting its verified seals; same as

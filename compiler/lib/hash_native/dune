@@ -1,0 +1,19 @@
+; Native SHA-256 for the CLI and tests (see hash_native.c.ml). Not linked into
+; the js_of_ocaml playground, which keeps Migration_hash's OCaml implementation.
+; The C stub needs a C compiler, which the native Windows toolchain lacks, so it
+; is a separate library that Hash_native selects only when it is enabled.
+(library
+ (name tesl_hash_c)
+ (wrapped false)
+ (enabled_if (<> %{os_type} Win32))
+ (modules hash_c)
+ (foreign_stubs (language c) (names sha256_stubs) (flags (:standard -O3))))
+
+(library
+ (name tesl_hash_native)
+ (wrapped false)
+ (modules hash_native)
+ (libraries tesl_compiler_lib
+  (select hash_native.ml from
+   (tesl_hash_c -> hash_native.c.ml)
+   (-> hash_native.ocaml.ml))))

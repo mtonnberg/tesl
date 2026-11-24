@@ -128,11 +128,24 @@ let with_checkpoints ?namespace ~context ~project_root:root ~family (closed,read
       (match text with
        | None -> fail e.migration.path (Printf.sprintf
            "the checkpoint of V%d cannot be recomputed under the new stored-value semantics" e.migration.version)
-       | Some text ->
-         let closure = Closure.with_checkpoint closure (Some (Migration_hash.digest text)) in
-         [e.migration.path,sparse (Closure.attach ~file:e.migration.path ~source closure);
-          Closure.checkpoint_file e.migration.path,text])
-    | _ -> [e.migration.path,source]) closed |> List.concat in
+       | Some text -> e,source,Some (closure,text))
+    | _ -> e,source,None) closed in
+  (* One emit of the proposed application, with these checkpoints in place,
+     records every checkpointed revision's emitted output (Emit_fragment). *)
+  let attach e source closure text =
+    sparse (Closure.attach ~file:e.migration.path ~source (Closure.with_checkpoint closure (Some (Migration_hash.digest text)))) in
+  let staged = List.concat_map (fun (e,source,checkpoint) -> match checkpoint with
+    | Some (closure,text) -> [e.migration.path,attach e source closure text;Closure.checkpoint_file e.migration.path,text]
+    | None -> [e.migration.path,source]) finished in
+  let owned version = if version=2 then [1;2] else [version] in
+  let versions = List.concat_map (fun (e,_,checkpoint) -> if checkpoint=None then [] else owned e.migration.version) finished in
+  let recorded = overlay root staged (fun () -> Emit_fragment.record ~revisions:versions) in
+  let finished = List.concat_map (fun (e,source,checkpoint) -> match checkpoint with
+    | Some (closure,text) ->
+      let fragments = List.filter (fun (f:Emit_fragment.t) -> List.mem f.revision (owned e.migration.version)) recorded in
+      let text = Migration_checkpoint.with_fragments text fragments in
+      [e.migration.path,attach e source closure text;Closure.checkpoint_file e.migration.path,text]
+    | None -> [e.migration.path,source]) finished in
   let roots,checkpoints = List.partition (fun (file,_) -> Filename.check_suffix file ".tesl") finished in
   {writes=roots @ checkpoints;reads;recorded_identities;recorded_abis;identity})
 

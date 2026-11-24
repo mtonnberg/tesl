@@ -75,7 +75,7 @@ let verify p ~documents = protect p.selection.entry_file (fun () ->
 let generate ~project_root ~entry_file ~database ~new_revision ~documents = protect entry_file (fun () ->
   let context = abi (A.current ()) in
   let preview = abi (A.with_snapshot context (fun () ->
-    let target_ = target (T.resolve_with_compatibility
+    let target_ = target (T.resolve_scoped ~flat_history:true
       ~stored_value_compatibility:(Some (A.stored_value_compatibility context))
       ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
      let selected = T.selection target_ in
@@ -112,7 +112,7 @@ let generate_choice ~project_root ~entry_file ~database ~documents ~decision ~op
     message="the reviewed migration preview is stale; source, documents, discovery or compiler inputs changed; obtain a fresh preview";candidates=[]}]);
   (match verify reviewed ~documents with Ok()->()|Error errors->raise(Invalid errors));
   let chosen=abi(A.with_snapshot reviewed.abi(fun()->
-    let selected=target(T.resolve_with_compatibility
+    let selected=target(T.resolve_scoped ~flat_history:true
       ~stored_value_compatibility:(Some(A.stored_value_compatibility reviewed.abi))
       ~compiler_abi:(compiler_abi reviewed) ~project_root ~entry_file ~database ~documents)in
     let selection=T.selection selected in
@@ -132,7 +132,7 @@ let generate_contract ~project_root ~entry_file ~database ~version ~documents = 
  let checked = function Ok value -> value | Error errors ->
   raise(Invalid(List.map(fun(e:Migration_sparse.error)->{loc=e.loc;message=e.message;candidates=[]})errors)) in
  let result=abi(A.with_snapshot context(fun () ->
-  let target_=target(T.resolve_with_compatibility
+  let target_=target(T.resolve_scoped ~flat_history:true
    ~stored_value_compatibility:(Some(A.stored_value_compatibility context)) ~compiler_abi:(A.id context)
    ~project_root ~entry_file ~database ~documents) in
   let selection=T.selection target_ in
@@ -173,6 +173,8 @@ let generate_reseal ~project_root ~entry_file ~database ~documents = protect ent
         message="the migration history does not check under the new stored-value semantics, so its seals \
           were not re-recorded: " ^ d.code ^ " " ^ d.message;candidates=[]}])
     | None -> () in
+  (* Re-sealing rewrites frozen sources and checkpoints, so its manifest keeps a
+     guard per input instead of one frozen history scope. *)
   let result = abi (A.with_snapshot context (fun () -> Migration_trust.with_full_history (fun () ->
     let target_ = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some identity)
       ~compiler_abi:(A.id context) ~project_root ~entry_file ~database ~documents) in
@@ -187,7 +189,8 @@ let generate_reseal ~project_root ~entry_file ~database ~documents = protect ent
         first_error diagnostics; cleanup,diagnostics)) in
     let staged = checked (Migration_reseal.seals_and_closures ~context ~project_root ~family:selection.family) in
     ignore (full_check (Migration_reseal.unchecked_writes staged));
-    let proposal = checked (Migration_reseal.with_checkpoints ?namespace:(T.namespace target_) ~context ~project_root ~family:selection.family staged) in
+    let proposal = checked (Emit_fragment.with_entry entry_file (fun () ->
+      Migration_reseal.with_checkpoints ?namespace:(T.namespace target_) ~context ~project_root ~family:selection.family staged)) in
     let cleanup,diagnostics = full_check proposal.writes in
     let edits = source_guard (M.create ~project_root ~reads:proposal.reads
       ~directories:[selection.migration_directory] ~imports:[] ~documents ~writes:proposal.writes) in

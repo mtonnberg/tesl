@@ -27,6 +27,10 @@ val current_compiler : unit -> (string * string) option
     trust. Any integrity failure yields [None]; callers then run the full check,
     which reports the precise diagnostic. *)
 val edge : project_root:string -> compiler:(string * string) option -> file:string -> source:string -> evidence option
+(** Whether a completed migration's seals hold under [compiler] (its closure and
+    both schema seals match the recorded bytes, recorded by this compiler ABI
+    and stored-value contract), whatever the full-history setting. *)
+val seals_hold : project_root:string -> compiler:(string * string) -> file:string -> source:string -> bool
 
 (** [edge] for a captured module: a completed migration root, or the Contract
     companion of one. *)

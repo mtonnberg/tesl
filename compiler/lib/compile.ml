@@ -2660,8 +2660,16 @@ let checked_migration_artifacts sources =
         collect rows (Option.fold ~none:queues ~some:(fun repair->repair::queues)repair) rest)) in
  collect [] [] sources
 
-let compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="") ~queue_conversions filename source =
+let rec compile_go_source_internal ?(debug=false) ?(prechecked=false) ?(path="") ?(attempts=2) ~queue_conversions filename source =
  Migration_program.with_compilation_cache (fun () ->
+  (* Published only when no input read through the compilation's memoized
+     disk answers changed while it ran; otherwise compiled again from fresh
+     reads. A compile nested in a command (Start's recording emit) is covered
+     by that command's check. *)
+  Source_input.with_final_disk_check ~attempts (fun () ->
+    compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source))
+and compile_go_source_once ~debug ~prechecked ~path ~queue_conversions filename source =
+ (fun f -> f ()) (fun () ->
   let path = if path = "" then filename else path in
   match parse_module filename source with
   | Err error -> GoFailure (source_parse_diagnostics filename source error)
@@ -2790,6 +2798,19 @@ let compile_row_catalog_artifacts filename source =
 let compile_go_file ?(debug=false) filename =
   let source = Source_input.read_text filename in
   compile_go_source ~debug ~path:filename filename source
+
+(* Start and re-seal store each completed revision's emitted output in its
+   checkpoint (Emit_fragment): they emit the proposed application in their
+   source view and keep the pieces of the revisions asked for. The proposal's
+   own checks report its diagnostics, so the entry is not re-checked here. *)
+let () = Emit_fragment.recorder := Some (fun ~entry_file ~revisions ->
+  let saved = !Emit_fragment.requested in
+  Emit_fragment.requested := revisions;
+  Emit_fragment.produced := [];
+  Fun.protect ~finally:(fun () -> Emit_fragment.requested := saved; Emit_fragment.produced := []) (fun () ->
+    match compile_go_source ~prechecked:true ~path:entry_file entry_file (Source_input.read_text entry_file) with
+    | GoSuccess _ -> List.filter (fun (f:Emit_fragment.t) -> List.mem f.revision revisions) !Emit_fragment.produced
+    | GoFailure _ -> []))
 
 type compile_result =
   | Success of string

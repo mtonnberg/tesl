@@ -144,8 +144,11 @@ func registerCompiledRowHistory(payload string) {
 	if err := pgJSONIntegrity(payload); err != nil {
 		panic(err)
 	}
-	root, err := pgJSONObject(payload, "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	root, err := pgJSONObject(payload, "version", "kind", "contractEncoding", "compilerAbi", "storedValueCompatibility", "databases")
 	if err != nil {
+		panic(err)
+	}
+	if err := pgCanonicalEncodingCheck(root["contractEncoding"]); err != nil {
 		panic(err)
 	}
 	version, err := pgJSONValue[int](root["version"])
@@ -162,7 +165,7 @@ func registerCompiledRowHistory(payload string) {
 	var linked []PgCompiledMigrationHistory
 	var entries []map[string]string
 	for _, raw := range dbs {
-		fields := []string{"database", "family", "namespace", "currentVersion", "transforms"}
+		fields := []string{"database", "family", "namespace", "currentVersion", "transforms", "canonicalNodes"}
 		if version == 5 {
 			fields = append(fields, "currentCodecs")
 		}
@@ -281,7 +284,11 @@ func pgRowRegistrationWindow(compiled *pgCompiledRowHistory, root, fields map[st
 	if err != nil {
 		return err
 	}
-	r := &pgMigrationWireReader{}
+	nodes, err := pgReadCanonicalNodes(fields["canonicalNodes"])
+	if err != nil {
+		return err
+	}
+	r := &pgMigrationWireReader{nodes: nodes}
 	lastVersion, lastEntity := 0, ""
 	for _, raw := range raws {
 		d := pgRowDescriptorFields(r, json.RawMessage(raw), format)

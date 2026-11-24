@@ -33,6 +33,16 @@ type importGuard struct {
 	SourceResolved string `json:"sourceResolved"`
 	DiskResolved   string `json:"diskResolved"`
 }
+
+// historyGuard is one frozen history scope: a digest of every entry below the
+// trees except the excluded paths, each of which has its own file or directory
+// guard. See historyHash for the exact digest.
+type historyGuard struct {
+	Trees      []string `json:"trees"`
+	Excluded   []string `json:"excluded"`
+	SourceHash string   `json:"sourceHash"`
+	DiskHash   string   `json:"diskHash"`
+}
 type edit struct {
 	Path            string  `json:"path"`
 	BeforeHex       *string `json:"beforeHex"`
@@ -40,13 +50,14 @@ type edit struct {
 	DocumentVersion *int32  `json:"documentVersion"`
 }
 type wireManifest struct {
-	Version     int           `json:"version"`
-	ProjectRoot string        `json:"projectRoot"`
-	Documents   []document    `json:"documents"`
-	Imports     []importGuard `json:"imports"`
-	Inputs      []input       `json:"inputs"`
-	Directories []directory   `json:"directories"`
-	Edits       []edit        `json:"edits"`
+	Version     int            `json:"version"`
+	ProjectRoot string         `json:"projectRoot"`
+	Documents   []document     `json:"documents"`
+	Imports     []importGuard  `json:"imports"`
+	Inputs      []input        `json:"inputs"`
+	Directories []directory    `json:"directories"`
+	History     []historyGuard `json:"history"`
+	Edits       []edit         `json:"edits"`
 }
 
 // Manifest is immutable after decoding. Accessors return copies, never mutable
@@ -278,11 +289,11 @@ func Decode(data []byte) (*Manifest, error) {
 	if err := strictJSON(data); err != nil {
 		return nil, err
 	}
-	fields, err := object(data, "version", "projectRoot", "documents", "imports", "inputs", "directories", "edits")
+	fields, err := object(data, "version", "projectRoot", "documents", "imports", "inputs", "directories", "history", "edits")
 	if err != nil {
 		return nil, err
 	}
-	for _, spec := range [][]string{{"documents", "path", "version"}, {"imports", "source", "module", "sourceResolved", "diskResolved"}, {"inputs", "path", "sourceHash", "diskHash"}, {"directories", "path", "sourceHash", "diskHash"}, {"edits", "path", "beforeHex", "afterHex", "documentVersion"}} {
+	for _, spec := range [][]string{{"documents", "path", "version"}, {"imports", "source", "module", "sourceResolved", "diskResolved"}, {"inputs", "path", "sourceHash", "diskHash"}, {"directories", "path", "sourceHash", "diskHash"}, {"history", "trees", "excluded", "sourceHash", "diskHash"}, {"edits", "path", "beforeHex", "afterHex", "documentVersion"}} {
 		if err := arrayObjects(fields[spec[0]], spec[1:]...); err != nil {
 			return nil, fmt.Errorf("%s: %w", spec[0], err)
 		}
@@ -298,6 +309,15 @@ func Decode(data []byte) (*Manifest, error) {
 	for _, doc := range docs {
 		if bytes.Equal(bytes.TrimSpace(doc["version"]), []byte("null")) {
 			return nil, fmt.Errorf("document version cannot be null")
+		}
+	}
+	var histories []map[string]json.RawMessage
+	_ = json.Unmarshal(fields["history"], &histories)
+	for _, history := range histories {
+		for _, key := range []string{"trees", "excluded"} {
+			if raw := bytes.TrimSpace(history[key]); len(raw) == 0 || raw[0] != '[' {
+				return nil, fmt.Errorf("history %s must be an array", key)
+			}
 		}
 	}
 	var edits []map[string]json.RawMessage
@@ -324,7 +344,7 @@ func (w wireManifest) path(path string, allowRoot bool) error {
 	return nil
 }
 func validate(w wireManifest) error {
-	if w.Version != 1 {
+	if w.Version != 2 {
 		return fmt.Errorf("unsupported source manifest version %d", w.Version)
 	}
 	if w.ProjectRoot == "" || strings.ContainsRune(w.ProjectRoot, 0) || !filepath.IsAbs(w.ProjectRoot) || filepath.Clean(w.ProjectRoot) != w.ProjectRoot {
@@ -382,6 +402,9 @@ func validate(w wireManifest) error {
 				return err
 			}
 		}
+	}
+	if err := w.validateHistory(files, dirs); err != nil {
+		return err
 	}
 	previous = ""
 	for _, d := range w.Documents {
@@ -444,6 +467,82 @@ func validate(w wireManifest) error {
 	}
 	return nil
 }
+
+// within reports whether path is strictly below tree.
+func within(tree, path string) bool {
+	return strings.HasPrefix(path, tree+string(filepath.Separator))
+}
+
+// validateHistory requires disjoint, sorted, guarded trees and exact exclusions:
+// every file or directory guard below a tree is excluded from its digest, and
+// nothing else is.
+func (w wireManifest) validateHistory(files map[string]input, dirs map[string]directory) error {
+	var trees []string
+	previous := ""
+	for _, h := range w.History {
+		if len(h.Trees) == 0 || len(h.SourceHash) != 64 || !validHex(h.SourceHash) || len(h.DiskHash) != 64 || !validHex(h.DiskHash) {
+			return fmt.Errorf("invalid history guard")
+		}
+		if h.Trees[0] <= previous {
+			return fmt.Errorf("unordered or duplicate history guard")
+		}
+		previous = h.Trees[0]
+		last := ""
+		for _, tree := range h.Trees {
+			if err := w.path(tree, false); err != nil {
+				return err
+			}
+			if tree <= last {
+				return fmt.Errorf("unordered or duplicate history tree: %s", tree)
+			}
+			last = tree
+			if _, ok := dirs[tree]; !ok {
+				return fmt.Errorf("history tree lacks a directory guard: %s", tree)
+			}
+			for _, other := range trees {
+				if other == tree || within(other, tree) || within(tree, other) {
+					return fmt.Errorf("overlapping history trees: %s", tree)
+				}
+			}
+			trees = append(trees, tree)
+		}
+		excluded := map[string]bool{}
+		last = ""
+		for _, path := range h.Excluded {
+			if err := w.path(path, false); err != nil {
+				return err
+			}
+			if path <= last {
+				return fmt.Errorf("unordered or duplicate history exclusion: %s", path)
+			}
+			last = path
+			inside := false
+			for _, tree := range h.Trees {
+				inside = inside || within(tree, path)
+			}
+			_, file := files[path]
+			_, dir := dirs[path]
+			if !inside || (!file && !dir) {
+				return fmt.Errorf("history exclusion is not a guarded path inside its trees: %s", path)
+			}
+			excluded[path] = true
+		}
+		for _, tree := range h.Trees {
+			for path := range files {
+				if within(tree, path) && !excluded[path] {
+					return fmt.Errorf("guarded input is not excluded from its history: %s", path)
+				}
+			}
+			for path := range dirs {
+				if within(tree, path) && !excluded[path] {
+					return fmt.Errorf("guarded directory is not excluded from its history: %s", path)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func moduleName(name string) bool {
 	for _, part := range strings.Split(name, ".") {
 		if len(part) == 0 || part[0] < 'A' || part[0] > 'Z' {
@@ -501,7 +600,7 @@ func list[T any](values []T, f func(T) string) string {
 	return "[" + strings.Join(parts, ",") + "]"
 }
 func encode(w wireManifest) []byte {
-	return []byte(`{"version":1,"projectRoot":` + quote(w.ProjectRoot) + `,"documents":` + list(w.Documents, func(d document) string {
+	return []byte(`{"version":2,"projectRoot":` + quote(w.ProjectRoot) + `,"documents":` + list(w.Documents, func(d document) string {
 		return `{"path":` + quote(d.Path) + `,"version":` + strconv.FormatInt(int64(d.Version), 10) + `}`
 	}) +
 		`,"imports":` + list(w.Imports, func(g importGuard) string {
@@ -512,6 +611,9 @@ func encode(w wireManifest) []byte {
 	}) +
 		`,"directories":` + list(w.Directories, func(g directory) string {
 		return `{"path":` + quote(g.Path) + `,"sourceHash":` + nullable(g.SourceHash) + `,"diskHash":` + nullable(g.DiskHash) + `}`
+	}) +
+		`,"history":` + list(w.History, func(h historyGuard) string {
+		return `{"trees":` + list(h.Trees, quote) + `,"excluded":` + list(h.Excluded, quote) + `,"sourceHash":` + quote(h.SourceHash) + `,"diskHash":` + quote(h.DiskHash) + `}`
 	}) +
 		`,"edits":` + list(w.Edits, func(e edit) string {
 		return `{"path":` + quote(e.Path) + `,"beforeHex":` + nullable(e.BeforeHex) + `,"afterHex":` + quote(e.AfterHex) + `,"documentVersion":` + number(e.DocumentVersion) + `}`

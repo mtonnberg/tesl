@@ -46,7 +46,47 @@ let parts_equal_concatenation () =
       (Migration_hash.digest source) (Migration_hash.digest_parts (pieces 0 cuts)))
     [[]; [0]; [1]; [63]; [64]; [65]; [1;2;3]; [55;56;57]; [64;128;192]; [100;100;700]; [999]; [1000]]
 
-let () = run "migration-hash" ["SHA-256", [
+(* The C implementation the CLI installs (SHA extensions when present, portable
+   rounds otherwise) agrees with the OCaml one on every padding boundary and on
+   large inputs. *)
+let c_implementations_agree () =
+  let lengths = List.init 300 Fun.id @ [1_000; 4_095; 4_096; 65_537; 1_000_003] in
+  List.iter (fun length ->
+    let source = String.init length (fun i -> Char.chr ((i * 89 + length * 7) mod 256)) in
+    let expected = Migration_hash.compute_native source in
+    check string ("portable C, length " ^ string_of_int length) expected (Hash_native.portable source);
+    check string ("installed C, length " ^ string_of_int length) expected (Hash_native.sha256_hex source false)) lengths;
+  Hash_native.install ();
+  check string "installed digest" "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    (Migration_hash.digest "abc");
+  check string "installed parts" (Migration_hash.compute_native "abcdef")
+    (Migration_hash.digest_parts ["ab"; "cd"; "ef"])
+
+(* History documents publish contracts as references into a per-database
+   table of hash-consed canonical list nodes. *)
+let canonical_node_tables () =
+  let module C = Migration_canonical in
+  let module N = Migration_canonical_nodes in
+  let doc payload = Migration_row_history.hex (C.encode (C.document C.Snapshot payload)) in
+  let shared = C.Seq [C.Bytes "field"; C.Bytes "id"; C.Seq [C.Bytes "none"]] in
+  let first = doc (C.Seq [shared; C.Bytes "one"]) in
+  let second = doc (C.Seq [shared; C.Bytes "\xff\xfe"; C.Seq []]) in
+  let render contracts =
+    let table = N.create ~quote:Migration_row_companion.quote in
+    let references = List.map (N.reference table) contracts in
+    references, N.length table, N.to_json table in
+  let references, length, json = render [first; second; first] in
+  check (list string) "repeated contract shares its root" ["3";"6";"3"] references;
+  check int "shared subtrees are written once" 7 length;
+  check string "bottom-up table in first-use order; non-UTF-8 atoms are hexadecimal"
+    {|[["none"],["field","id",0],[1,"one"],["tesl-migration-canonical","1","snapshot",2],[],[1,{"hex":"fffe"},4],["tesl-migration-canonical","1","snapshot",5]]|} json;
+  let _, _, again = render [first; second; first] in
+  check string "rendering is deterministic" json again
+
+let () = run "migration-hash" ["canonical nodes", [
+  test_case "canonical node tables" `Quick canonical_node_tables;
+]; "SHA-256", [
+  test_case "C implementations agree" `Quick c_implementations_agree;
   test_case "pieces hash like their concatenation" `Quick parts_equal_concatenation;
   test_case "portable and native implementations agree" `Quick portable_and_native_agree;
   test_case "published vectors" `Quick vectors;

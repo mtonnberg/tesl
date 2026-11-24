@@ -226,7 +226,7 @@ func pgRowColumns(r *pgMigrationWireReader, raw json.RawMessage) []PgRowSchemaCo
 
 func pgRowEntity(r *pgMigrationWireReader, raw json.RawMessage) PgRowSourceEntity {
 	o := r.object(raw, "entity", "table", "generation", "typeContract", "typeContractHash", "goTypePackage", "goTypeName", "columns")
-	e := PgRowSourceEntity{Entity: pgMigrationRead[string](r, o["entity"]), Table: pgMigrationRead[string](r, o["table"]), Generation: pgMigrationRead[int](r, o["generation"]), TypeContract: pgMigrationRead[string](r, o["typeContract"]), TypeContractHash: pgMigrationRead[string](r, o["typeContractHash"]), GoTypePackage: pgMigrationRead[string](r, o["goTypePackage"]), GoTypeName: pgMigrationRead[string](r, o["goTypeName"]), Columns: pgRowColumns(r, o["columns"])}
+	e := PgRowSourceEntity{Entity: pgMigrationRead[string](r, o["entity"]), Table: pgMigrationRead[string](r, o["table"]), Generation: pgMigrationRead[int](r, o["generation"]), TypeContract: r.contract(o["typeContract"]), TypeContractHash: pgMigrationRead[string](r, o["typeContractHash"]), GoTypePackage: pgMigrationRead[string](r, o["goTypePackage"]), GoTypeName: pgMigrationRead[string](r, o["goTypeName"]), Columns: pgRowColumns(r, o["columns"])}
 	if !pgQueueIdentity(e.Entity) || !pgMigrationIdentifier(e.Table) || e.Generation < 1 || e.Generation > 32767 ||
 		!strings.HasPrefix(e.GoTypePackage, "tesl.generated/") || strings.ContainsAny(e.GoTypePackage, "\x00\\ \t\r\n") || !pgRowName(e.GoTypeName) {
 		r.fail("invalid row source entity identity, generation or generated nominal type")
@@ -332,7 +332,7 @@ func pgReadRowBase(history PgCompiledMigrationHistory) ([]PgRowSourceInventory, 
 // only that version. Cross-version checks belong to pgReadRowBaseDecode.
 func pgReadRowSourceVersion(r *pgMigrationWireReader, raw json.RawMessage, family, abi, compatibility string) PgRowSourceVersion {
 	v := r.object(raw, "version", "schemaContract", "schemaSnapshotHash", "storageContract", "storageSnapshotHash", "entities")
-	version := PgRowSourceVersion{Version: pgMigrationRead[int](r, v["version"]), SchemaContract: pgMigrationRead[string](r, v["schemaContract"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), StorageContract: pgMigrationRead[string](r, v["storageContract"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"])}
+	version := PgRowSourceVersion{Version: pgMigrationRead[int](r, v["version"]), SchemaContract: r.contract(v["schemaContract"]), SchemaSnapshotHash: pgMigrationRead[string](r, v["schemaSnapshotHash"]), StorageContract: r.contract(v["storageContract"]), StorageSnapshotHash: pgMigrationRead[string](r, v["storageSnapshotHash"])}
 	schema := pgRowDocument(r, version.SchemaContract, version.SchemaSnapshotHash, "snapshot")
 	storage := pgRowDocument(r, version.StorageContract, version.StorageSnapshotHash, "migration")
 	version.Entities = pgMigrationReadArray(r, v["entities"], func(raw json.RawMessage) PgRowSourceEntity { return pgRowEntity(r, raw) })
@@ -371,7 +371,8 @@ func pgReadRowBaseDecode(history PgCompiledMigrationHistory) ([]PgRowSourceInven
 		return nil, err
 	}
 	r := &pgMigrationWireReader{}
-	root := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	root := r.object(json.RawMessage(history.HistoryJSON), "version", "kind", "contractEncoding", "compilerAbi", "storedValueCompatibility", "databases")
+	r.contractEncoding(root["contractEncoding"])
 	sourceVersion := pgMigrationRead[int](r, root["version"])
 	if (sourceVersion != 4 && sourceVersion != 5) || pgMigrationRead[string](r, root["kind"]) != "compiled-migration-source-history" ||
 		pgMigrationRead[string](r, root["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, root["storedValueCompatibility"]) != history.StoredValueCompatibility ||
@@ -381,11 +382,12 @@ func pgReadRowBaseDecode(history PgCompiledMigrationHistory) ([]PgRowSourceInven
 	last := ""
 	families := map[string]bool{}
 	result := pgMigrationReadArray(r, root["databases"], func(raw json.RawMessage) PgRowSourceInventory {
-		fields := []string{"database", "family", "namespace", "currentVersion", "versions", "origins"}
+		fields := []string{"database", "family", "namespace", "currentVersion", "versions", "origins", "canonicalNodes"}
 		if sourceVersion == 5 {
 			fields = append(fields, "retirements")
 		}
 		o := r.object(raw, fields...)
+		r.canonicalNodes(o["canonicalNodes"])
 		d := PgRowSourceInventory{Database: pgMigrationRead[string](r, o["database"]), Family: pgMigrationRead[string](r, o["family"]), Namespace: pgMigrationRead[string](r, o["namespace"]), CurrentVersion: pgMigrationRead[int](r, o["currentVersion"])}
 		if d.Database <= last || !pgMigrationFamily(d.Family) || families[d.Family] || !pgMigrationIdentifier(d.Namespace) || d.CurrentVersion < 1 || d.CurrentVersion > 2147483646 {
 			r.fail("invalid or duplicate row source database")
@@ -669,7 +671,7 @@ func pgRowDescriptorFields(r *pgMigrationWireReader, raw json.RawMessage, versio
 		fields = append(fields, "legacyWrites")
 	}
 	o := r.object(raw, fields...)
-	d := PgRowTransformDescriptor{MigrationVersion: pgMigrationRead[int](r, o["migrationVersion"]), Entity: pgMigrationRead[string](r, o["entity"]), Table: pgMigrationRead[string](r, o["table"]), Mode: pgMigrationRead[string](r, o["mode"]), PreviousGeneration: pgMigrationRead[int](r, o["previousGeneration"]), TargetGeneration: pgMigrationRead[int](r, o["targetGeneration"]), FromSchemaSnapshot: pgMigrationRead[string](r, o["fromSchemaSnapshot"]), ToSchemaSnapshot: pgMigrationRead[string](r, o["toSchemaSnapshot"]), FromStorageSnapshot: pgMigrationRead[string](r, o["fromStorageSnapshot"]), ToStorageSnapshot: pgMigrationRead[string](r, o["toStorageSnapshot"]), FromTypeContractHash: pgMigrationRead[string](r, o["fromTypeContractHash"]), ToTypeContractHash: pgMigrationRead[string](r, o["toTypeContractHash"]), SourceSchemaColumns: pgRowColumns(r, o["sourceSchemaColumns"]), TargetSchemaColumns: pgRowColumns(r, o["targetSchemaColumns"]), FieldMapping: pgMigrationReadArray(r, o["fieldMapping"], func(raw json.RawMessage) PgRowFieldMapping { return pgRowMapping(r, raw) }), TransformContractFormat: pgMigrationRead[string](r, o["transformContractFormat"]), TransformContract: pgMigrationRead[string](r, o["transformContract"]), TransformContractHash: pgMigrationRead[string](r, o["transformContractHash"])}
+	d := PgRowTransformDescriptor{MigrationVersion: pgMigrationRead[int](r, o["migrationVersion"]), Entity: pgMigrationRead[string](r, o["entity"]), Table: pgMigrationRead[string](r, o["table"]), Mode: pgMigrationRead[string](r, o["mode"]), PreviousGeneration: pgMigrationRead[int](r, o["previousGeneration"]), TargetGeneration: pgMigrationRead[int](r, o["targetGeneration"]), FromSchemaSnapshot: pgMigrationRead[string](r, o["fromSchemaSnapshot"]), ToSchemaSnapshot: pgMigrationRead[string](r, o["toSchemaSnapshot"]), FromStorageSnapshot: pgMigrationRead[string](r, o["fromStorageSnapshot"]), ToStorageSnapshot: pgMigrationRead[string](r, o["toStorageSnapshot"]), FromTypeContractHash: pgMigrationRead[string](r, o["fromTypeContractHash"]), ToTypeContractHash: pgMigrationRead[string](r, o["toTypeContractHash"]), SourceSchemaColumns: pgRowColumns(r, o["sourceSchemaColumns"]), TargetSchemaColumns: pgRowColumns(r, o["targetSchemaColumns"]), FieldMapping: pgMigrationReadArray(r, o["fieldMapping"], func(raw json.RawMessage) PgRowFieldMapping { return pgRowMapping(r, raw) }), TransformContractFormat: pgMigrationRead[string](r, o["transformContractFormat"]), TransformContract: r.contract(o["transformContract"]), TransformContractHash: pgMigrationRead[string](r, o["transformContractHash"])}
 	if version >= 2 {
 		d.SourceProjection = pgRowProjectionFields(r, o["sourceProjection"], d.SourceSchemaColumns)
 		d.TargetProjection = pgRowProjectionFields(r, o["targetProjection"], d.TargetSchemaColumns)
@@ -763,7 +765,8 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 		return nil, err
 	}
 	r := &pgMigrationWireReader{}
-	o := r.object(json.RawMessage(payload), "version", "kind", "compilerAbi", "storedValueCompatibility", "databases")
+	o := r.object(json.RawMessage(payload), "version", "kind", "contractEncoding", "compilerAbi", "storedValueCompatibility", "databases")
+	r.contractEncoding(o["contractEncoding"])
 	version := pgMigrationRead[int](r, o["version"])
 	if (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) || pgMigrationRead[string](r, o["kind"]) != "compiled-row-transform-history" || pgMigrationRead[string](r, o["compilerAbi"]) != history.SourceCompilerABI || pgMigrationRead[string](r, o["storedValueCompatibility"]) != history.StoredValueCompatibility {
 		r.fail("row companion format or linked ABI mismatch")
@@ -773,11 +776,12 @@ func pgReadRowCompanion(history PgCompiledMigrationHistory, payload string) ([]P
 		r.fail("row companion database inventory is incomplete")
 	}
 	for i, raw := range dbs {
-		fields := []string{"database", "family", "namespace", "currentVersion", "transforms"}
+		fields := []string{"database", "family", "namespace", "currentVersion", "transforms", "canonicalNodes"}
 		if version == 5 {
 			fields = append(fields, "currentCodecs")
 		}
 		d := r.object(raw, fields...)
+		r.canonicalNodes(d["canonicalNodes"])
 		if i >= len(base) {
 			break
 		}

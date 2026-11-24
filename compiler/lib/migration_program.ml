@@ -18,8 +18,12 @@ type database = {identity:string;family:string;namespace:string;current_version:
  queue_versions:queue_version list}
 type t = {abi:A.t;databases:database list;inputs:(string * string) list;
  queue_bindings:queue_binding list;inventories:(string * Migration_inventory.t) list;
- row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list;validate:(unit -> unit);
- resumed:bool;records:(string * Migration_records.t) list;resumed_through:(string * int) list}
+ row_histories:(string * RH.t) list;contracts:(string * Migration_contract.t list) list;captured_modules:(module_form * string) list Lazy.t;validate:(unit -> unit);
+ resumed:bool;records:(string * Migration_records.published) list;resumed_through:(string * int) list;
+ (* Per database: the emitted fragments stored with the resumed revisions'
+    records (spliceable), and under --full-history the fragments every
+    recorded checkpoint holds (to recompute and compare). *)
+ fragments:(string * Emit_fragment.t list) list;recorded_fragments:(string * Emit_fragment.t list) list}
 let databases t = t.databases
 let contracts t = t.contracts
 let queue_bindings t = t.queue_bindings
@@ -92,9 +96,10 @@ let capture_queue_bindings modules databases inventories =
    | _ -> None) m.decls) modules) databases |> List.sort compare
 let verify_bindings expected modules = protect "<migration build>" (fun () ->
  Option.iter (fun t ->
-  let paths = List.map fst t.inputs @ List.map fst (A.source_inputs t.abi) in
+  let paths = Hashtbl.create 256 in
+  List.iter (fun (path,_) -> Hashtbl.replace paths path ()) (t.inputs @ A.source_inputs t.abi);
   List.iter (fun (m:module_form) ->
-   if not (List.mem (Source_input.canonical_path m.source_file) paths) then
+   if not (Hashtbl.mem paths (Source_input.canonical_path m.source_file)) then
     reject ~code:"MIG013" (Location.dummy_loc m.source_file)
      "compilation selected an import outside its captured source history") modules) expected;
  let actual = candidates modules |> List.map (fun (identity,family,namespace,_) -> identity,family,namespace) |> List.sort compare in
@@ -103,7 +108,7 @@ let verify_bindings expected modules = protect "<migration build>" (fun () ->
   "database history bindings changed during compilation; rebuild from one source snapshot";
  Option.iter (fun t -> if capture_queue_bindings modules t.databases t.inventories <> t.queue_bindings then
   reject ~code:"MIG013" (Location.dummy_loc "<migration build>") "queue history bindings changed during compilation") expected)
-let with_compilation_cache f = Parser.with_module_cache (fun () ->
+let with_compilation_cache f = Source_input.with_scope_path_memo @@ fun () -> Parser.with_module_cache (fun () ->
  Migration_history_sources.with_cache (fun () -> Migration_inventory.with_cache (fun () ->
   Migration_analysis_cache.with_scope f)))
 
@@ -116,7 +121,12 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
  if selected=[] then f None else
  let rec filesystem_root file = let parent=Filename.dirname file in if parent=file then file else filesystem_root parent in
  let input_root = Option.value (Source_input.project_root ()) ~default:(filesystem_root entry_file) in
+ (* An entry buffer equal to the bytes the enclosing view supplies changes
+    nothing that view observes. *)
+ let parent = Source_input.view_token () in
+ let unchanged = (try Source_input.read entry_file = source with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ -> false) in
  Source_input.with_overlays ~project_root:input_root [entry_file,source] (fun () ->
+  (if unchanged then Source_input.with_equivalent_view parent else fun f -> f ()) (fun () ->
   let context = abi (A.current ()) in
   let stored_value_compatibility = A.stored_value_compatibility context in
   abi (A.with_snapshot context (fun () ->
@@ -125,25 +135,30 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
       to these guards; no credentials are copied into the artifact. *)
    let targets = List.map (fun (identity,family,namespace,loc) ->
     let root = target (T.infer_project_root ~entry_file ~database:(Some identity)) in
-    let selected = target (T.resolve_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
+    let selected = target (T.resolve_scoped ~flat_history:true ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~entry_file
       ~database:(Some identity) ~documents:[]) in
     identity,family,namespace,loc,root,selected) selected in
    let guards = List.map (fun (_,_,_,_,_,selected) -> T.source_guard selected) targets in
    let inputs = List.concat_map (fun source_guard -> guard (M.source_files source_guard)) guards |> List.sort_uniq compare in
-   let integrity = List.map (fun (_,_,_,_,root,selected) ->
-    checked(Migration_source_integrity.capture ~project_root:root
+   let integrity = List.map (fun (_,family,_,_,root,selected) ->
+    let history=M.family_history ~project_root:root ~family ~current_version:(T.selection selected).current_version in
+    checked(Migration_source_integrity.capture ~history:(Some history) ~project_root:root
       ~inputs:(guard(M.source_files(T.source_guard selected))))) targets in
    let rec with_integrity captures run = match captures with
     | [] -> run()
     | capture::rest -> checked(Migration_source_integrity.with_captured capture (fun()->with_integrity rest run)) in
-   let result = with_integrity integrity (fun () -> Source_input.with_pinned_files inputs (fun () ->
+   (* [inputs] were read in this view: pinning them freezes what it observes. *)
+   let result = with_integrity integrity (fun () -> let parent = Source_input.view_token () in Source_input.with_pinned_files inputs (fun () -> Source_input.with_equivalent_view parent @@ fun () ->
    let inventories = ref [] and row_histories=ref [] and contracts=ref [] and resumed_any=ref false and records=ref [] and resumed_through=ref [] in
+   let fragments = ref [] and recorded_fragments = ref [] in
+   let input_bytes = Hashtbl.create (List.length inputs) in
+   List.iter (fun (file,bytes) -> if not (Hashtbl.mem input_bytes file) then Hashtbl.add input_bytes file bytes) inputs;
    let databases = List.map (fun (identity,family,namespace,loc,root,selected) ->
     let h = history (H.discover_with_compatibility ~stored_value_compatibility:(Some stored_value_compatibility)
       ~compiler_abi:(A.id context) ~project_root:root ~family) in
     List.iter (fun (file,digest) ->
-     if Option.map Migration_hash.digest (List.assoc_opt file inputs) <> Some digest then
+     if Option.map Migration_hash.digest (Hashtbl.find_opt input_bytes file) <> Some digest then
       reject ~code:"MIG013" (Location.dummy_loc file) "history selected a source outside its captured compilation snapshot")
       (H.source_inputs h);
     let schemas = H.frozen h @ [H.current h] in
@@ -170,18 +185,29 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
          Contract is checked against a plan that contains its predecessor, as
          the current revision's Contract prerequisite requires. *)
       let completed = H.completed_migrations h in
+      (* The newest completed revisions may lack a checkpoint (a revision
+         being frozen has none yet); those revisions are computed like the
+         current one. *)
+      let rec checkpointed = function
+        | [] -> []
+        | (m:H.migration_source) :: rest as newest_first ->
+          if Migration_checkpoint.recorded [m] then List.rev newest_first else checkpointed rest in
+      let completed = checkpointed (List.rev completed) in
       match Migration_checkpoint.load ~project_root:root ~family completed with
       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
       | Some newest when newest.checkpoint.refusal<>None ->
         (match Migration_checkpoint.load_records ~project_root:root ~family ~namespace completed newest with
          | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
          | None -> None
-         | Some records ->
-           match Migration_checkpoint.resumed ~stored_value_compatibility ~gap:2 ~compiler_abi:(A.id context)
+         | Some (records,stored) ->
+           let gap = (H.current h).version - newest.through + 1 in
+           match Migration_checkpoint.resumed ~stored_value_compatibility ~gap ~compiler_abi:(A.id context)
                ~project_root:root ~family h ~through:(H.current h).version with
            | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
            | Some ((usable:Migration_checkpoint.usable),_) as resumed when usable.through=newest.through-1 && usable.checkpoint.refusal<>None ->
-             frozen := Some (newest.through,records); resumed
+             frozen := Some (newest.through,records);
+             fragments := (identity,stored) :: !fragments;
+             resumed
            | _ -> None)
       | _ -> None in
     if resumed<>None && !frozen=None then resumed_any:=true;
@@ -206,7 +232,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
      | Some _,Some (through,_) -> queue_versions (List.filter (fun (s:H.schema) -> s.version>through) schemas) edges
      | Some _,None -> queue_versions [H.current h] edges in
     let queue_versions=match !frozen with
-     | Some (_,(records:Migration_records.t)) -> records.queue_versions @ live_queue_versions
+     | Some (_,(records:Migration_records.published)) -> Migration_records.published_queues records @ live_queue_versions
      | None -> live_queue_versions in
      let inventories = List.map H.inventory schemas in
      (match List.rev inventories with
@@ -270,9 +296,15 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         capture computes only the revisions after its checkpoint. *)
      if source_only && (resumed=None || !frozen<>None) then begin
       let plan=checked(Migration_retained_storage.plan rows) in
-      let prefix,low=match !frozen with Some (through,records) -> records,through+1 | None -> Migration_records.empty,1 in
-      records := (identity,Migration_records.append prefix (Migration_records.of_history ~family ~namespace ~low ~high:max_int ~rows ~plan
-        ~contracts:(List.map Migration_contract.record !contracts_of_capture) ~queue_versions:live_queue_versions)) :: !records;
+      let low=match !frozen with Some (through,_) -> through+1 | None -> 1 in
+      let computed=Migration_records.of_history ~family ~namespace ~low ~high:max_int ~rows ~plan
+        ~contracts:(List.map Migration_contract.record !contracts_of_capture) ~queue_versions:live_queue_versions in
+      let published=match !frozen with
+        | None -> Migration_records.published_of_full computed
+        | Some (_,(prefix:Migration_records.published)) ->
+          {prefix with live=Migration_records.append prefix.live computed;
+           full=lazy (Migration_records.append (Lazy.force prefix.full) computed)} in
+      records := (identity,published) :: !records;
       Option.iter (fun (through,_) -> resumed_through := (identity,through) :: !resumed_through) !frozen
      end
      ;if List.exists (fun inventory -> Migration_inventory.staged_indexes inventory<>[]) inventories then begin
@@ -287,6 +319,9 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
     (* Full-history mode recomputes every recorded checkpoint from the complete
        fold and refuses one that differs (a stale or edited checkpoint). *)
     if Migration_trust.full_history () && resumed=None && Migration_checkpoint.recorded (H.completed_migrations h) then begin
+      (match Migration_checkpoint.verify_summary ~project_root:root ~family h with
+       | () -> ()
+       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors));
       let rows=checked((if List.exists D.queue_transition edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
       let plan=checked(Migration_retained_storage.plan rows) in
       (* Stored records are recomputed from the same complete fold. *)
@@ -297,7 +332,7 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
         ~contracts:(Lazy.force contracts) ~queue_versions in
       match Migration_checkpoint.verify_all ~project_root:root ~family ~compiler_abi:(A.id context)
           ~stored_value_compatibility ~rows ~plan ~records:(namespace,derive) (H.completed_migrations h) with
-      | () -> ()
+      | stored -> recorded_fragments := (identity,stored) :: !recorded_fragments
       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors)
     end;
     let generated = match resumed with
@@ -315,8 +350,15 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
    let queue_bindings=capture_queue_bindings modules databases inventories in
    let row_histories=List.sort compare !row_histories in
    let linked_sources=List.concat_map (fun (_,rows) -> RH.captured_sources rows) row_histories in
+   (* Parsed only by a caller that emits or checks the captured modules; a
+      capture asked for its row histories alone parses none. *)
+   let captured_modules=lazy (
+   let linked = Hashtbl.create 64 in
+   (* The first linked source of each canonical path, as List.find_opt answers. *)
+   List.iter (fun ((m:module_form),captured) -> let path = Source_input.canonical_path m.source_file in
+     if not (Hashtbl.mem linked path) then Hashtbl.add linked path (m,captured)) linked_sources;
    let captured_modules=if not source_only then [] else List.map (fun (path,bytes) ->
-     match List.find_opt (fun (m,_) -> Source_input.canonical_path m.source_file=path) linked_sources with
+     match Hashtbl.find_opt linked path with
      | Some (m,captured) when captured=bytes -> m,bytes
      | Some _ -> reject ~code:"MIG013" (Location.dummy_loc path) "linked module differs from captured history"
      | None -> (if path=entry_file then entry else parse path bytes),bytes) inputs in
@@ -335,19 +377,32 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
        | Some(path,bytes) -> (parse path bytes,bytes)::additions,import.module_name::seen)
         ([],seen) m.imports in
       with_lifted (captured @ List.rev additions) (rest @ List.rev additions) seen in
-   let captured_modules=with_lifted captured_modules captured_modules [] in
-   let validate () =
+   with_lifted captured_modules captured_modules []) in
+   (* The pre-publication guard observes disk anew rather than the
+      compilation's shared disk answers, so an edit made after capture (an
+      application file or a compiler ABI source) is refused. The first
+      validation of a capture reads and hashes every guarded input; later ones
+      within the same command compare lstat identity (Migration_manifest), and
+      a Go emit is published only when every memoized disk answer still
+      matches disk (Compile.compile_go_source). *)
+   let validated = ref false in
+   let validate () = Source_input.with_fresh_path_memo (fun () -> M.with_pass @@ fun () ->
+    let quick = !validated in
     abi (A.verify context);
-    List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate capture))) integrity;
-    Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards);
-    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories in
+    List.iter(fun capture->ignore(checked(Migration_source_integrity.revalidate ~quick capture))) integrity;
+    Source_input.without_pinned_files (fun () -> List.iter (fun source_guard -> guard (M.verify_source ~quick source_guard ~documents:[]);guard (M.verify_disk ~quick source_guard)) guards);
+    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
+    validated := true) in
    let value={abi=context;databases;inputs;queue_bindings;inventories;row_histories;contracts=List.sort compare !contracts;captured_modules;validate;
-     resumed= !resumed_any;records= !records;resumed_through= !resumed_through} in
+     resumed= !resumed_any;records= !records;resumed_through= !resumed_through;
+     fragments= !fragments;recorded_fragments= !recorded_fragments} in
    let result=f (Some value) in
    List.iter (fun (_,rows) -> ignore (checked (RH.revalidate rows))) row_histories;
    result)) in
-   List.iter (fun source_guard -> guard (M.verify_source source_guard ~documents:[]);guard (M.verify_disk source_guard)) guards;
-   result)))))
+   (* The capture's own closing check; publications run [validate] (full) or
+      their own final guard. *)
+   List.iter (fun source_guard -> guard (M.verify_source ~quick:true source_guard ~documents:[]);guard (M.verify_disk ~quick:true ~revisit:true source_guard)) guards;
+   result))))))
 
 let unresumed t =
  if t.resumed then invalid_arg "a checkpoint-resumed history capture cannot publish complete history artifacts"
@@ -396,11 +451,13 @@ let with_source_history ?resume ~entry ~source f =
  capture_history ?resume ~source_only:true ~entry ~source (function
   | None -> f None
   | Some program ->
-   let history={program;active=ref true;lowering=lazy(Go_graph_lowering.lower ~entry (List.map fst program.captured_modules))} in
+   let history={program;active=ref true;lowering=lazy(Go_graph_lowering.lower ~entry (List.map fst (Lazy.force program.captured_modules)))} in
    Fun.protect ~finally:(fun () -> history.active:=false) (fun () -> f (Some history)))
 let source_program source = source.program
-let source_modules source = source.program.captured_modules
+let source_modules source = Lazy.force source.program.captured_modules
 let resumed_through source identity = List.assoc_opt identity source.program.resumed_through
+let fragments source identity = Option.value (List.assoc_opt identity source.program.fragments) ~default:[]
+let recorded_fragments source identity = Option.value (List.assoc_opt identity source.program.recorded_fragments) ~default:[]
 let records source identity = match List.assoc_opt identity source.program.records with
  | Some records -> records
  | None -> invalid_arg "history records are captured only for source histories" 
@@ -408,12 +465,17 @@ let row_histories source = source.program.row_histories
 let source_lowering source = protect "<row source artifacts>" (fun () ->
  if not !(source.active) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "source-history artifact authority escaped its guarded capture scope";
- source.program.validate ();
+ (* A recording emit (Emit_fragment) publishes no artifact: the source and
+    disk guards of the Start preview that asked for it cover its inputs. *)
+ if not (Emit_fragment.recording ()) then source.program.validate ();
  match Lazy.force source.lowering with Ok graph -> graph | Error message ->
  reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>") message)
 let verify_source_history source modules = protect "<row source artifacts>" (fun () ->
  let graph=checked(source_lowering source) in
  let expected=Go_graph_lowering.modules graph in
- let order=List.sort (fun a b -> compare a.source_file b.source_file) in
- if order expected <> order modules then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
+ let order=List.stable_sort (fun a b -> compare a.source_file b.source_file) in
+ (* Usually the very modules the lowering produced: comparing them physically
+    first avoids a structural walk of every module's syntax tree. *)
+ let same a b = List.length a = List.length b && List.for_all2 (fun x y -> x == y || x = y) a b in
+ if not (same (order expected) (order modules)) then reject ~code:"MIG013" (Location.dummy_loc "<row source artifacts>")
   "row artifact graph differs from the complete captured and lowered source graph")
