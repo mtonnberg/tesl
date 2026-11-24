@@ -121,11 +121,11 @@ let walk_all ?kind:kind_of ?names:names_of ~disk ~digest ~excluded trees =
     | Some _ -> raise (Unobservable tree) in
   let collected = List.map (fun tree -> tree,collect tree) trees in
   let newest = newest_checkpoint (List.concat_map (fun (_,entries) ->
-    List.filter_map (fun (path,dir) -> if dir || Path_set.mem path excluded then None else Some path)
+    List.filter_map (fun (path,dir) -> if dir || excluded path then None else Some path)
       (Option.value entries ~default:[])) collected) in
   List.map (fun (tree,entries) -> {tree;entries=Option.map (List.map (fun (path,dir) ->
     if dir then path,Dir
-    else if Path_set.mem path excluded then path,Present
+    else if excluded path then path,Present
     else match checkpoint_version path with
       | Some n when Some n <> newest -> path,Present
       | _ -> path,File (digest path))) entries}) collected
@@ -342,7 +342,7 @@ let verify_files ?(quick=false) t disk = (if disk then Source_input.with_fresh_p
        it supplies; every other path is read from disk, and the disk walk of
        the same pass checks those when both views were captured equal. *)
     if not disk && quick_view && h.source_walk = h.disk_walk && verified_source_view h then () else
-    match walk_all ?kind:(if disk then Some disk_kind else None) ?names:(if disk then Some listing else None) ~disk ~digest ~excluded:(Path_set.of_list h.excluded) h.trees with
+    match walk_all ?kind:(if disk then Some disk_kind else None) ?names:(if disk then Some listing else None) ~disk ~digest ~excluded:(let set = Path_set.of_list h.excluded in fun p -> Path_set.mem p set) h.trees with
     | actual ->
       if not (same_walks h.excluded actual expected) &&
          history_digest t.root h.excluded actual <> history_digest t.root h.excluded expected then
@@ -501,7 +501,7 @@ let create_with ~history ~observed ~project_root:root ~reads ~directories ~impor
           | None -> plain_digest ~disk path
           | Some _ -> (match file_bytes ~disk path with Some bytes -> hash bytes | None -> raise (Unobservable path)) in
         let excluded_set = Path_set.of_list excluded in
-        let walk ~disk = walk_all ~disk ~digest:(digest ~disk) ~excluded:excluded_set trees in
+        let walk ~disk = walk_all ~disk ~digest:(digest ~disk) ~excluded:(fun p -> Path_set.mem p excluded_set) trees in
         let guarded = Path_set.of_list (List.map (fun g -> g.file) files) in
         let covered = List.filter (fun path -> not (Path_set.mem path guarded) &&
           List.exists (fun tree -> inside_tree tree path) trees) all_reads in

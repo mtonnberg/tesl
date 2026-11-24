@@ -256,7 +256,18 @@ let tampered () = with_history (fun _ path entry ->
     let output = with_full_history full (fun () -> emit entry) in
     check bool ("an edited checkpoint fails emission:\n" ^ output) true
       (String.starts_with ~prefix:"failed\n" output && contains output "MIG013");
-    check bool "application diagnostics report MIG013" true
+    (* An older checkpoint's bytes are covered by the digest in its revision's
+       frozen-source block, checked where the checkpoint is read (emission);
+       diagnostics read it only under full history, as the newest checkpoint's
+       history summary stands for the trust checks of older revisions. *)
+    if full then check bool "full-history diagnostics report MIG013" true
+      (contains (with_full_history full (fun () -> check_file entry)) "MIG013")) [false; true];
+  (* The newest checkpoint: its history summary is not used, and diagnostics
+     report it in both modes. *)
+  let newest = checkpoint path 4 in
+  write newest (read newest ^ "x");
+  List.iter (fun full ->
+    check bool "diagnostics report an edited newest checkpoint" true
       (contains (with_full_history full (fun () -> check_file entry)) "MIG013")) [false; true])
 
 let stale_rejected_by_full_history () = with_history (fun root path entry ->
@@ -324,11 +335,12 @@ let records_written () = with_history (fun _ path entry ->
 let strip_fragments text =
   let facts = String.index text '\n' + 1 in
   let _,facts_end = Migration_canonical.parse_at text ~from:facts in
-  let body = String.sub text (facts_end+1) (String.length text - facts_end - 2) in
+  let _,summary_end = Migration_canonical.parse_at text ~from:(facts_end+1) in
+  let body = String.sub text (summary_end+1) (String.length text - summary_end - 2) in
   match Migration_canonical.parse body with
   | Migration_canonical.Seq children ->
     let children = List.rev (Migration_canonical.Seq [] :: List.tl (List.rev children)) in
-    String.sub text 0 (facts_end+1) ^ Migration_canonical.encode (Migration_canonical.Seq children) ^ "\n"
+    String.sub text 0 (summary_end+1) ^ Migration_canonical.encode (Migration_canonical.Seq children) ^ "\n"
   | Migration_canonical.Bytes _ -> fail "malformed checkpoint"
 
 (* A consistently re-recorded record is published by a normal build (its seal
@@ -394,13 +406,45 @@ let other_namespace () = with_history (fun _ _ entry ->
 (* A checkpoint in an earlier format came from an earlier compiler: ignored. *)
 let earlier_format_ignored () = with_history (fun _ path entry ->
   List.iter (fun version -> rewrite_checkpoint path version (fun text ->
-    replace "tesl-migration-checkpoint-v4\n" "tesl-migration-checkpoint-v3\n" text)) [2;3;4];
+    replace "tesl-migration-checkpoint-v5\n" "tesl-migration-checkpoint-v4\n" text)) [2;3;4];
   check (option int) "an earlier format is not resumed" None (with_full_history false (fun () -> resumed_through entry));
   let reference = with_full_history true (fun () -> emit entry) in
   check bool "the history emits" true (String.starts_with ~prefix:"ok\n" reference);
   check string "normal emission agrees" reference (with_full_history false (fun () -> emit entry)))
 
+(* The newest checkpoint's history summary: recorded at freeze, verified by one
+   walk of the frozen trees, and unused when anything it describes changed. *)
+let summary root = Migration_program.with_compilation_cache (fun () ->
+  Option.map (fun s -> Migration_history_summary.through s, Migration_history_summary.sealed s)
+    (Migration_history_summary.find ~project_root:root ~family:"Schema.Scale"))
+let summary_used () = with_history (fun root path entry ->
+  (match Migration_history_summary.of_checkpoint ~project_root:root (read (checkpoint path 4)) with
+   | Some s -> check (list int) "the seals that held" [2;3;4] (Migration_history_summary.sealed s)
+   | None -> fail "no summary recorded");
+  check (option (pair int (list int))) "the newest summary verifies" (Some (4,[2;3;4])) (summary root);
+  let reference = with_full_history true (fun () -> emit entry) in
+  check string "normal emission agrees with full history" reference (with_full_history false (fun () -> emit entry));
+  let stray = path "migrations/scale/notes.md" in
+  write stray "notes";
+  check (option (pair int (list int))) "an added file leaves it unused" None (summary root);
+  check string "and the build is unchanged" reference (with_full_history false (fun () -> emit entry));
+  Sys.remove stray;
+  let frozen = path "schema/scale/v2.tesl" in
+  write frozen (read frozen ^ "\n# edited\n");
+  check (option (pair int (list int))) "an edited frozen source leaves it unused" None (summary root);
+  check bool "and is reported" true (contains (with_full_history false (fun () -> check_file entry)) "MIG013"))
+let summary_forged () = with_history (fun root path entry ->
+  rewrite_checkpoint path 4 (fun text -> replace "l3:s1:2s1:3s1:4" "l2:s1:3s1:4" text);
+  check (option (pair int (list int))) "the edited summary verifies" (Some (4,[3;4])) (summary root);
+  check bool "a normal build checks the revision it leaves out" true
+    (String.starts_with ~prefix:"ok\n" (with_full_history false (fun () -> emit entry)));
+  let full = with_full_history true (fun () -> emit entry) in
+  check bool ("full history refuses it:\n" ^ full) true
+    (String.starts_with ~prefix:"failed\n" full && contains full "history summary"))
+
 let () = run "Migration checkpoints" [
+  "summary", [ test_case "the newest summary stands for the frozen history" `Slow summary_used;
+               test_case "full history refuses an edited summary" `Slow summary_forged ];
   "written", [ test_case "Start writes sealed checkpoints" `Slow written ];
   "resume", [ test_case "a resumed prefix equals the complete fold" `Slow resume_equals_fold;
               test_case "a resumed capture agrees and cannot publish" `Slow resumed_capture ];

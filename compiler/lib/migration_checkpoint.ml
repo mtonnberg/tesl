@@ -57,7 +57,8 @@ type t = {
 
 let format = Migration_module_facts.checkpoint_format
 (* Written by earlier compilers, whose ABI never matches this one. *)
-let earlier_formats = ["tesl-migration-checkpoint-v1";"tesl-migration-checkpoint-v2";"tesl-migration-checkpoint-v3"]
+let earlier_formats = ["tesl-migration-checkpoint-v1";"tesl-migration-checkpoint-v2";"tesl-migration-checkpoint-v3";
+  "tesl-migration-checkpoint-v4"]
 exception Invalid of S.error list
 exception Earlier_format
 let reject file message = raise (Invalid [{S.code="MIG013";loc=Location.dummy_loc file;message;related=[]}])
@@ -82,8 +83,10 @@ let encode_error ~project_root (e:S.error) =
       int loc.start.line;int loc.start.col;int loc.stop.line;int loc.stop.col;atom text]) e.related)]
 
 (* The facts section precedes the state so a reader can take the facts without
-   decoding the rest (Migration_module_facts.load_checkpoint). *)
-let encode ~project_root ~facts t =
+   decoding the rest (Migration_module_facts.load_checkpoint); the history
+   summary (Migration_history_summary; an empty list when none could be taken)
+   follows it, so a reader takes it without decoding the state. *)
+let encode ~project_root ~facts ?summary t =
   let node = C.Seq [atom format;atom t.family;int t.version;atom t.compiler_abi;atom t.stored_value_compatibility;
     atom t.chain;
     C.Seq (List.map (fun (identity,generation) -> C.Seq [atom identity;int generation]) t.prefix.generations);
@@ -91,7 +94,8 @@ let encode ~project_root ~facts t =
     C.Seq (match t.refusal with None -> [] | Some errors -> [C.Seq (List.map (encode_error ~project_root) errors)]);
     C.Seq (match t.records with None -> [] | Some (namespace,records) -> [atom namespace;Migration_records.encode records]);
     C.Seq (List.map Emit_fragment.encode t.fragments)] in
-  format ^ "\n" ^ C.encode (Migration_module_facts.encode ~compiler_abi:t.compiler_abi facts) ^ "\n" ^ C.encode node ^ "\n"
+  format ^ "\n" ^ C.encode (Migration_module_facts.encode ~compiler_abi:t.compiler_abi facts) ^ "\n" ^
+  C.encode (Option.value summary ~default:(C.Seq [])) ^ "\n" ^ C.encode node ^ "\n"
 
 let parse_node = C.parse
 
@@ -102,7 +106,9 @@ let decode ~project_root text =
   if not (String.starts_with ~prefix:header text && String.ends_with ~suffix:"\n" text) then fail ();
   let _,facts_end = C.parse_at text ~from:(String.length header) in
   if facts_end >= String.length text || text.[facts_end] <> '\n' then fail ();
-  let body = String.sub text (facts_end+1) (String.length text - facts_end - 2) in
+  let _,summary_end = C.parse_at text ~from:(facts_end+1) in
+  if summary_end >= String.length text || text.[summary_end] <> '\n' then fail ();
+  let body = String.sub text (summary_end+1) (String.length text - summary_end - 2) in
   let str = function C.Bytes s -> s | C.Seq _ -> fail () in
   let num n = match int_of_string_opt (str n) with Some n -> n | None -> fail () in
   let items = function C.Seq xs -> xs | C.Bytes _ -> fail () in
@@ -165,7 +171,7 @@ let facts ~project_root (m : H.migration_source) =
         | Parser.Ok parsed -> Some (Migration_hash.digest bytes,Migration_module_facts.of_module parsed)
         | Parser.Err _ -> None) modules
 
-let text ~project_root ~family ~compiler_abi ~stored_value_compatibility ~chain ~facts ~rows ~plan ?prior_refusal ?records ?(fragments=[]) ~through () =
+let text ~project_root ~family ~compiler_abi ~stored_value_compatibility ~chain ~facts ?summary ~rows ~plan ?prior_refusal ?records ?(fragments=[]) ~through () =
   match RS.prefix_state plan ~through with
   | None -> None
   | Some retained ->
@@ -177,7 +183,7 @@ let text ~project_root ~family ~compiler_abi ~stored_value_compatibility ~chain 
         | _ -> Migration_expansion.refusal ~edges:(List.filter (fun d -> D.version d<=through) (RH.declarations rows)) in
       match (if through=1 then None else chain_digest chain ~through) with
       | None -> None
-      | Some chain -> Some (encode ~project_root ~facts {family;version=through;compiler_abi;stored_value_compatibility;chain;prefix;refusal;records;fragments})
+      | Some chain -> Some (encode ~project_root ~facts ?summary {family;version=through;compiler_abi;stored_value_compatibility;chain;prefix;refusal;records;fragments})
 
 (* Root digest recorded in each completed migration's frozen-source block. *)
 let chain ~project_root:_ (completed : H.migration_source list) =
@@ -271,6 +277,68 @@ let records_for ~family ~namespace ~through ~rows ~plan ~contracts ~queue_versio
   if versions<>List.init (through-low+1) (fun i -> low+i) then None else
   Some (namespace,Migration_records.of_history ~family ~namespace ~low ~high:through ~rows ~plan ~contracts ~queue_versions)
 
+(* The bounds of a checkpoint text's history summary section. *)
+let summary_bounds text =
+  let header = format ^ "\n" in
+  if not (String.starts_with ~prefix:header text) then None else
+  match C.parse_at text ~from:(String.length header) with
+  | exception Invalid_argument _ -> None
+  | _,facts_end when facts_end < String.length text && text.[facts_end] = '\n' ->
+    (match C.parse_at text ~from:(facts_end+1) with
+     | exception Invalid_argument _ -> None
+     | _,stop -> Some (facts_end+1,stop))
+  | _ -> None
+(* [text] with the summary section of [recorded]. *)
+let with_summary_of ~recorded text = match summary_bounds recorded, summary_bounds text with
+  | Some (a,b), Some (c,d) -> String.sub text 0 c ^ String.sub recorded a (b-a) ^ String.sub text d (String.length text - d)
+  | _ -> text
+
+(* The history summary of a checkpoint through [through] with [h] discovered in
+   the active view (Migration_history_summary). The completed revisions whose
+   seals hold are taken from the previous checkpoint's summary when it still
+   holds in this view (they are the same function of the same bytes), and
+   checked otherwise; never from a summary under --full-history. *)
+let summary_node ~project_root ~family ~through ~compiler:(abi,stored) h =
+  let module Sm = Migration_history_summary in
+  let previous = if Migration_trust.full_history () then None else
+    match Sm.find ~project_root ~family with
+    | Some s when Sm.through s < through -> Some s
+    | _ -> None in
+  let sealed = List.filter_map (fun (m:H.migration_source) ->
+    if m.version > through then None else
+    let holds = match previous with
+      | Some s when m.version <= Sm.through s && Sm.file_digest s m.path = Some (Migration_hash.digest m.contents) ->
+        List.mem m.version (Sm.sealed s)
+      | _ -> Migration_trust.seals_hold ~project_root ~compiler:(abi,stored) ~file:m.path ~source:m.contents in
+    if holds then Some m.version else None) (H.completed_migrations h) in
+  Sm.compute ~project_root ~family ~through ~compiler_abi:abi ~stored_value_compatibility:stored ~modules:(H.modules h) ~sealed
+
+(* Full-history check of the newest checkpoint's history summary: recomputed
+   from the complete discovery and seal checks, it must be byte for byte the
+   recorded one whenever its frozen-history digest is the recorded digest (a
+   summary whose digest differs is never used). *)
+let verify_summary ~project_root ~family h =
+  let root = Source_input.realpath project_root in
+  match List.rev (H.completed_migrations h), Migration_trust.current_compiler () with
+  | newest :: _, Some compiler ->
+    (match Migration_closure.read ~file:newest.path newest.contents with
+     | Ok (Some located) when Migration_closure.checkpoint located <> None ->
+       let file = Migration_closure.checkpoint_file newest.path in
+       let bytes = Source_input.read file in
+       (match Migration_history_summary.of_checkpoint ~project_root:root bytes, summary_bounds bytes with
+        | Some recorded, Some (a,b) when Migration_history_summary.through recorded = newest.version &&
+            (Migration_history_summary.compiler recorded = compiler) ->
+          (match summary_node ~project_root:root ~family ~through:newest.version ~compiler h with
+           | Some node ->
+             let fresh = C.encode node in
+             if fresh <> String.sub bytes a (b-a) &&
+                Migration_history_summary.digest recorded = Migration_history_summary.digest (Migration_history_summary.decode ~project_root:root node) then
+               reject file "the history summary of the newest migration checkpoint differs from the full-history recomputation; regenerate it from the revision's source"
+           | None -> ())
+        | _ -> ())
+     | _ -> ())
+  | _ -> ()
+
 (* Full-history check: every recorded checkpoint whose compiler matches this one
    must equal the checkpoint recomputed from the complete fold. Its records are
    compared when they were recorded for the namespace this build checks. Its
@@ -302,7 +370,7 @@ let verify_all ~project_root ~family ~compiler_abi ~stored_value_compatibility ~
           let fragments = match recorded with `Recorded r -> r.fragments | _ -> [] in
           let expected = text ~project_root:root ~family ~compiler_abi ~stored_value_compatibility ~chain
             ~facts:(facts ~project_root:root m) ~rows ~plan ?records ~fragments ~through:m.version () in
-          if expected <> Some bytes then
+          if Option.map (with_summary_of ~recorded:bytes) expected <> Some bytes then
             reject file (Printf.sprintf "migration checkpoint v%d differs from the full-history recomputation; regenerate it from the revision's source" m.version);
           fragments)
         (Migration_closure.checkpoint located) |> Option.value ~default:[]
@@ -384,8 +452,9 @@ let derive ?stored_value_compatibility ?namespace ?check_contract ?fragments ~co
     match Migration_trust.current_compiler (),List.find_opt (fun (m:H.migration_source) -> m.version=through) completed with
     | None,_ | _,None -> None
     | Some (abi,stored),Some newest ->
+      let summary = summary_node ~project_root:root ~family ~through ~compiler:(abi,stored) h in
       text ~project_root:root ~family ~compiler_abi:abi ~stored_value_compatibility:stored
-        ~chain:(chain ~project_root:root completed) ~facts:(facts ~project_root:root newest) ~rows ~plan ?prior_refusal ?records ?fragments ~through ()
+        ~chain:(chain ~project_root:root completed) ~facts:(facts ~project_root:root newest) ?summary ~rows ~plan ?prior_refusal ?records ?fragments ~through ()
   with Invalid _ | Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ | Not_found -> None
 
 let recorded (completed : H.migration_source list) =

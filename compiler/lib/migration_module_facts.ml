@@ -63,10 +63,16 @@ let load node =
         if Hashtbl.length recorded > 65536 then Hashtbl.reset recorded;
         List.iter (fun (digest, t) -> Hashtbl.replace recorded digest t) entries end
 
+(* Facts a verified history summary records (Migration_history_summary). *)
+let add ~compiler_abi entries =
+  if not (!disabled ()) && Some compiler_abi = !current_abi () then begin
+    if Hashtbl.length recorded > 65536 then Hashtbl.reset recorded;
+    List.iter (fun (digest, t) -> Hashtbl.replace recorded digest t) entries end
+
 (* A revision checkpoint (Migration_checkpoint) starts with its format line and
    then this section. [text] must already have verified against its recorded
    digest. *)
-let checkpoint_format = "tesl-migration-checkpoint-v4"
+let checkpoint_format = "tesl-migration-checkpoint-v5"
 let load_checkpoint text =
   let header = checkpoint_format ^ "\n" in
   if not (!disabled ()) && String.starts_with ~prefix:header text then

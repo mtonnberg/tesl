@@ -551,6 +551,23 @@ instead of re-deriving every revision, when:
 | the checkpoint names the running compiler ABI and stored-value identity | it is ignored and history is folded from V1 |
 | its recorded migration hashes equal the files' recorded hashes | `MIG013`: restore the checkpoint written with this revision |
 
+**History summary.** The newest checkpoint also holds a summary of the frozen
+history as it was when revision N was frozen: one hash over the `schema/<family>`
+and `migrations/<family>` trees through revision N (every source without its
+`# tesl:frozen-migration` block, every checkpoint by presence only, nothing of
+revision N+1 or `VCurrent`), the declared name and imports of every frozen module,
+and the revisions whose trust seals held. A command walks and hashes the two trees
+once; when that hash matches and the checkpoint names the running compiler ABI and
+stored-value identity, it takes the frozen modules and the trust of revisions
+V2..N from the summary instead of reading, parsing and re-checking every revision.
+Anything else (an edited or added file, a newer frozen revision without a
+checkpoint, another compiler, a symbolic link in the trees) leaves the summary
+unused and every revision is checked as before. An older checkpoint's bytes are
+checked against the hash in its revision's frozen-source block where they are
+read (emission, full history), not by every diagnostic. Full-history mode never
+uses the summary, recomputes the newest one, and refuses one that differs
+(`MIG013`).
+
 Independently of checkpoints, a frozen schema snapshot covered by a trusted
 later revision is loaded only when a check needs it, and its modules are not
 type- and proof-checked again: a trusted seal recorded exactly their bytes from

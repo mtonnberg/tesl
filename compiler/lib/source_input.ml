@@ -451,6 +451,12 @@ let with_equivalent_view parent f =
   end
 
 let recorded_answer show f = answer show (outcome f)
+(* Run [f] without recording its observations into the judgments recording
+   around it (a recording started inside [f] still sees its own). *)
+let unrecorded f =
+  let saved = !recorders in
+  recorders := [];
+  Fun.protect ~finally:(fun () -> recorders := saved) f
 let recording f =
   let recorder = ref [] in
   recorders := recorder :: !recorders;

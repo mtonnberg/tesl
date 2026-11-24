@@ -28,6 +28,10 @@ type t = {
   source_inputs : (string * string) list;
   revision_directories : (string * (int * string) list) list;
   import_resolutions : (string * string * string) list;
+  (* Every module discovery read, with its parse facts. *)
+  modules : (string * Migration_module_facts.t) list;
+  (* The verified summary of the frozen history this discovery used, if any. *)
+  summary : Migration_history_summary.t option;
 }
 
 let current history = history.current
@@ -36,6 +40,8 @@ let completed_migrations history = history.completed_migrations
 let current_migration history = history.current_migration
 let contracts history = history.contracts
 let source_inputs history = history.source_inputs
+let modules history = history.modules
+let summary history = history.summary
 
 exception Invalid of error
 let reject ?(kind=Invalid_layout) path message =
@@ -106,14 +112,19 @@ let protect anchor f =
       message=Printf.sprintf "%s: %s: %s" operation path (Unix.error_message error)}
 
 let check_inputs history =
+  (* Inputs a summary still verified in this view covers are unchanged. *)
+  let covered = match Option.bind history.summary Migration_history_summary.current with
+    | Some s -> Migration_history_summary.covers s
+    | None -> fun _ -> None in
   Option.iter (fun (directory,entries) -> if scan_contracts directory<>entries then
     reject ~kind:Changed_source directory "contract directory changed during discovery") history.contract_directory;
-  List.iter (fun (path, digest) ->
+  List.iter (fun (path, digest) -> if covered path <> Some digest then begin
     require_regular path;
     if Migration_hash.digest (Source_input.read path) <> digest then
-      reject ~kind:Changed_source path "schema history source changed after it was read") history.source_inputs;
+      reject ~kind:Changed_source path "schema history source changed after it was read" end) history.source_inputs;
   List.iter (fun (source, name, expected) ->
-    if Validation_common.resolve_local_import_path source name <> expected then
+    if (covered source = None || covered expected = None) &&
+       Validation_common.resolve_local_import_path source name <> expected then
       reject ~kind:Changed_source source ("schema history import resolution changed: " ^ name)) history.import_resolutions;
   List.iter (fun (directory, entries) ->
     if scan ~optional:true directory <> entries then
@@ -164,6 +175,15 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
           (Printf.sprintf "missing frozen schema V%d; source history cannot be pruned without environment evidence" expected);
         contiguous (expected + 1) rest in
     contiguous 1 snapshots;
+    (* The newest checkpoint's summary of the frozen history, when its digest
+       still holds in this view with this revision current: the frozen modules
+       it covers are taken from it instead of being read, parsed, and their
+       imports resolved again (Migration_history_summary). *)
+    let summary = match Migration_history_summary.find ~project_root:root ~family with
+      | Some s when Migration_history_summary.through s < current_version -> Some s
+      | _ -> None in
+    let summary_digest path = match summary with Some s -> Migration_history_summary.covers s path | None -> None in
+    let summarized path = match summary with Some s -> Migration_history_summary.facts s path | None -> None in
     List.iter (fun (version, path) ->
       if version < 2 || version > current_version then reject path
         (Printf.sprintf "migration V%d has no consecutive source/target schema pair" version)) migration_files;
@@ -175,6 +195,14 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
       | Some entry -> entry
       | None ->
         let path = module_path name in
+        match summary_digest path, summarized path with
+        | Some digest, Some facts ->
+          if facts.Migration_module_facts.module_name <> name then reject path ("history module must declare " ^ name);
+          let entry = Migration_closure.Recorded facts, lazy (Source_input.read path) in
+          Hashtbl.add sources path digest;
+          Hashtbl.add parsed name entry;
+          entry
+        | _ ->
         require_regular path;
         let contents = Source_input.read path in
         (* Recorded parse facts of a frozen module's bytes stand for its parse
@@ -184,14 +212,17 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
           | Error error -> raise (Invalid {kind=Invalid_source; loc=error.loc; message=error.msg}) in
         if (Migration_closure.parsed_facts m).module_name <> name then reject path ("history module must declare " ^ name);
         Hashtbl.add sources path (Migration_hash.digest contents);
-        Hashtbl.add parsed name (m, contents);
-        m, contents in
+        Hashtbl.add parsed name (m, Lazy.from_val contents);
+        m, Lazy.from_val contents in
     let imports m = (Migration_closure.parsed_facts m).Migration_module_facts.imports in
     let check_import source imported =
       let expected = module_path imported in
-      let resolved = Validation_common.resolve_local_import_path source imported in
-      if resolved <> expected then reject resolved
-        ("history import must resolve to its canonical module path: " ^ expected);
+      (* Between summarized modules the summary's digest fixes resolution. *)
+      if summary_digest source = None || summary_digest expected = None then begin
+        let resolved = Validation_common.resolve_local_import_path source imported in
+        if resolved <> expected then reject resolved
+          ("history import must resolve to its canonical module path: " ^ expected)
+      end;
       import_resolutions := (source, imported, expected) :: !import_resolutions in
     let schema_modules = Hashtbl.create 32 in
     let rec visit_schema prefix name =
@@ -275,7 +306,8 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
       let name = Printf.sprintf "%s.Migrate.V%d" family version in
       visit_migration name;
       let _, contents = read_module name in
-      {version; path; contents; source_digest=Migration_hash.digest contents} in
+      let contents = Lazy.force contents in
+      {version; path; contents; source_digest=Option.value (summary_digest path) ~default:(Migration_hash.digest contents)} in
     let migrations = if include_migrations then List.map (fun (version, path) -> read_migration version path) migration_files else [] in
     let find version = List.find_opt (fun (source : migration_source) -> source.version = version) migrations in
     let completed_migrations = if not include_migrations then [] else List.filter_map (fun (schema : schema) ->
@@ -289,12 +321,15 @@ let inspect_with ~capture ~stored_value_compatibility ~include_migrations ~compi
       let name=Printf.sprintf "%s.Migrate.V%dContract" family version in
       visit_migration name;
       let _,contents=read_module name in
-      {version;path;contents;source_digest=Migration_hash.digest contents}) contract_files in
+      let contents=Lazy.force contents in
+      {version;path;contents;source_digest=Option.value (summary_digest path) ~default:(Migration_hash.digest contents)}) contract_files in
     let source_inputs = Hashtbl.to_seq sources |> List.of_seq |> List.sort compare in
     let history = {current; frozen; completed_migrations; current_migration=find current_version; contracts;
       contract_directory=(if include_migrations then Some(migration_dir,contract_files) else None); source_inputs;
       import_resolutions=List.sort_uniq compare !import_resolutions;
-      revision_directories=[schema_dir, snapshots; migration_dir, migration_files]} in
+      revision_directories=[schema_dir, snapshots; migration_dir, migration_files];
+      modules=Hashtbl.fold (fun name (m,_) acc -> (module_path name,Migration_closure.parsed_facts m) :: acc) parsed [] |> List.sort compare;
+      summary} in
     check_inputs history;
     Option.iter (fun capture -> capture := Some {full=history;specs=List.rev !specs;schema_inputs;schema_imports;
       loader=load_inventory}) capture;
@@ -321,6 +356,17 @@ let stdlib_inputs () =
    | None -> raise Not_found
    | Some path -> path,Source_input.read path) Validation_common.lifted_stdlib_sources)
  with Not_found | Sys_error _ | Unix.Unix_error _ -> None
+(* A discovery that took frozen modules from a history summary did not record
+   reading them: in another view it holds only while a summary verifies there
+   and its walk read every one of them with the bytes discovery recorded. *)
+let summarized_unchanged history = match history.summary with
+  | None -> true
+  | Some s -> match Migration_history_summary.current s with
+    | None -> false
+    | Some s -> List.for_all (fun (path,digest) ->
+        match Migration_history_summary.facts s path with
+        | None -> true
+        | Some _ -> Migration_history_summary.covers s path = Some digest) history.source_inputs
 let inspect_uncached ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family = inspect_with ~capture:None ~stored_value_compatibility ~include_migrations ~compiler_abi ~project_root ~family
 (* One discovery serves every caller of a command: the core is discovered once
    with migrations, and each (stored-value label, migrations) view of it is
@@ -379,7 +425,7 @@ let inspect ~stored_value_compatibility ~include_migrations ~compiler_abi ~proje
    let cached = Option.bind (Hashtbl.find_opt cores key) (fun entry ->
      match entry.verified_views with
      | tokens when List.exists Source_input.same_view tokens -> Some entry
-     | token :: _ when Source_input.same_reads token entry.reads ->
+     | token :: _ when Source_input.same_reads token entry.reads && summarized_unchanged entry.core.full ->
        entry.verified_views <- Source_input.view_token () :: entry.verified_views; Some entry
      | _ ->
        match verify_unchanged entry.core.full with

@@ -51,6 +51,10 @@ val contracts : t -> migration_source list
     migration modules. The caller must additionally guard file creations and
     directory membership when applying a generated multi-file manifest. *)
 val source_inputs : t -> (string * string) list
+(** Every module discovery read (absolute path), with its parse facts. *)
+val modules : t -> (string * Migration_module_facts.t) list
+(** The verified frozen-history summary discovery used (Migration_history_summary). *)
+val summary : t -> Migration_history_summary.t option
 
 (** Recheck source bytes, regular canonical paths, and revision-root membership
     before deriving a preview from this inventory. This is not an atomic apply

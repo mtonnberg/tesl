@@ -52,6 +52,10 @@ val recording : (unit -> 'a) -> 'a * observation list
     repeated in the current view, gets the same answer (equal bytes for a
     read). *)
 val same_reads : view_token -> observation list -> bool
+(** Run [f] without recording its observations into the judgments recording
+    around it. Only for an answer whose dependence those judgments check on
+    their own when they reuse it (Migration_history_summary). *)
+val unrecorded : (unit -> 'a) -> 'a
 (** Whether compiler resources are pinned in the current scope. *)
 val has_pinned_files : unit -> bool
 

@@ -310,6 +310,9 @@ let capture_history ?(resume=false) ~source_only ~entry ~source f = with_compila
     (* Full-history mode recomputes every recorded checkpoint from the complete
        fold and refuses one that differs (a stale or edited checkpoint). *)
     if Migration_trust.full_history () && resumed=None && Migration_checkpoint.recorded (H.completed_migrations h) then begin
+      (match Migration_checkpoint.verify_summary ~project_root:root ~family h with
+       | () -> ()
+       | exception Migration_checkpoint.Invalid errors -> raise (Invalid errors));
       let rows=checked((if List.exists D.queue_transition edges then RH.check_queue_expansion else RH.check) ~schemas:inventories ~edges) in
       let plan=checked(Migration_retained_storage.plan rows) in
       (* Stored records are recomputed from the same complete fold. *)

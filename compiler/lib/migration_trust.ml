@@ -106,6 +106,29 @@ let () =
 (* Self-contained decision for a saved completed migration file reached only as
    history (not the module being queried). Any failure means "not trusted"; the
    caller then runs the full check, which reports the precise diagnostic. *)
+(* Whether completed migration [file] with exactly [source] has seals that hold
+   under [compiler]: its frozen closure and both schema seals match the bytes
+   they record, which were recorded by this compiler ABI and stored-value
+   contract. The trust condition itself, whatever the full-history setting
+   (a history summary records it, Migration_history_summary). *)
+let seals_hold ~project_root ~compiler:(compiler_abi, contract) ~file ~source =
+  try
+    match Migration_header.read ~file source, Migration_closure.read ~file source with
+    | Ok (Some located), Ok (Some closure) ->
+      let previous, current = Migration_header.roots located in
+      let migration_module = Migration_header.module_name located in
+      Validation_common.schema_module_relative_path migration_module
+        |> Option.map (Filename.concat project_root) = Some file &&
+      Migration_closure.verify ~project_root ~root_file:file ~source closure = Ok () &&
+      (match Migration_header.verify ~project_root ~migration_module ~previous ~current located with
+       | Ok checked ->
+         let previous, current = Migration_header.seals checked in
+         completed (Migration_seal.root_module current) &&
+         same_compiler ~compiler_abi ~stored_value_compatibility:(Some contract) [previous; current]
+       | Error _ -> false)
+    | _ -> false
+  with Sys_error _ | Unix.Unix_error _ | Invalid_argument _ | Failure _ | Not_found -> false
+
 let edge_uncached ~project_root ~compiler ~file ~source =
   if full_history () then None
   else match compiler with
@@ -141,6 +164,14 @@ let edge_memo : (string * string * string * (string * string) option,
   Migration_analysis_cache.create ~limit:4096
 let edge ~project_root ~compiler ~file ~source =
   if full_history () then None else
+  (* A completed revision below the newest checkpoint, unchanged since that
+     checkpoint's verified history summary recorded that its seals held. *)
+  match compiler with
+  | Some compiler when Migration_history_summary.sealed_edge ~project_root ~compiler ~file ~source ->
+    let root = match Migration_header.read ~file source with
+      | Ok (Some located) -> Migration_header.module_name located | _ -> file in
+    trusted_log := root :: !trusted_log; Some { root }
+  | _ ->
   let key = project_root,file,Migration_hash.digest source,compiler in
   let decide () =
     let token = Source_input.view_token () in
