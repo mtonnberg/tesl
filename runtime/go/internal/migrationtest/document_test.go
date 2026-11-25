@@ -62,8 +62,8 @@ func TestNormativeSQLFencesAreClassified(t *testing.T) {
 		root = filepath.Join("..", "..", "..", "..")
 	}
 	sqlCount, normative := 0, 0
-	for _, name := range []string{"database-migrations.md", "queue-payload-migrations.md", "staged-uniqueness-guard.md"} {
-		source, err := os.ReadFile(filepath.Join(root, "roadmap", "next", name))
+	for _, name := range []string{"completed/database-migrations.md", "later/queue-payload-migrations.md", "later/staged-uniqueness-guard.md"} {
+		source, err := os.ReadFile(filepath.Join(root, "roadmap", filepath.FromSlash(name)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +122,7 @@ func TestControlBootstrapDocumentMatchesExecutedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "roadmap", "next", "database-migrations.md")
+	path := filepath.Join(root, "roadmap", "completed", "database-migrations.md")
 	document, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

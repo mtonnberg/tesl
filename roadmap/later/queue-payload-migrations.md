@@ -1,5 +1,45 @@
 # Queue payload migrations (dependent on database-migrations)
 
+Status: moved to `later/` 2026-11-25. The common cases ship; the rest has
+workarounds and is not worth the cost now.
+
+## What works today
+
+| What you want to do | How |
+|---|---|
+| Add a job type or a queue | Just add it (additive change) |
+| Change a job type's shape and convert old jobs | `jobs: { SendEmail: Migrate convertSendEmail }` |
+| Fix jobs whose conversion failed | `QueueRepair` (retry with a new conversion) |
+| Throw away old jobs instead of converting them | A `Migrate` whose function rejects every job, then `QueueRepair` with `on: "unconverted"` and a reason. Each deleted job is recorded in `tesl_row_queue_discards`. See [queue remediation](../../manual/queue-remediation.md). |
+| Change database rows and job payloads together | Two migrations in order, rows first. The compiler explains the split. |
+| Remove a whole queue | `RemoveEmpty`, once the queue has no jobs |
+
+## What is not supported, and the workaround
+
+| Not supported | Workaround | Cost of the workaround |
+|---|---|---|
+| Renaming a queue | Add a new queue; remove the old one with `RemoveEmpty` once it is empty | None |
+| Renaming a job type, or moving it to another queue | Add a new job type (in the target queue) and enqueue that instead | The old job type cannot be removed while its queue exists, so it stays in the schema as dead code |
+| Removing one job type from a queue that stays | None; keep the type | Same dead code |
+| Removing a queue that still has jobs | Drain it first, then `RemoveEmpty` | Waiting for the queue to empty |
+| A one-line "drop old jobs" decision (`IgnoreOld`) | The reject-then-discard route above | Two steps instead of one |
+| Versioned queues with `topology: Embedded` | Use `topology: Worker` | A separate migration worker process |
+
+## If this is picked up again
+
+Start with **removing one job type from a queue** (at least when no jobs of that
+type remain). It is the only gap that leaves permanent cruft, and it can reuse the
+fenced, audited machinery of `RemoveEmpty`. `IgnoreOld` with a required reason was
+designed on 2026-11-25 (accepted only for a changed type, reason of 1–256 UTF-8
+bytes, part of the migration digest, old jobs deleted with one audit row each at
+retirement). It needs its own decision form, because today's discard exists only
+as a repair of an earlier conversion.
+
+The original design text follows. It predates the shipped implementation; where
+the two differ, `manual/queue-remediation.md`, LANGUAGE-SPEC ("Contextual queue
+decisions") and [migration delivery status](../../dev-docs/migration-delivery-status.md)
+describe what actually exists.
+
 ## What
 
 Make queue job record types part of the versioned schema, so that a job enqueued by
@@ -148,4 +188,5 @@ recovery decision; general schema membership changes still need their own surfac
 - The prerequisite implementation already places job records in the ordinary
   versioned schema closure and lists them in `queueSchema`; no new module kind
   is needed for this implementation.
-- Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration`.
+- Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration` — done for
+  `Migrate`; rename, removal and `IgnoreOld` remain (see Remaining work).

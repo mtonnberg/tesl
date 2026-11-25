@@ -56,7 +56,7 @@ def build_environment(environment, plan, target, prefix):
                   OCAMLLIB=str(prefix / "lib/ocaml"), DUNE_CACHE="disabled")
     if target.startswith("darwin-"):
         candidate = next(row for row in plan["candidates"] if row["target"] == target)
-        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("baseline", ""))
+        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("deploymentTarget", candidate.get("baseline", "")))
         if not match:
             raise ValueError("missing or invalid macOS baseline in release plan")
         result["MACOSX_DEPLOYMENT_TARGET"] = match[1]

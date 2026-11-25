@@ -110,6 +110,11 @@ class NativePostgresTest(unittest.TestCase):
         with patch.dict(os.environ, {"MACOSX_DEPLOYMENT_TARGET": "15.2"}):
             environment = pg.build_environment(self.plan, "darwin-arm64")
         self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], "13")
+        # A tested runtime baseline newer than the compile target does not raise it.
+        self.plan["candidates"][1].update(baseline="macOS 15", deploymentTarget="macOS 13")
+        environment = pg.build_environment(self.plan, "darwin-arm64")
+        self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], "13")
+        del self.plan["candidates"][1]["deploymentTarget"]
         self.plan["candidates"][1]["baseline"] = "latest"
         with self.assertRaisesRegex(ValueError, "macOS baseline"):
             pg.build_environment(self.plan, "darwin-arm64")

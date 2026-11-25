@@ -281,6 +281,14 @@
               revision = self.rev or "worktree";
               sourceDateEpoch = self.lastModified or 0;
             }));
+          # The stable plan for tag `v<version>`; evaluation fails on a dirty tree.
+          release-plan-stable = pkgs.writeText "tesl-release-plan.json" (builtins.toJSON
+            (import ./nix/release-plan.nix {
+              inherit pkgs;
+              revision = self.rev or "worktree";
+              sourceDateEpoch = self.lastModified or 0;
+              releaseTag = "v${(import ./nix/toolchain-inputs.nix).version}";
+            }));
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.

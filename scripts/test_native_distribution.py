@@ -313,6 +313,12 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
                 return {"network_isolation": "macos-sandbox-exec", "host_local_only_reachability": "passed"}
             stack.enter_context(patch.object(distribution.macos_network, "run", side_effect=isolated))
         if target.startswith("windows-"):
+            def firewalled(arguments, root, environment, timeout):
+                run(arguments, root, environment, timeout=timeout)
+                if failure == "network":
+                    raise ValueError("off-host IPv4 tcp remains reachable")
+                return {"network_isolation": "windows-firewall", "windows_firewall_probe": {"tcp_ipv4": "denied"}}
+            stack.enter_context(patch.object(distribution.windows_network, "run", side_effect=firewalled))
             stack.enter_context(patch.object(distribution.native_windows_tools, "provision", return_value={"verified": True}))
             stack.enter_context(patch.object(distribution.native_compiler_tools, "collect_windows_runtime", return_value=self.root / "runtime"))
             stack.enter_context(patch.object(distribution, "windows_setup", return_value={"authenticode": "unsigned"}))
@@ -389,6 +395,7 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertEqual(result["signed_distribution"], "unsigned-by-policy")
         self.assertEqual(result["setup"]["authenticode"], "unsigned")
         self.assertEqual(result["installed_workflow"], "passed")
+        self.assertEqual(result["network_isolation"], "windows-firewall")
         self.assertTrue(zipfile.is_zipfile(self.output / result["archive"]))
         build = next(args for args, _ in calls if "./cmd/..." in args)
         self.assertTrue(build[0].endswith("go.exe"))
@@ -397,6 +404,13 @@ assert json.loads(result)['root'] == chr(229), ascii(result)
         self.assertIn("compiler-winpthreads", result["source_downloads"])
         self.assertIn("build-perl", result["source_downloads"])
         self.assertFalse(any(args[0] == "tar" for args, _ in calls))
+
+    def test_windows_failed_firewall_probe_never_exports_candidate(self):
+        value, _ = self.pipeline(target="windows-amd64", failure="network")
+        with windows_checksum_newlines(), self.assertRaisesRegex(ValueError, "remains reachable"):
+            distribution.build(value, self.root, "windows-amd64", self.root / "modules", self.output,
+                               cygwin_bash=self.root / "cygwin/bin/bash.exe")
+        self.assertFalse(self.output.exists())
 
     def test_final_windows_setup_is_installed_launched_and_uninstalled_before_checksum_export(self):
         value = plan("windows-amd64")

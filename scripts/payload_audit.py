@@ -201,7 +201,7 @@ def audit(root, plan, target):
         candidate = next(row for row in plan["candidates"] if row["target"] == target)
         baseline = candidate["baseline"]
         if target.startswith("windows-"):
-            if baseline != "Windows 11":
+            if baseline not in ("Windows 11", "Windows Server 2022"):
                 raise ValueError("unsupported Windows baseline")
             system_version = None
         else:

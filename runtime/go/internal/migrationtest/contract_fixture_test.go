@@ -26,7 +26,7 @@ func TestContractDocumentMatchesExecutedFixture(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "..")
 	}
-	path := filepath.Join(root, "roadmap", "next", "database-migrations.md")
+	path := filepath.Join(root, "roadmap", "completed", "database-migrations.md")
 	document, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

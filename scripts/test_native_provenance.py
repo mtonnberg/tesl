@@ -44,7 +44,7 @@ class ProvenanceTests(unittest.TestCase):
                            ("GITHUB_SHA", "b" * 40)):
             with self.subTest(key=key, value=value):
                 environment = dict(self.environment, **{key: value})
-                with self.assertRaisesRegex(ValueError, "canonical main push"):
+                with self.assertRaisesRegex(ValueError, "canonical main or release-tag push"):
                     native_provenance.prepare(self.plan, self.artifacts, environment)
 
     def test_missing_or_invalid_ci_run_identity_is_rejected(self):
@@ -54,8 +54,14 @@ class ProvenanceTests(unittest.TestCase):
                     native_provenance.prepare(self.plan, self.artifacts, dict(self.environment, **{key: value}))
 
     def test_stable_identity_cannot_be_substituted_for_continuous_build(self):
-        with self.assertRaisesRegex(ValueError, "canonical main push"):
+        with self.assertRaisesRegex(ValueError, "canonical main or release-tag push"):
             native_provenance.prepare(fixtures.plan_for(stable=True), self.artifacts, self.environment)
+
+    def test_stable_plan_is_attested_only_on_its_own_tag_push(self):
+        stable = fixtures.plan_for(stable=True)
+        for ref in ("refs/heads/main", "refs/tags/v0.3.2", "refs/tags/v0.3.1-rc1"):
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "release-tag push"):
+                native_provenance.prepare(stable, self.artifacts, dict(self.environment, GITHUB_REF=ref))
 
     def test_one_missing_architecture_blocks_all_provenance(self):
         (self.artifacts / "native-evidence-darwin-arm64/checks.json").unlink()

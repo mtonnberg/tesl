@@ -270,7 +270,7 @@ check relay(n: Int) -> value: Int ::: Positive value =
 |}
 
 let roadmap_establish_source () =
-  let path = Filename.concat (Compile.default_root_path ()) "roadmap/next/database-migrations.md" in
+  let path = Filename.concat (Compile.default_root_path ()) "roadmap/completed/database-migrations.md" in
   let document = In_channel.with_open_text path In_channel.input_all in
   let first = Str.search_forward (Str.regexp_string "# in schema module ShopSchema.V8") document 0 in
   let last = Str.search_forward (Str.regexp_string "# in the migration file") document first in
