@@ -458,7 +458,7 @@ no skips, exit 0, including all 49 migration phases in that same invocation.**
 This covers additive, transforming, queue and ordered catch-up, the finite
 deployment job, and gated rollout wiring. Hosted supported-major results and
 the separate pinned performance requirements remain open. This document does not waive the
-[normative roadmap's requirements](../roadmap/next/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
+[normative roadmap's requirements](../roadmap/completed/database-migrations.md#target-mechanisms-after-phase-4-authoritative-summary).
 
 The maintainer explicitly accepted fresh-catalog-first development. Missing or
 incompatible installed objects must refuse, rather than be adopted or supplied

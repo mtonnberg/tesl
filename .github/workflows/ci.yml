@@ -12,12 +12,14 @@ name: CI
 on:
   push:
     branches: [main, go_migration]
+    # The stable release needs the authoritative gate on its tag push too.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
 
 env:
   # Reuse outputs of Dune's own compilation rules only; user rules (generators

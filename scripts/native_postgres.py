@@ -75,7 +75,7 @@ def build_environment(plan, target=None):
     selected_target = target or native_target()
     if selected_target.startswith("darwin-"):
         candidate = next((row for row in plan["candidates"] if row["target"] == selected_target), {})
-        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("baseline", ""))
+        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("deploymentTarget", candidate.get("baseline", "")))
         if not match:
             raise ValueError("missing or invalid macOS baseline in release plan")
         environment["MACOSX_DEPLOYMENT_TARGET"] = match[1]

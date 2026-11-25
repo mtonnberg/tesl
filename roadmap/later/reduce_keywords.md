@@ -430,5 +430,5 @@ No phase may start while a decision owned by that phase remains open.
 - `roadmap/completed/reduce_language_size.md` - separate internal core-lowering work.
 - `roadmap/completed/app_simplification.md` - precedent for removing concepts rather than
   merely renaming syntax.
-- `roadmap/next/database-migrations.md` and its history - ordinary functions plus
+- `roadmap/completed/database-migrations.md` and its history - ordinary functions plus
   record-shaped, compiler-elaborated declarations without new keywords.

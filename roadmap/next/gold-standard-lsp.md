@@ -1,7 +1,9 @@
 # Gold-standard language tooling
 
-Status: in progress, 2026-09-05. Completion and retained-session foundations are
-implemented; the full roadmap and release gates are not complete.
+Status: in progress, checked 2026-11-25.
+Completion, retained sessions and cross-file definition/references/rename are
+implemented; L0 baselines, workspace-wide diagnostics/symbols, call navigation,
+proof-aware completion (L3) and the proof/effect explanations (L4) are not.
 
 Implemented so far:
 - Versioned retained compiler sessions shared by the Go LSP and MCP, with the
@@ -193,7 +195,9 @@ stale work never overwrites newer diagnostics.
   shipped: `--workspace-type-definition-json`, LSP `textDocument/typeDefinition`,
   MCP `tesl.workspace_type_definition`. Use-kind filtering and pagination remain.)*
 - [ ] Conflict-checked rename across imports and callers; file/module moves
-  produce import updates under the same edit-precondition rules.
+  produce import updates under the same edit-precondition rules. *(Symbol rename
+  is done — see "Implemented so far"; file/module moves and rename inside an
+  already-invalid workspace remain.)*
 - [ ] Workspace symbol search and diagnostics for affected unopened files,
   with bounded partial results, progress, and clearing of obsolete diagnostics.
   *(Workspace symbol search shipped: `--workspace-symbols-json`, LSP
@@ -251,7 +255,8 @@ them, and successfully recheck the result. Verify completion coverage against th
 compiler's public API and ensure results match the installed library version.
 
 The browser-based searchable catalog and Hoogle-style search belong to the
-separate playground work. This roadmap reuses shared compiler metadata where
+separate playground work (shipped; see [`later/builtin-discovery.md`](../later/builtin-discovery.md)
+— its versioned compiler catalog is the natural source for the stdlib items above). This roadmap reuses shared compiler metadata where
 appropriate but does not implement that UI or duplicate its search engine.
 
 ### L4 — Three Tesl-specific productivity features

@@ -44,6 +44,17 @@ class HostTests(unittest.TestCase):
                             windows_version=[10, 0, 19045], windows_product_type=1)
         self.assertEqual(old["minimum_os_runtime"], "not-established")
 
+    def test_windows_server_2022_baseline_is_a_build_lower_bound_for_any_edition(self):
+        for build, product, expected in ((20348, 3, "passed"), (26100, 1, "passed"),
+                                         (19045, 1, "not-established"), (17763, 3, "not-established")):
+            with self.subTest(build=build, product=product):
+                result = self.evidence("windows-amd64", "Windows Server 2022", system="Windows", machine="AMD64",
+                                       windows_version=[10, 0, build], windows_product_type=product)
+                self.assertEqual(result["minimum_os_runtime"], expected)
+        unknown = self.evidence("windows-amd64", "Windows 10", system="Windows", machine="AMD64",
+                                windows_version=[10, 0, 26100], windows_product_type=1)
+        self.assertEqual(unknown["minimum_os_runtime"], "not-established")
+
     def test_system_identity_and_architecture_cannot_be_inferred_from_version(self):
         for system, machine in (("Windows", "x86_64"), ("Darwin", "arm64")):
             result = self.evidence("darwin-amd64", "macOS 13", system=system, machine=machine, macos_version="13.0")

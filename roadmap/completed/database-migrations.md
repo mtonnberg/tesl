@@ -19,11 +19,28 @@ Its review history — the review passes, mechanisms tried and withdrawn, and wh
 [`database-migrations-history.md`](database-migrations-history.md) and is not
 normative; where the two disagree, this file and its "Target mechanisms" table win.
 
+**Moved to `completed/` (2026-11-25).** The release cut below shipped in main
+(PRs #116–#127): installation, automatic deployment, catch-up, row and queue
+migrations, Contract, close-epoch and staged uniqueness with its per-key guard.
+This file stays as the design reference. Not everything in it was built; the
+remaining work is tracked separately:
+
+- [`roadmap/next/migrations-release-acceptance.md`](../next/migrations-release-acceptance.md)
+  — 10M/100M-row and p99 latency gates, hosted CI per PostgreSQL major, traceability.
+- [`roadmap/next/migrations-operator-workflow.md`](../next/migrations-operator-workflow.md)
+  — offline path, prune, Contract lifecycle modes, scaffolds, editor apply, Embedded queues.
+- [`roadmap/later/queue-payload-migrations.md`](../later/queue-payload-migrations.md)
+  — job-type rename/removal, `IgnoreOld`, simultaneous row/payload changes (all
+  have workarounds).
+- [`roadmap/later/staged-uniqueness-guard.md`](../later/staged-uniqueness-guard.md)
+  — the reservation-table guard.
+- [`roadmap/later/row-level-policies.md`](../later/row-level-policies.md) — the
+  row-level policy companion and the Citus profile (§12).
+
 Current implementation and acceptance evidence are tracked in
 [migration delivery status](../../dev-docs/migration-delivery-status.md).
 The fresh-install-first compatibility policy and implemented recovery decisions
-are recorded there. This roadmap remains open; successful scoped examples do not
-mark its remaining operator, composition, editor or performance gates complete.
+are recorded there.
 
 **Release clarification (maintainer, 2026-10-12).** Production deployment must
 automatically execute the required checked migrations and catch up a valid owned

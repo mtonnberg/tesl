@@ -1,8 +1,18 @@
 # Mainstream installation
 
-Status: in progress, 2026-09-05. Native command orchestration and discovery are
-implemented. Distributable payloads, installers, and release
-outputs below remain targets until their acceptance gates pass.
+Status: in progress, updated 2026-11-25. Native command orchestration, discovery,
+payload assembly and provenance pass hosted CI on all five targets. Release
+publication (M3) is implemented: every main commit that passes both gates
+becomes a prerelease, and a `v<version>` tag becomes the stable release. The
+first published release confirms it end to end. Ecosystem packages and
+onboarding (M4) follow.
+
+Hosted evidence, 2026-11-25: the *Native portability* workflow passes on `main`
+(run 45478043228, `d2a2ede`) for all five targets — Linux x86-64/ARM64, macOS
+Intel/ARM64 and Windows x86-64 — including candidate assembly, the installed-archive
+workflow, macOS ad-hoc signing/offline checks, the Windows setup executable, and the
+main-only provenance job that attests the final bytes. No GitHub Release has been
+published yet: downloads are still per-run CI artifacts.
 
 Implemented so far:
 - [`internal/cli`](../../runtime/go/internal/cli) and [`cmd/tesl`](../../runtime/go/cmd/tesl)
@@ -58,7 +68,8 @@ Implemented so far:
   required. OCaml and Dune now build from their verified source pins as well.
 - The 2026-09-05 native matrix passed complete payload assembly and the isolated
   installed workflow on Linux x86-64 and ARM64 at glibc 2.35. macOS and Windows
-  distribution gates remain pending; measurements are in `nix/RELEASES.md`.
+  distribution gates were pending then; they now pass in hosted CI (see the
+  hosted evidence above). Measurements are in `nix/RELEASES.md`.
 - macOS acceptance now uses an inherited network sandbox with positive local
   and external controls and explicit off-host TCP/UDP policy-denial probes for IPv4/IPv6.
   The network probe passes on both native macOS architectures; the complete
@@ -69,14 +80,14 @@ Implemented so far:
   PostgreSQL. The editor discovers managed installations and pins its selected
   version until reload. Unit and real PostgreSQL lease tests pass locally.
 - Windows now has a source-build pipeline and self-contained setup executable;
-  those additions still require native CI execution. The release catalog checks
+  both run and pass in hosted native CI. The release catalog checks
   exact source/artifact/gate identities and complete matrices, but publication
   and external attestation verification are not yet connected.
 - A separate main-only provenance job now validates the complete same-run native
   artifact matrix and attests its final bytes, release plan and pinned-input
   manifest using GitHub's workflow identity. PR/build jobs receive no signing
   permission. Regression tests cover source/event mismatches, partial matrices,
-  changed bytes and extra assets. First main execution remains pending.
+  changed bytes and extra assets. It now runs and passes on `main`.
 - Distribution policy, 2026-09-05: Windows ships unsigned setup/ZIP downloads;
   macOS offers ad-hoc signed native archives and recommends Nix. Developer ID,
   notarization and Authenticode are optional future improvements, not account
@@ -89,8 +100,7 @@ local authoritative gate passed with this selection, including clean installatio
 of the actual default profile and both CLI parity references. The pushed PR still
 needs its matching hosted CI results.
 Native parity CI includes candidate assembly and installed-workflow gates for all
-five targets; macOS and Windows packaging still need successful runs. It does not
-publish releases. M2–M4 remain open, including complete native
+five targets, and all five pass on `main`. It does not publish releases. M2–M4 remain open, including complete native
 dependency closure, scanner parity, provenance, and native install/upgrade tests.
 
 Let Linux and macOS users download one Tesl toolchain and reach a running API
@@ -271,6 +281,8 @@ replacement without implicit database-major-version migration.
   managed PostgreSQL, Go module acquisition, Docker, DAST, and debugger launches.
 - [ ] Select tested OS/ABI baselines, payload layout, version/channel rules, and
   native-runner export schema. Measure candidate download and installed sizes.
+  *(Baselines and channels decided 2026-11-25: glibc 2.35, macOS 15, Windows
+  Server 2022; prerelease per main commit, stable per tag. Sizes still unmeasured.)*
 - [x] Record the no-account distribution policy: unsigned Windows, ad-hoc macOS,
   Nix recommended on macOS; paid signing is optional.
 - [ ] Record the payload reproducibility target and define a maximum artifact
@@ -295,7 +307,7 @@ their own compiler, tools, and resources without shell wrappers or Nix paths.
   scaffold/password/debug coverage to the native matrix.
 - [x] Implement native Go/PostgreSQL source builders, the complete payload
   assembler, binary audit, and extracted-archive acceptance harness.
-- [ ] Build both architectures on the declared baselines and assemble pinned Go,
+- [x] Build both architectures on the declared baselines and assemble pinned Go,
   generated-module dependencies, PostgreSQL, resources, and licenses.
 - [ ] Test on clean hosts without Nix, a checkout, system Go/OCaml, PostgreSQL,
   or a C compiler. Block outbound networking during the default workflow.
@@ -307,11 +319,20 @@ database, plus watch/restart, build-context staging, LSP/MCP startup, and a debu
 
 ### M3 — Automate trustworthy per-revision releases
 
-- [ ] Extend CI with exact-revision platform gates, payload identity checks,
+- [x] Extend CI with exact-revision platform gates, payload identity checks,
   declared signing policy, checksums, provenance, and complete-matrix publication.
+  *(2026-11-25: `release.yml` + `scripts/release_publish.py`; see
+  [Publishing](../../nix/RELEASES.md#publishing). Main commits become prereleases,
+  `v<version>` tags become stable. Done when the first release is published from main.)*
 - [ ] Exercise duplicate runs, an older run finishing late, a failed architecture,
   ad-hoc signing/verification failure, corrupt downloads, and interrupted upgrades.
+  *(Covered by `scripts/test_release_publish.py` and `test_release_catalog.py`:
+  duplicate runs, late older build, failed architecture, failed attestation,
+  corrupt upload, interrupted publish (leftover draft), concurrent channel
+  update. Still open: an interrupted **upgrade** of an installed toolchain.)*
 - [ ] Publish rebuild instructions and verify an independent unsigned rebuild.
+  *(Instructions: [Rebuilding a release yourself](../../nix/RELEASES.md#rebuilding-a-release-yourself).
+  Still open: actually doing one rebuild on a separate machine and comparing.)*
 
 Exit: a successful new `main` revision produces one complete verifiable release
 without manual packaging; failures preserve the prior usable channel.

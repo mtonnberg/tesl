@@ -1,0 +1,62 @@
+# Publishes a GitHub Release for a commit once BOTH the authoritative CI gate
+# and the native packaging workflow have passed for it.
+#
+#   push to main      -> prerelease  v<version>-dev.<timestamp>.g<sha>
+#                        and the continuous-channel pointer moves forward
+#   push tag v<ver>   -> stable release v<ver>, marked "latest"
+#
+# Whichever of the two workflows finishes second triggers the publish; the
+# first one exits with "No release: ... still running". The script checks
+# every downloaded file's attestation and the complete release catalog before
+# anything becomes visible. See scripts/release_publish.py and nix/RELEASES.md.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI, Native portability]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA whose successful CI and native runs should be published
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # One publisher per commit at a time; different commits may run in parallel
+  # because the channel pointer is updated with a fast-forward-only push.
+  group: release-${{ github.event.workflow_run.head_sha || inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Only this repository's own push runs; never forks or pull requests.
+    if: >-
+      github.repository == 'mtonnberg/tesl' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: write      # create releases and push the release-channel branch
+      actions: read        # list runs and download their artifacts
+      attestations: read   # verify artifact attestations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The workflow file and scripts always come from main; full history
+          # lets the channel check that a commit is an ancestor of main.
+          ref: main
+          fetch-depth: 0
+      - name: Publish release for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/release_publish.py --sha "$SHA"
