@@ -3,6 +3,8 @@ name: Native portability
 on:
   push:
     branches: [main, go_migration]
+    # A `v<version>` tag builds the stable release; release.yml publishes it.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -10,8 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: native-${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   plan:
@@ -34,13 +36,20 @@ jobs:
         id: export
         shell: bash
         run: |
-          nix build .#release-plan --out-link release-plan
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            nix build .#release-plan-stable --out-link release-plan
+          else
+            nix build .#release-plan --out-link release-plan
+          fi
           cp release-plan native-release-plan.json
           python3 - <<'PY'
           import json, os
           plan = json.load(open('native-release-plan.json'))
           if plan['sourceRevision'] != os.environ['GITHUB_SHA']:
               raise SystemExit('Nix plan does not match the tested revision')
+          ref = os.environ['GITHUB_REF']
+          if ref.startswith('refs/tags/') and ref != 'refs/tags/' + str(plan['release']['tag']):
+              raise SystemExit(f"tag {ref} does not match the release version {plan['release']['tag']}")
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('matrix=' + json.dumps({'include': plan['candidates']}) + '\n')
               for name in ('go', 'ocaml'):
@@ -193,7 +202,7 @@ jobs:
   provenance:
     # Privileged signing is isolated from compiler/build processes and never
     # receives a PR token. Download only artifacts from this exact main run.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'mtonnberg/tesl' }}
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.repository == 'mtonnberg/tesl' }}
     needs: [plan, parity]
     runs-on: ubuntu-22.04
     permissions:

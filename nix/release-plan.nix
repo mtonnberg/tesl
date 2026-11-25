@@ -63,16 +63,20 @@ in rec {
     moduleProxy = "share/tesl/go-modules";
     licenses = "share/tesl/licenses";
   };
-  # These are build/verification candidates. They do not advertise support until
-  # the clean-host, offline workflow and distribution gates have run on them.
+  # `baseline` is the oldest OS a release claims to support. It must be the OS
+  # the installed-workflow acceptance actually runs on (GitHub has no macOS 13
+  # or Windows 11 x86-64 runners), so the claim never exceeds what was tested.
+  # macOS binaries are still compiled for `deploymentTarget`, so older macOS
+  # releases may work; they are not promised.
   candidates = [
     { target = "linux-amd64"; runner = "ubuntu-22.04"; baseline = "glibc 2.35"; }
     { target = "linux-arm64"; runner = "ubuntu-22.04-arm"; baseline = "glibc 2.35"; }
-    { target = "darwin-amd64"; runner = "macos-15-intel"; baseline = "macOS 13"; }
-    { target = "darwin-arm64"; runner = "macos-15"; baseline = "macOS 13"; }
+    { target = "darwin-amd64"; runner = "macos-15-intel"; baseline = "macOS 15"; deploymentTarget = "macOS 13"; }
+    { target = "darwin-arm64"; runner = "macos-15"; baseline = "macOS 15"; deploymentTarget = "macOS 13"; }
     # windows-2025 now selects VS2026. The native compiler recipe and audited
     # redistributable license target VS2022 / VC143, available on this image.
-    { target = "windows-amd64"; runner = "windows-2022"; baseline = "Windows 11"; }
+    # Build 20348 or newer: Windows Server 2022 and Windows 11.
+    { target = "windows-amd64"; runner = "windows-2022"; baseline = "Windows Server 2022"; }
   ];
   payloads = builtins.listToAttrs (map (candidate: {
     name = candidate.target;

@@ -1,9 +1,11 @@
 # Mainstream installation
 
 Status: in progress, updated 2026-11-25. Native command orchestration, discovery,
-payload assembly and provenance are implemented and pass hosted CI on all five
-targets. **Release publication (M3) is the main missing piece**; ecosystem
-packages and onboarding (M4) follow.
+payload assembly and provenance pass hosted CI on all five targets. Release
+publication (M3) is implemented: every main commit that passes both gates
+becomes a prerelease, and a `v<version>` tag becomes the stable release. The
+first published release confirms it end to end. Ecosystem packages and
+onboarding (M4) follow.
 
 Hosted evidence, 2026-11-25: the *Native portability* workflow passes on `main`
 (run 45478043228, `d2a2ede`) for all five targets — Linux x86-64/ARM64, macOS
@@ -279,6 +281,8 @@ replacement without implicit database-major-version migration.
   managed PostgreSQL, Go module acquisition, Docker, DAST, and debugger launches.
 - [ ] Select tested OS/ABI baselines, payload layout, version/channel rules, and
   native-runner export schema. Measure candidate download and installed sizes.
+  *(Baselines and channels decided 2026-11-25: glibc 2.35, macOS 15, Windows
+  Server 2022; prerelease per main commit, stable per tag. Sizes still unmeasured.)*
 - [x] Record the no-account distribution policy: unsigned Windows, ad-hoc macOS,
   Nix recommended on macOS; paid signing is optional.
 - [ ] Record the payload reproducibility target and define a maximum artifact
@@ -315,11 +319,20 @@ database, plus watch/restart, build-context staging, LSP/MCP startup, and a debu
 
 ### M3 — Automate trustworthy per-revision releases
 
-- [ ] Extend CI with exact-revision platform gates, payload identity checks,
+- [x] Extend CI with exact-revision platform gates, payload identity checks,
   declared signing policy, checksums, provenance, and complete-matrix publication.
+  *(2026-11-25: `release.yml` + `scripts/release_publish.py`; see
+  [Publishing](../../nix/RELEASES.md#publishing). Main commits become prereleases,
+  `v<version>` tags become stable. Done when the first release is published from main.)*
 - [ ] Exercise duplicate runs, an older run finishing late, a failed architecture,
   ad-hoc signing/verification failure, corrupt downloads, and interrupted upgrades.
+  *(Covered by `scripts/test_release_publish.py` and `test_release_catalog.py`:
+  duplicate runs, late older build, failed architecture, failed attestation,
+  corrupt upload, interrupted publish (leftover draft), concurrent channel
+  update. Still open: an interrupted **upgrade** of an installed toolchain.)*
 - [ ] Publish rebuild instructions and verify an independent unsigned rebuild.
+  *(Instructions: [Rebuilding a release yourself](../../nix/RELEASES.md#rebuilding-a-release-yourself).
+  Still open: actually doing one rebuild on a separate machine and comparing.)*
 
 Exit: a successful new `main` revision produces one complete verifiable release
 without manual packaging; failures preserve the prior usable channel.

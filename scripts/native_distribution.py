@@ -24,6 +24,7 @@ import native_sdk
 import native_windows_tools
 import installer_artifact
 import macos_network
+import windows_network
 import native_host
 from pe_audit import audit_binary as audit_windows_binary
 from module_proxy import verify as verify_module_bundle
@@ -232,7 +233,7 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
     environment = dict(os.environ)
     if target.startswith("darwin-"):
         candidate = next(row for row in plan["candidates"] if row["target"] == target)
-        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("baseline", ""))
+        match = re.fullmatch(r"macOS ([0-9]+(?:\.[0-9]+)*)", candidate.get("deploymentTarget", candidate.get("baseline", "")))
         if not match:
             raise ValueError("missing or invalid macOS baseline in release plan")
         environment["MACOSX_DEPLOYMENT_TARGET"] = match[1]
@@ -304,9 +305,11 @@ def build(plan, root, target, module_bundle, output, cygwin_bash=None):
         installed = unpacked / archive.name.removesuffix(".tar.gz").removesuffix(".zip")
         test_env = dict(build_env, TESL_TEST_INSTALLED_ROOT=str(installed))
         acceptance = acceptance_command(target, sdk / "bin" / ("go" + suffix), root)
-        network = {"network_isolation": "linux-network-namespace" if target.startswith("linux-") else "not-tested"}
+        network = {"network_isolation": "linux-network-namespace"}
         if target.startswith("darwin-"):
             network = macos_network.run(acceptance, root, test_env, timeout=1500)
+        elif windows:
+            network = windows_network.run(acceptance, root, test_env, timeout=1500)
         else:
             run(acceptance, root, test_env, timeout=1500)
         if native_payload.file_hash(archive) != digest:

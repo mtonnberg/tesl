@@ -1,10 +1,11 @@
 # Native release metadata
 
 `nix build .#release-plan` exports the pinned build inputs, version identity,
-candidate platforms, archive names, and installation manifests. It does not build
-or publish those archives yet. Native parity CI builds and tests source on every
-candidate runner, checks the embedded CLI version, and loads the generated
-manifests through the shared Go resolver.
+candidate platforms, archive names, and installation manifests
+(`.#release-plan-stable` is the same plan for the `v<version>` tag). Native
+parity CI builds and tests the archives on every target runner;
+[`release.yml`](../.github/workflows/release.yml) publishes them (see
+[Publishing](#publishing) below).
 
 ## Versions
 
@@ -21,9 +22,9 @@ The timestamp is the commit's Unix timestamp exported as `sourceDateEpoch`, not
 the build's wall clock or a CI run number. The full SHA distinguishes commits
 with identical timestamps. Identical inputs produce identical versions across
 platforms and retries. All versions are SemVer; development builds sort below
-the corresponding stable version. Commit timestamps need not increase, so a
-future continuous-channel publisher must order revisions by the main history,
-not rely only on version comparison or build completion time.
+the corresponding stable version. Commit timestamps need not increase, so the
+continuous-channel publisher orders revisions by the main history, never by
+version comparison or build completion time.
 
 A stable plan is an explicit evaluation of `release-plan.nix` with
 `releaseTag = "v0.3.1"`, a full clean `revision`, and its `sourceDateEpoch`.
@@ -154,25 +155,34 @@ accepted as proof of isolation. Probe failures prevent candidate export. This CI
 does not change the runner's firewall or add a dependency to installed Tesl.
 Acceptance also records the actual host OS, architecture and libc version.
 Only execution on the declared baseline earns `minimum_os_runtime: passed`;
-a newer macOS runner or a Windows Server runner retains `not-established` for
-the declared macOS/desktop Windows baseline.
+a runner newer than the declared baseline (or a different OS family) records
+`not-established`, and the release is not published.
 
-The current matrix uses macOS 15 and Windows Server 2025. GitHub's
-[standard runner list](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
-does not include macOS 13 or Windows 11 x86-64. Its Windows 11 ARM runner would
-provide supplementary emulation coverage, not native x86-64 baseline evidence.
-Minimum-OS acceptance therefore needs a matching test host or an explicit change
-to the supported baseline. This test-coverage gap is independent of signing accounts.
+**Supported OS baselines (maintainer decision, 2026-11-25).** A release claims
+only the OS its acceptance actually runs on: glibc 2.35 (Ubuntu 22.04), macOS 15
+and Windows Server 2022 (build 20348; Windows 11 has newer builds). GitHub has no
+macOS 13 or Windows 11 x86-64 runners, so the earlier macOS 13 / Windows 11
+claims could never be tested. macOS binaries are still compiled with the plan's
+`deploymentTarget` (macOS 13), so older macOS may work without being promised.
 
 Outputs are the versioned `.tar.gz`/`.zip`, its `.sha256`, and `distribution-checks.json`.
-They are CI candidates without a publisher certificate. Archive metadata is normalized, but complete
-cross-host reproducibility, installers, upgrades and publication remain
-separate acceptance gates. Windows Authenticode and macOS Developer ID signing /
-notarization are explicitly optional under the maintainer's 2026-09-05 policy.
-Windows delivery is unsigned; macOS delivery is an ad-hoc signed native archive,
-with Nix recommended for macOS users. Execution on the declared minimum OS and
-Windows network isolation remain separate gates. The macOS isolation probe passes
-on both architectures; the complete macOS installed workflow remains pending.
+They carry no publisher certificate. Archive metadata is normalized, but complete
+cross-host reproducibility is not yet established. Windows Authenticode and macOS
+Developer ID signing / notarization are explicitly optional under the maintainer's
+2026-09-05 policy. Windows delivery is unsigned; macOS delivery is an ad-hoc signed
+native archive, with Nix recommended for macOS users.
+
+**Offline acceptance per platform.** Linux runs the installed workflow in a new
+network namespace with only loopback. macOS runs it under `sandbox-exec`
+(`scripts/macos_network.py`). Windows has no per-process equivalent, so
+`scripts/windows_network.py` uses Windows Firewall on the CI machine: it records
+each profile, allows outbound traffic only for the GitHub Actions runner's own
+executables and for DNS through the DNS client service, turns on "block outbound"
+for every profile, proves from a separate process that loopback works and that an
+off-host TCP connection is refused by policy (WSAEACCES, not a timeout), runs the
+installed workflow, and restores the recorded profiles even on failure. A blocked
+UDP send may be dropped silently on Windows, so UDP is recorded, not required.
+
 Native Windows packaging includes MSVC PostgreSQL, the
 verified-source OCaml compiler, and a PE/DLL audit. Required compiler runtime DLLs
 come only from the active Visual Studio redistributable directory, retain their
@@ -217,9 +227,9 @@ gh attestation verify ARTIFACT --repo mtonnberg/tesl \
 The `native-provenance` CI artifact also contains the verification bundle; pass
 its path with `--bundle` to use a downloaded bundle. See the
 [GitHub CLI verification options](https://cli.github.com/manual/gh_attestation_verify).
-This attests native build origin and pinned inputs. It does not declare that the
-authoritative gate, minimum-OS matrix or complete release publication passed.
-The provenance job still needs its first successful main run after merge.
+This attests native build origin and pinned inputs. It does not by itself
+declare that the authoritative gate passed; the publisher checks that
+separately. The job runs on every main push and on `v<version>` tag pushes.
 
 ## Native Windows source build
 
@@ -288,8 +298,65 @@ TESL_RELEASE_PLAN="$PWD/release-plan" go -C runtime/go test ./internal/toolchain
 ```
 
 Native CI runs both sets of checks and preserves the exact plan with its
-per-platform evidence. Future publishers must additionally require a clean,
-authorized source ref, the complete matrix, offline installation and dependency
-audits, and provenance before making any release visible. OS signing follows the
-explicit per-platform policy; missing paid signing credentials do not block
-unsigned Windows or ad-hoc macOS releases.
+per-platform evidence. Publication additionally requires a clean, authorized
+source ref, the complete matrix, offline installation and dependency audits,
+and provenance (see below). OS signing follows the explicit per-platform policy;
+missing paid signing credentials do not block unsigned Windows or ad-hoc macOS
+releases.
+
+## Publishing
+
+[`release.yml`](../.github/workflows/release.yml) runs
+[`scripts/release_publish.py`](../scripts/release_publish.py) whenever **CI** or
+**Native portability** finishes. For that commit it:
+
+1. Waits until the latest push-event runs of **both** workflows have finished,
+   and publishes nothing unless both succeeded. Only `main` and the exact
+   `v<version>` tag are release refs; pull requests and forks never publish.
+2. Downloads the native archives, setup executable, evidence and release plan
+   from the native run, and checks each file's attestation with
+   `gh attestation verify` (signed by `native-parity.yml`, for that commit and ref).
+3. Builds the release catalog with receipts for every gate and refuses to
+   publish unless it is eligible: all five targets, installed workflow,
+   offline install, minimum OS, payload audit and provenance all passed.
+4. Creates the release as a **draft**, uploads all assets, compares GitHub's
+   reported SHA-256 of each upload with the verified file, and only then
+   publishes it. A mismatch deletes the draft; users never see a partial release.
+5. Main commits become **prereleases**; the `v<version>` tag becomes the stable
+   release marked "Latest".
+6. For main commits, moves the continuous-channel pointer: `continuous.json` on
+   the `release-channel` branch. The push is fast-forward-only, so two
+   publishers cannot overwrite each other, and an older commit whose build
+   finishes late does not replace a newer one.
+
+Re-running for a commit whose release already exists is a no-op when the
+assets match, and an error when they differ. A draft left by an interrupted run
+is deleted and recreated. To retry by hand: **Actions → Release → Run workflow**
+with the full commit SHA.
+
+**Stable release steps.** Set `version` in `nix/toolchain-inputs.nix` (e.g.
+`0.3.2`) on `main`, wait for that commit's CI, then push the tag
+`v0.3.2` on that commit. CI and Native portability run again for the tag and,
+when both pass, the stable release is published.
+
+## Rebuilding a release yourself
+
+Every release includes `tesl-<version>-release-plan.json`. To rebuild one target
+from source without trusting the published binaries:
+
+```sh
+git clone https://github.com/mtonnberg/tesl && cd tesl
+git checkout <commit from the release notes>
+nix build .#release-plan --out-link release-plan   # .#release-plan-stable for a v<version> tag
+cmp release-plan tesl-<version>-release-plan.json  # must be identical
+python3 scripts/module_proxy.py --plan release-plan --output module-bundle
+python3 scripts/native_distribution.py --plan release-plan --target linux-amd64 \
+  --module-bundle module-bundle --output rebuilt
+```
+
+The build needs the native host for that target and the builder tools listed in
+[Native candidate archives](#native-candidate-archives). It downloads only the
+pinned sources and verifies their hashes. Archive metadata is normalized, but
+byte-identical output across different machines is not yet guaranteed; compare
+the file lists and hashes inside the archives (`share/tesl/toolchain.json` and
+the extracted files) rather than the archive digest alone.

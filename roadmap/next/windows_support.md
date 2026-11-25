@@ -2,8 +2,10 @@
 
 Status: in progress, updated 2026-11-25. The native Windows source-build/parity
 gate passes, and hosted CI on `main` assembles and tests the unsigned setup
-executable. Native Windows is not yet a supported installation: no release is
-published (installation M3), and the clean-machine, editor and WinGet items below
+executable. The installed workflow now also runs with outbound traffic blocked by
+Windows Firewall (`scripts/windows_network.py`), and Windows assets are part of
+every published release (installation M3). Supported baseline: Windows Server
+2022 / build 20348 or newer. The clean-machine, editor and WinGet items below
 remain open.
 
 Hosted evidence, 2026-11-25: the *Native portability* workflow passes on `main`

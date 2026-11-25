@@ -41,9 +41,13 @@ def runtime_evidence(plan, target, host=None):
                    and requested[1] == actual[1] and (requested[2] is None or requested[2] == actual[2]))
     elif target == "windows-amd64":
         version = host.get("windows_version", [])
-        matched = (baseline == "Windows 11" and host.get("system") == "Windows"
-                   and host.get("windows_product_type") == 1 and len(version) == 3
-                   and version[:2] == [10, 0] and isinstance(version[2], int) and version[2] >= 22000)
+        # Windows Server 2022 is build 20348; Windows 11 starts at 22000. Both
+        # share the NT 10.0 system libraries the PE audit allows.
+        minimum = {"Windows 11": 22000, "Windows Server 2022": 20348}.get(baseline)
+        matched = (minimum is not None and host.get("system") == "Windows"
+                   and (baseline != "Windows 11" or host.get("windows_product_type") == 1)
+                   and len(version) == 3 and version[:2] == [10, 0]
+                   and isinstance(version[2], int) and version[2] >= minimum)
     return {"minimum_os_runtime": "passed" if correct_arch and matched else "not-established",
             "acceptance_host": {**host, "declared_baseline": baseline,
                                 "matches_baseline": bool(correct_arch and matched)}}
