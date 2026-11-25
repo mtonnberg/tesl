@@ -62,7 +62,7 @@ func TestNormativeSQLFencesAreClassified(t *testing.T) {
 		root = filepath.Join("..", "..", "..", "..")
 	}
 	sqlCount, normative := 0, 0
-	for _, name := range []string{"completed/database-migrations.md", "next/queue-payload-migrations.md", "later/staged-uniqueness-guard.md"} {
+	for _, name := range []string{"completed/database-migrations.md", "later/queue-payload-migrations.md", "later/staged-uniqueness-guard.md"} {
 		source, err := os.ReadFile(filepath.Join(root, "roadmap", filepath.FromSlash(name)))
 		if err != nil {
 			t.Fatal(err)

@@ -2,7 +2,7 @@
 
 > Audience: contributors implementing and verifying frozen queue schemas.
 
-This records the compiler prerequisite for `roadmap/next/queue-payload-migrations.md`.
+This records the compiler prerequisite for `roadmap/later/queue-payload-migrations.md`.
 Fresh format-5 Worker applications now support unchanged versioned payloads,
 fenced attempts and atomic additive-epoch retirement; see
 [lesson 95](../example/learn/lesson95-retiring-unchanged-queue-payloads.md).

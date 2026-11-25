@@ -29,8 +29,9 @@ remaining work is tracked separately:
   — 10M/100M-row and p99 latency gates, hosted CI per PostgreSQL major, traceability.
 - [`roadmap/next/migrations-operator-workflow.md`](../next/migrations-operator-workflow.md)
   — offline path, prune, Contract lifecycle modes, scaffolds, editor apply, Embedded queues.
-- [`roadmap/next/queue-payload-migrations.md`](../next/queue-payload-migrations.md)
-  — simultaneous row/payload changes, job-type rename/removal, `IgnoreOld`.
+- [`roadmap/later/queue-payload-migrations.md`](../later/queue-payload-migrations.md)
+  — job-type rename/removal, `IgnoreOld`, simultaneous row/payload changes (all
+  have workarounds).
 - [`roadmap/later/staged-uniqueness-guard.md`](../later/staged-uniqueness-guard.md)
   — the reservation-table guard.
 - [`roadmap/later/row-level-policies.md`](../later/row-level-policies.md) — the

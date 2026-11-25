@@ -11,7 +11,7 @@ REGISTER = "dev-docs/migration-pr-register.json"
 CONTRACT = "dev-docs/migration-pr-scope.md"
 SOURCES = (
     "roadmap/completed/database-migrations.md",
-    "roadmap/next/queue-payload-migrations.md",
+    "roadmap/later/queue-payload-migrations.md",
     "roadmap/later/staged-uniqueness-guard.md",
     "dev-docs/migration-delivery-status.md",
 )

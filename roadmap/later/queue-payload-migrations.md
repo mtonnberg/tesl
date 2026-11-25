@@ -1,28 +1,44 @@
 # Queue payload migrations (dependent on database-migrations)
 
-Status: partly shipped, checked 2026-11-25. The prerequisite half below and most of
-the `jobs:` surface are in main: frozen job types in the schema closure, unchanged-
-payload restamping, checked `jobs:` transformations, `QueueRepair` (business repair,
-execution-failure recovery, audited discard), ordered row-first / payload-second
-migrations, and bounded removal of an empty queue. The design it depends on is now
-[`completed/database-migrations.md`](../completed/database-migrations.md) (§14).
+Status: moved to `later/` 2026-11-25. The common cases ship; the rest has
+workarounds and is not worth the cost now.
 
-**Remaining work** (the migration PR marked the first two "unsupported by design"
-for that release, `PR-SIMULTANEOUS` / `PR-RENAME` in
-[`dev-docs/migration-pr-scope.md`](../../dev-docs/migration-pr-scope.md)):
+## What works today
 
-1. Simultaneous row and payload changes in one migration (today: refused, with a
-   diagnostic explaining the ordered split).
-2. Queue membership changes: renaming a job type, and removing a job type whose
-   queue still holds jobs (today only an empty queue can be removed).
-3. The schema-level `IgnoreOld` constructor: an explicit, counted, audited
-   decision to drop old in-flight jobs of a changed type (today the closest is
-   `QueueRepair` with `on: "unconverted"` after a failed conversion).
-4. LANGUAGE-SPEC rules for items 1–3. The `jobs` record with `Migrate` is already
-   specified ("Contextual queue decisions"); it states that queue removal and
-   `IgnoreOld` are not supported yet.
-5. Versioned queues under `topology: Embedded` (today Worker topology only; also
-   listed in [`migrations-operator-workflow.md`](migrations-operator-workflow.md)).
+| What you want to do | How |
+|---|---|
+| Add a job type or a queue | Just add it (additive change) |
+| Change a job type's shape and convert old jobs | `jobs: { SendEmail: Migrate convertSendEmail }` |
+| Fix jobs whose conversion failed | `QueueRepair` (retry with a new conversion) |
+| Throw away old jobs instead of converting them | A `Migrate` whose function rejects every job, then `QueueRepair` with `on: "unconverted"` and a reason. Each deleted job is recorded in `tesl_row_queue_discards`. See [queue remediation](../../manual/queue-remediation.md). |
+| Change database rows and job payloads together | Two migrations in order, rows first. The compiler explains the split. |
+| Remove a whole queue | `RemoveEmpty`, once the queue has no jobs |
+
+## What is not supported, and the workaround
+
+| Not supported | Workaround | Cost of the workaround |
+|---|---|---|
+| Renaming a queue | Add a new queue; remove the old one with `RemoveEmpty` once it is empty | None |
+| Renaming a job type, or moving it to another queue | Add a new job type (in the target queue) and enqueue that instead | The old job type cannot be removed while its queue exists, so it stays in the schema as dead code |
+| Removing one job type from a queue that stays | None; keep the type | Same dead code |
+| Removing a queue that still has jobs | Drain it first, then `RemoveEmpty` | Waiting for the queue to empty |
+| A one-line "drop old jobs" decision (`IgnoreOld`) | The reject-then-discard route above | Two steps instead of one |
+| Versioned queues with `topology: Embedded` | Use `topology: Worker` | A separate migration worker process |
+
+## If this is picked up again
+
+Start with **removing one job type from a queue** (at least when no jobs of that
+type remain). It is the only gap that leaves permanent cruft, and it can reuse the
+fenced, audited machinery of `RemoveEmpty`. `IgnoreOld` with a required reason was
+designed on 2026-11-25 (accepted only for a changed type, reason of 1–256 UTF-8
+bytes, part of the migration digest, old jobs deleted with one audit row each at
+retirement). It needs its own decision form, because today's discard exists only
+as a repair of an earlier conversion.
+
+The original design text follows. It predates the shipped implementation; where
+the two differ, `manual/queue-remediation.md`, LANGUAGE-SPEC ("Contextual queue
+decisions") and [migration delivery status](../../dev-docs/migration-delivery-status.md)
+describe what actually exists.
 
 ## What
 
