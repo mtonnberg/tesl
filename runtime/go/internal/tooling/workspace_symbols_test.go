@@ -3,17 +3,20 @@ package tooling
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func symbolsPayload(t *testing.T, edit func(map[string]any)) []byte {
 	t.Helper()
-	response := map[string]any{"version": 1, "workspace_root": "/project", "snapshot": "s", "coordinate_encoding": "utf-8",
-		"complete": true, "problems": []any{}, "inputs": []any{map[string]any{"file": "/project/lib.tesl", "content_hash": strings.Repeat("a", 32)}},
+	root := filepath.Join(t.TempDir(), "project")
+	lib := filepath.Join(root, "lib.tesl")
+	response := map[string]any{"version": 1, "workspace_root": root, "snapshot": "s", "coordinate_encoding": "utf-8",
+		"complete": true, "problems": []any{}, "inputs": []any{map[string]any{"file": lib, "content_hash": strings.Repeat("a", 32)}},
 		"query": "dou", "truncated": false,
 		"symbols": []any{map[string]any{"name": "double", "kind": "term", "container": "Lib", "read_only": false,
-			"definition": map[string]any{"file": "/project/lib.tesl", "line": 2, "col": 3, "end_line": 2, "end_col": 9}}}}
+			"definition": map[string]any{"file": lib, "line": 2, "col": 3, "end_line": 2, "end_col": 9}}}}
 	if edit != nil {
 		edit(response)
 	}
