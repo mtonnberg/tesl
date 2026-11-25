@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTER = "dev-docs/migration-pr-register.json"
 CONTRACT = "dev-docs/migration-pr-scope.md"
 SOURCES = (
-    "roadmap/next/database-migrations.md",
+    "roadmap/completed/database-migrations.md",
     "roadmap/next/queue-payload-migrations.md",
-    "roadmap/next/staged-uniqueness-guard.md",
+    "roadmap/later/staged-uniqueness-guard.md",
     "dev-docs/migration-delivery-status.md",
 )
 DISPOSITIONS = {"required", "deferred-postmerge", "unsupported-by-design", "nonblocker"}

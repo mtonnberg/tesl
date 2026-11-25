@@ -2,8 +2,10 @@
 
 > Audience: contributors implementing, reviewing, and verifying schema migrations.
 
-This ledger tracks the work in `roadmap/next/database-migrations.md`,
-`queue-payload-migrations.md`, and `staged-uniqueness-guard.md`. The history file is
+This ledger tracks the work in `roadmap/completed/database-migrations.md`,
+`roadmap/next/queue-payload-migrations.md`, and `roadmap/later/staged-uniqueness-guard.md`.
+Remaining migration work is in `roadmap/next/migrations-release-acceptance.md` and
+`roadmap/next/migrations-operator-workflow.md`. The history file is
 non-normative. An unchecked row is not delivered.
 
 ## Current assessment and implementation order

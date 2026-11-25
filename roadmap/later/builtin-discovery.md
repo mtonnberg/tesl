@@ -1,6 +1,8 @@
 # Builtin discovery and playground adoption
 
-Status: first implementation available locally; follow-up work remains below.
+Status: core shipped (search, catalog, CLI/MCP, playground). Moved to `later/`
+2026-11-25: the remaining items below are polish and depend on published releases
+([`next/mainstream_installation.md`](../next/mainstream_installation.md) M3).
 Location: compiler, CLI/MCP, playground. Adoption strategy and editorial content
 remain in the separate `tesl-adoption` repository.
 

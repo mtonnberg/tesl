@@ -1,8 +1,17 @@
 # Native Windows support
 
-Status: in progress, 2026-09-05. The native Windows source-build/parity gate passes.
-Native Windows is not yet a supported installation; offline distribution remains
-unverified.
+Status: in progress, updated 2026-11-25. The native Windows source-build/parity
+gate passes, and hosted CI on `main` assembles and tests the unsigned setup
+executable. Native Windows is not yet a supported installation: no release is
+published (installation M3), and the clean-machine, editor and WinGet items below
+remain open.
+
+Hosted evidence, 2026-11-25: the *Native portability* workflow passes on `main`
+(run 45478043228, `d2a2ede`) for all five targets — Linux x86-64/ARM64, macOS
+Intel/ARM64 and Windows x86-64 — including candidate assembly, the installed-archive
+workflow, macOS ad-hoc signing/offline checks, the Windows setup executable, and the
+main-only provenance job that attests the final bytes. No GitHub Release has been
+published yet: downloads are still per-run CI artifacts.
 
 Implemented so far:
 - Shared native CLI and tool discovery, Windows executable suffixes, and
@@ -189,7 +198,7 @@ do not wait for this work before Windows enters their required target matrix.
 
 ### W0 — Prove the native build and freeze the matrix
 
-- [ ] Consume a Nix-exported locked plan on a native Windows runner and build the
+- [x] Consume a Nix-exported locked plan on a native Windows runner and build the
   OCaml compiler plus Go CLI/tooling. Audit generators, subprocess calls, DLL
   dependencies, and build-only Unix tools.
 - [ ] Run a database-free program, a negative proof fixture, and a compiler JSON

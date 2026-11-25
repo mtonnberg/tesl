@@ -1,5 +1,29 @@
 # Queue payload migrations (dependent on database-migrations)
 
+Status: partly shipped, checked 2026-11-25. The prerequisite half below and most of
+the `jobs:` surface are in main: frozen job types in the schema closure, unchanged-
+payload restamping, checked `jobs:` transformations, `QueueRepair` (business repair,
+execution-failure recovery, audited discard), ordered row-first / payload-second
+migrations, and bounded removal of an empty queue. The design it depends on is now
+[`completed/database-migrations.md`](../completed/database-migrations.md) (§14).
+
+**Remaining work** (the migration PR marked the first two "unsupported by design"
+for that release, `PR-SIMULTANEOUS` / `PR-RENAME` in
+[`dev-docs/migration-pr-scope.md`](../../dev-docs/migration-pr-scope.md)):
+
+1. Simultaneous row and payload changes in one migration (today: refused, with a
+   diagnostic explaining the ordered split).
+2. Queue membership changes: renaming a job type, and removing a job type whose
+   queue still holds jobs (today only an empty queue can be removed).
+3. The schema-level `IgnoreOld` constructor: an explicit, counted, audited
+   decision to drop old in-flight jobs of a changed type (today the closest is
+   `QueueRepair` with `on: "unconverted"` after a failed conversion).
+4. LANGUAGE-SPEC rules for items 1–3. The `jobs` record with `Migrate` is already
+   specified ("Contextual queue decisions"); it states that queue removal and
+   `IgnoreOld` are not supported yet.
+5. Versioned queues under `topology: Embedded` (today Worker topology only; also
+   listed in [`migrations-operator-workflow.md`](migrations-operator-workflow.md)).
+
 ## What
 
 Make queue job record types part of the versioned schema, so that a job enqueued by
@@ -148,4 +172,5 @@ recovery decision; general schema membership changes still need their own surfac
 - The prerequisite implementation already places job records in the ordinary
   versioned schema closure and lists them in `queueSchema`; no new module kind
   is needed for this implementation.
-- Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration`.
+- Elaboration rules for `jobs:` in LANGUAGE-SPEC alongside `Migration` — done for
+  `Migrate`; rename, removal and `IgnoreOld` remain (see Remaining work).
