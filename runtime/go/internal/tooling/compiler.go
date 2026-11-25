@@ -249,6 +249,8 @@ func ValidateCompilerJSON(flag string, payload []byte) error {
 		}
 	case "--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json":
 		return validateWorkspaceJSON(flag, root, payload)
+	case "--workspace-symbols-json":
+		return validateWorkspaceSymbolsJSON(payload)
 	case "--search-json":
 		return validateSearchResponse(root)
 	case "--check-json", "--check-json-v2":
@@ -555,7 +557,7 @@ func knownCompilerJSONFlag(flag string) bool {
 	switch flag {
 	case "--check-json", "--check-json-v2", "--agent-context-json", "agent-context", "--type-at-json", "--field-at-json",
 		"--definition-json", "--type-definition-json", "--signature-help-json", "--completions-json",
-		"--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json",
+		"--workspace-definition-json", "--workspace-references-json", "--workspace-rename-json", "--workspace-symbols-json",
 		"--occurrences-json", "--selection-range-json", "--local-bindings-json", "--semantic-json", "--doc-json", "--format-json", "--search-json":
 		return true
 	default:

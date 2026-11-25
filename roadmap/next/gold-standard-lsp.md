@@ -194,6 +194,9 @@ stale work never overwrites newer diagnostics.
   produce import updates under the same edit-precondition rules.
 - [ ] Workspace symbol search and diagnostics for affected unopened files,
   with bounded partial results, progress, and clearing of obsolete diagnostics.
+  *(Workspace symbol search shipped: `--workspace-symbols-json`, LSP
+  `workspace/symbol`, MCP `tesl.workspace_symbols`. Diagnostics for unopened
+  files remain.)*
 - [ ] Incoming/outgoing call navigation using resolved calls; explicitly mark
   unknown or indirect targets instead of inventing a complete call graph.
 - [ ] Expose the same project operations through targeted CLI/session and MCP

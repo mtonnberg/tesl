@@ -620,6 +620,13 @@ all open buffers, including sibling snapshots and migration roots.
   unopened files. Rename is advertised only when the client supports
   `documentChanges` and `transactional` or `textOnlyTransactional` failure handling. Clients must apply the complete proposal; this server never
   applies filesystem edits itself. Binding conflicts return no edits.
+- `workspace/symbol` — project-wide declaration search from `--workspace-symbols-json`.
+  Returns `SymbolInformation[]` with `containerName` set to the declaring module and
+  kind Function (term), Struct (type) or Constructor (constructor). The compiler needs
+  one project file to find `tesl.toml`, so the server anchors the query on an open
+  document; with no open document, or a query over 128 bytes, the result is `[]`.
+  Each location is converted from its own verified source bytes, including unsaved
+  buffers, like references.
 - `textDocument/documentHighlight` — same-file occurrence ranges from `--occurrences-json`, each as
   `{ range, kind: 1 }` (Text; the flag does not distinguish read vs write).
 
@@ -642,7 +649,7 @@ The compiler first writes a framed UTF-8 JSON handshake:
 
 ```json
 {"version":1,"protocol":"tesl-workspace","invalidation":"dependency-inputs",
- "capabilities":["workspace-navigation","workspace-rename-arguments-v1"]}
+ "capabilities":["workspace-navigation","workspace-rename-arguments-v1","workspace-symbols-v1"]}
 ```
 
 Existing source queries and workspace navigation contain five consecutive frames, in this order:
@@ -658,6 +665,9 @@ Existing source queries and workspace navigation contain five consecutive frames
 The optional capabilities advertise compiler-owned cross-file navigation and the
 rename argument extension. `--workspace-rename-json` adds two frames after Column:
 New name (at most 128 bytes) and Expected semantic snapshot (at most 128 bytes).
+`--workspace-symbols-json` (capability `workspace-symbols-v1`) sends empty Line and
+Column frames and adds one frame after Column: the Query (at most 128 bytes, UTF-8,
+no NUL). A client must not send it to a compiler whose handshake lacks the capability.
 No other flag changes its framing. Clients must check the corresponding capability
 before sending these flags, and include both extra arguments in query-cache keys.
 The expected semantic snapshot comes from the nested navigation result below; it
@@ -726,7 +736,19 @@ contracts. These additional targeted commands share one compiler-owned index:
 tesl-compiler --workspace-definition-json FILE LINE COL
 tesl-compiler --workspace-references-json FILE LINE COL
 tesl-compiler --workspace-rename-json FILE LINE COL NEW_NAME EXPECTED_SNAPSHOT
+tesl-compiler --workspace-symbols-json FILE QUERY
 ```
+
+`--workspace-symbols-json` searches the top-level declarations of every project file
+under the `tesl.toml` root that contains FILE (functions, types, constructors,
+codecs, databases); the bundled standard library is excluded (use `--search-json`).
+Matching ignores case and ranks exact, then prefix, then substring, then in-order
+subsequence matches, then by name and module. An empty query lists everything. At
+most 200 results are returned and `truncated` says whether more matched. The
+response shares the snapshot fields below and adds `query`, `truncated` and
+`symbols: [{name, kind, container, definition, read_only}]`, where `kind` is
+`term`, `type` or `constructor`, `container` is the module name, and every
+`definition.file` has an entry in `inputs`.
 
 Positions and all returned ranges use **zero-based UTF-8 byte columns**, including
 string interpolation expressions. Frontends convert positions using the exact

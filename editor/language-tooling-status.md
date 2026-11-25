@@ -12,6 +12,7 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 | Definition/declaration | `--workspace-definition-json` | Compiler-owned project identities across imports; read-only lifted stdlib definitions; explicit incomplete-index errors |
 | Type definition | `--type-definition-json` | Existing same-file type lookup |
 | References | `--workspace-references-json` | Cross-file compiler identities and import/export clauses; declaration filtering; explicit completeness and per-target UTF-8/UTF-16 conversion |
+| Workspace symbols | `--workspace-symbols-json` | Top-level declarations of all project files (not the stdlib); case-insensitive ranked match; bounded at 200 with `truncated`; anchored on an open document |
 | Highlights/linked editing | `--occurrences-json` | Same-file occurrences |
 | Prepare rename/rename | `--workspace-references-json`, `--workspace-rename-json` | Rechecked staged project, binding/capture/type/proof checks and whole-input preconditions; requires an initially valid project and a client supporting transactional versioned edits |
 | Completion/resolve | `--completions-json`, `--doc-json` | Stdlib discovery, sibling exported types, auto-imports, receiver fields, partial parsing, revision checks |
@@ -26,7 +27,7 @@ The executable fixtures are in `server_test.go`, `completion_test.go`,
 | Lifecycle | Open/change/save/close/watched-file notifications | Diagnostic generations and retained compiler ownership |
 | Request cancellation | `$/cancelRequest` to compiler context cancellation | Active/queued cancellation, late-result rejection, bounded queue; document handlers retain arrival order |
 
-Workspace symbols, cross-file type definitions, file/module moves, affected-module
+Cross-file type definitions, file/module moves, affected-module
 incremental checking, call hierarchy and proof/effect explanations remain roadmap
 work. The compiler index records module dependency edges and semantic use sites;
 changed snapshots still invalidate the graph conservatively. Unsupported semantic
@@ -38,8 +39,8 @@ MCP exposes `tesl.agent_context`, `tesl.check`, `tesl.type_at`, `tesl.signature`
 `tesl.completions`, `tesl.definition`, `tesl.references`, and
 `tesl.proof_obligations` through the same compiler query implementation. Its
 `references` tool retains the same-file contract. The additional
-`tesl.workspace_definition`, `tesl.workspace_references`, and
-`tesl.workspace_rename` tools expose project queries and checked, read-only edit
+`tesl.workspace_definition`, `tesl.workspace_references`, `tesl.workspace_symbols`
+and `tesl.workspace_rename` tools expose project queries and checked, read-only edit
 proposals with snapshot preconditions. `tesl.debug_inspect` and
 `tesl.debug_attach` use the separate authenticated runtime debugger.
 

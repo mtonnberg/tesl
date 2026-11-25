@@ -327,7 +327,13 @@ func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path
 	if flag == "--workspace-rename-json" && !process.capabilities["workspace-rename-arguments-v1"] {
 		return nil, Result{}, errors.New("compiler: checked workspace rename capability is unavailable")
 	}
-	if len(position) == 2 && flag != "--workspace-rename-json" || len(position) == 4 && flag == "--workspace-rename-json" {
+	if flag == "--workspace-symbols-json" && !process.capabilities["workspace-symbols-v1"] {
+		return nil, Result{}, errors.New("compiler: workspace symbol search capability is unavailable")
+	}
+	symbols := flag == "--workspace-symbols-json"
+	if symbols && len(position) == 1 {
+		// Line and column frames stay empty; the query follows as one extra frame.
+	} else if len(position) == 2 && flag != "--workspace-rename-json" && !symbols || len(position) == 4 && flag == "--workspace-rename-json" {
 		line, col = position[0], position[1]
 	} else if len(position) != 0 || workspaceFlag(flag) {
 		return nil, Result{}, errors.New("compiler: invalid query position")
@@ -341,6 +347,9 @@ func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path
 		if flag == "--workspace-rename-json" {
 			fields = append(fields, position[2:]...)
 			limits = append(limits, 128, 128)
+		} else if symbols {
+			fields = append(fields, position[0])
+			limits = append(limits, MaxWorkspaceSymbolQuery)
 		}
 		for i, field := range fields {
 			if len(field) > limits[i] {

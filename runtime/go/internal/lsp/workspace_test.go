@@ -225,3 +225,54 @@ func TestWorkspaceRenameNegotiatesAtomicClientEdits(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceSymbolsRealCompiler(t *testing.T) {
+	root, lib, main := workspaceProject(t)
+	server := NewServer(workspaceCompiler(t))
+	path, libPath := filepath.Join(root, "main.tesl"), filepath.Join(root, "lib.tesl")
+	uri, libURI := protocol.PathToURI(path), protocol.PathToURI(libPath)
+	// lib.tesl has an unsaved rename: search must see the buffer, not the disk.
+	lib = strings.ReplaceAll(lib, "double", "doubleIt")
+	main = strings.ReplaceAll(main, "double", "doubleIt")
+	server.documents[uri] = document{Path: path, URI: uri, Text: main, Version: 1}
+	server.documents[libURI] = document{Path: libPath, URI: libURI, Text: lib, Version: 2}
+	response := completionResponseFor(t, server, "workspace/symbol", map[string]any{"query": "DOUB"})
+	var symbols []struct {
+		Name      string `json:"name"`
+		Kind      int    `json:"kind"`
+		Container string `json:"containerName"`
+		Location  struct {
+			URI   string `json:"uri"`
+			Range struct {
+				Start protocol.Position `json:"start"`
+			} `json:"range"`
+		} `json:"location"`
+	}
+	if response.Error != nil || json.Unmarshal(response.Result, &symbols) != nil || len(symbols) != 1 {
+		t.Fatalf("workspace/symbol = %+v", response)
+	}
+	got := symbols[0]
+	want, err := protocol.NewLineIndex(lib).Position(strings.Index(lib, "doubleIt("))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "doubleIt" || got.Kind != 12 || got.Container != "Lib" || got.Location.URI != libURI || got.Location.Range.Start != want {
+		t.Fatalf("symbol = %+v, want doubleIt at %+v", got, want)
+	}
+	all := completionResponseFor(t, server, "workspace/symbol", map[string]any{"query": ""})
+	if all.Error != nil || !strings.Contains(string(all.Result), `"show"`) || strings.Contains(string(all.Result), `"Int"`) {
+		t.Fatalf("empty query = %s", all.Result)
+	}
+	tooLong := completionResponseFor(t, server, "workspace/symbol", map[string]any{"query": strings.Repeat("a", 129)})
+	if tooLong.Error != nil || string(tooLong.Result) != "[]" {
+		t.Fatalf("oversized query = %+v", tooLong)
+	}
+}
+
+func TestWorkspaceSymbolsWithoutOpenDocumentIsEmpty(t *testing.T) {
+	server := NewServer(tooling.Client{Executable: "unused"})
+	response := completionResponseFor(t, server, "workspace/symbol", map[string]any{"query": "x"})
+	if response.Error != nil || string(response.Result) != "[]" {
+		t.Fatalf("workspace/symbol without documents = %+v", response)
+	}
+}

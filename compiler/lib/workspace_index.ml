@@ -422,12 +422,66 @@ let rename_json snapshot selected new_name expected =
 
 (* Reuse the graph across targeted queries in the same immutable session mirror.
    Query_cache.clear invalidates this together with all other semantic caches. *)
+(* Workspace symbol search: top-level declarations of project files (not the
+   bundled standard library, which `tesl search` covers). Matching ignores
+   case; candidates rank exact, prefix, substring, then in-order subsequence,
+   then by name and path. A bounded result says whether it was truncated. *)
+let max_symbol_results = 200
+let max_symbol_query = 128
+
+let symbol_rank query name =
+  let query = String.lowercase_ascii query and name = String.lowercase_ascii name in
+  let rec subsequence i j =
+    i = String.length query || (j < String.length name &&
+      subsequence (if query.[i] = name.[j] then i + 1 else i) (j + 1)) in
+  let contains () =
+    let n = String.length name and q = String.length query in
+    let rec from i = i + q <= n && (String.sub name i q = query || from (i + 1)) in from 0 in
+  if query = "" then Some 3
+  else if name = query then Some 0
+  else if String.starts_with ~prefix:query name then Some 1
+  else if contains () then Some 2
+  else if subsequence 0 0 then Some 3
+  else None
+
+let workspace_symbols snapshot query =
+  List.concat_map (fun unit ->
+    if not (within snapshot.root unit.path) then [] else
+    List.filter_map (fun symbol ->
+      Option.map (fun rank -> rank, unit.ast.module_name, symbol) (symbol_rank query symbol.symbol_name))
+      (symbols unit.local)) snapshot.units
+  |> List.sort (fun (r1, m1, (a : resolved_symbol)) (r2, m2, (b : resolved_symbol)) ->
+       compare (r1, a.symbol_name, m1, a.symbol_loc) (r2, b.symbol_name, m2, b.symbol_loc))
+
+let symbols_json snapshot query =
+  let found = workspace_symbols snapshot query in
+  let shown = List.filteri (fun i _ -> i < max_symbol_results) found in
+  let row (_, container, s) = Printf.sprintf {|{"name":%s,"kind":%s,"container":%s,"definition":%s,"read_only":%b}|}
+    (json_encode_string s.symbol_name) (json_encode_string (kind s.symbol_kind)) (json_encode_string container)
+    (loc_json s.symbol_loc) (source_read_only snapshot s.symbol_loc.file) in
+  Printf.sprintf {|{"version":1,"workspace_root":%s,"snapshot":%s,"coordinate_encoding":"utf-8","complete":%b,"problems":%s,"inputs":%s,"query":%s,"truncated":%b,"symbols":%s}|}
+    (json_encode_string snapshot.root) (json_encode_string snapshot.id) (snapshot.problems = [])
+    (json_list problem_json snapshot.problems) (json_list input_json snapshot.inputs)
+    (json_encode_string query) (List.length found > max_symbol_results) (json_list row shown)
+
 let cached_snapshot = Query_cache.memo ~limit:2 ~max_weight:(2 * max_bytes)
   ~weight:(fun _ -> 0)
   ~value_weight:(fun snapshot -> List.fold_left (fun total (_, source) -> total + String.length source) 0 snapshot.inputs)
   build
 
+let run_symbols ~filename query =
+  if String.length query > max_symbol_query || String.contains query '\000' || not (String.is_valid_utf_8 query) then
+    invalid_arg "invalid workspace symbol query";
+  let snapshot = cached_snapshot filename in
+  let current = build ~root:snapshot.root filename in
+  let snapshot = if current.id = snapshot.id then snapshot else
+    { snapshot with problems = { code = "stale-snapshot"; file = filename; message = "workspace changed during query" } :: snapshot.problems } in
+  symbols_json snapshot query
+
 let run ~filename flag arguments =
+  if flag = "--workspace-symbols-json" then (match arguments with
+    | [query] -> run_symbols ~filename query
+    | _ -> invalid_arg "invalid workspace symbol arguments") else
   let line, col, rename = match arguments with
     | [line; col] when flag <> "--workspace-rename-json" -> int_of_string line, int_of_string col, None
     | [line; col; name; expected] when flag = "--workspace-rename-json" -> int_of_string line, int_of_string col, Some (name, expected)

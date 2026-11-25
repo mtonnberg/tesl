@@ -307,6 +307,11 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeReferences(ctx, request.ID, request.Params, writer)
+	case "workspace/symbol":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeWorkspaceSymbols(ctx, request.ID, request.Params, writer)
 	case "textDocument/prepareRename":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -414,6 +419,7 @@ func initializeResult() map[string]any {
 			"declarationProvider":        true,
 			"typeDefinitionProvider":     true,
 			"referencesProvider":         true,
+			"workspaceSymbolProvider":    true,
 			"renameProvider":             map[string]any{"prepareProvider": true},
 			"documentFormattingProvider": true,
 			"completionProvider":         map[string]any{"resolveProvider": true, "triggerCharacters": []string{"."}},

@@ -14,6 +14,7 @@
       tesl --workspace-definition-json <file> <line> <col> emit workspace definition and snapshot
       tesl --workspace-references-json <file> <line> <col> emit complete/partial semantic references
       tesl --workspace-rename-json <file> <line> <col> <name> <snapshot> check a rename proposal
+      tesl --workspace-symbols-json <file> <query>   search project declarations by name
       tesl --type-at-json <file> <line> <col> emit expression type at cursor as JSON
       tesl --field-at-json <file> <line> <col> emit record field info at cursor as JSON
       tesl --completions-json <file> <line> <col> emit completions at cursor as JSON
@@ -44,6 +45,7 @@ let usage = {|Usage:
   tesl --workspace-definition-json <file> <line> <col> emit workspace definition and snapshot
   tesl --workspace-references-json <file> <line> <col> emit complete/partial workspace references
   tesl --workspace-rename-json <file> <line> <col> <name> <snapshot> check workspace rename proposal
+  tesl --workspace-symbols-json <file> <query>   search project declarations by name
   tesl --definition-json <file> <line> <col> emit definition location as JSON
   tesl --occurrences-json <file> <line> <col> emit same-file occurrences as JSON
   tesl --type-at-json <file> <line> <col> emit expression type at cursor as JSON
