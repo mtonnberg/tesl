@@ -272,8 +272,64 @@ let migration_source_ownership () =
     let index = build file in complete index;
     ignore (expect_safe index (selected index file 2 3) "twice"))
 
+let names rows = List.map (fun (_, _, (s : Compile.resolved_symbol)) -> s.symbol_name) rows
+
+let workspace_symbol_search () =
+  let shapes = "module Shapes exposing [Shape(..), area, Point]\nimport Tesl.Prelude exposing [Int]\n" ^
+    "type Shape\n  = Circle radius: Int\n  | Square width: Int\nrecord Point {\n  x: Int\n  y: Int\n}\n" ^
+    "fn area(s: Shape) -> Int =\n  case s of\n    Circle r -> r * r\n    Square w -> w * w\n" in
+  with_project (fixtures @ ["shapes.tesl", shapes]) (fun root ->
+    let index = build (main_path root) in complete index;
+    check (list string) "prefix ranks before substring" ["area"; "Square"] (names (workspace_symbols index "ar"));
+    check (list string) "in-order subsequence matches last" ["Square"] (names (workspace_symbols index "sqe"));
+    check (list string) "exact before prefix before substring" ["area"] (names (workspace_symbols index "AREA"));
+    check (list string) "types and constructors are listed" ["Circle"] (names (workspace_symbols index "circ"));
+    check bool "empty query lists every project declaration" true
+      (List.for_all (fun n -> List.mem n (names (workspace_symbols index "")))
+         ["double"; "run"; "Shape"; "Circle"; "Square"; "Point"; "area"]);
+    check bool "bundled standard library is not listed" false (List.mem "Int" (names (workspace_symbols index "")));
+    check (list string) "no match is empty" [] (names (workspace_symbols index "zzz"));
+    let _, container, symbol = List.hd (workspace_symbols index "area") in
+    check string "container module" "Shapes" container;
+    check string "definition file" (Filename.concat root "shapes.tesl") symbol.symbol_loc.file;
+    let json = symbols_json index "area" in
+    check bool "response carries snapshot and kind" true
+      (contains json {|"kind":"term"|} && contains json ("\"snapshot\":\"" ^ index.id ^ "\"") && contains json {|"truncated":false|});
+    check bool "oversized query refused" true
+      (try ignore (run_symbols ~filename:(main_path root) (String.make 129 'a')); false with Invalid_argument _ -> true))
+
+let workspace_symbol_truncation () =
+  let many = String.concat "" (List.init (max_symbol_results + 5) (fun i -> Printf.sprintf "fn item%03d(n: Int) -> Int = n\n" i)) in
+  let source = "module Many exposing [item000]\nimport Tesl.Prelude exposing [Int]\n" ^ many in
+  with_project ["many.tesl", source] (fun root ->
+    let index = build (Filename.concat root "many.tesl") in complete index;
+    let json = symbols_json index "item" in
+    check bool "bounded result says it was truncated" true (contains json {|"truncated":true|});
+    check bool "rank then name order is stable" true (contains json {|"name":"item000"|} && not (contains json {|"name":"item204"|})))
+
+let cross_file_type_definition () =
+  let lib = "module Lib exposing [Price, makePrice]\nimport Tesl.Prelude exposing [Int]\ntype Price = Int\nfn makePrice(n: Int) -> Price = Price n\n" in
+  let main = "module Main exposing [run, keep]\nimport Tesl.Prelude exposing [Int]\nimport Lib exposing [Price, makePrice]\n" ^
+    "fn run(n: Int) -> Int =\n  let p = makePrice n\n  n\nfn keep(q: Price) -> Price = q\n" in
+  with_project ["lib.tesl", lib; "main.tesl", main] (fun root ->
+    let index = build (main_path root) in complete index;
+    let lib_path = Filename.concat root "lib.tesl" in
+    let target line col = Option.map (fun (s : Compile.resolved_symbol) -> s.symbol_name, s.symbol_loc.file, s.symbol_loc.start.line)
+      (type_definition index (main_path root) line col) in
+    let price = Some ("Price", lib_path, 2) in
+    check (option (triple string string int)) "binding of imported type" price (target 4 6);
+    check (option (triple string string int)) "call uses the function's result type" price (target 4 10);
+    check (option (triple string string int)) "value of an imported annotated type" price (target 6 30);
+    check (option (triple string string int)) "type name in an annotation" price (target 6 11);
+    check (option (triple string string int)) "primitive has no project declaration" None (target 3 7);
+    let json = run ~filename:(main_path root) "--workspace-type-definition-json" ["4"; "6"] in
+    check bool "workspace response names the declaration" true
+      (contains json {|"name":"Price"|} && contains json {|"kind":"type"|} && contains json {|"complete":true|}))
+
 let () = Alcotest.run "Workspace semantic index" ["identity and edits", List.map (fun (name, test) -> test_case name `Quick test)
-  ["migration source ownership", migration_source_ownership;
+  ["cross-file type definition", cross_file_type_definition;
+   "workspace symbol search", workspace_symbol_search; "workspace symbol truncation", workspace_symbol_truncation;
+   "migration source ownership", migration_source_ownership;
    "symlinked temporary parent", symlinked_temporary_parent;
    "interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;
    "invalid rename identifiers", invalid_rename_names; "stable mirror identity", stable_mirror_identity;

@@ -422,19 +422,109 @@ let rename_json snapshot selected new_name expected =
 
 (* Reuse the graph across targeted queries in the same immutable session mirror.
    Query_cache.clear invalidates this together with all other semantic caches. *)
+(* Workspace symbol search: top-level declarations of project files (not the
+   bundled standard library, which `tesl search` covers). Matching ignores
+   case; candidates rank exact, prefix, substring, then in-order subsequence,
+   then by name and path. A bounded result says whether it was truncated. *)
+let max_symbol_results = 200
+let max_symbol_query = 128
+
+let symbol_rank query name =
+  let query = String.lowercase_ascii query and name = String.lowercase_ascii name in
+  let rec subsequence i j =
+    i = String.length query || (j < String.length name &&
+      subsequence (if query.[i] = name.[j] then i + 1 else i) (j + 1)) in
+  let contains () =
+    let n = String.length name and q = String.length query in
+    let rec from i = i + q <= n && (String.sub name i q = query || from (i + 1)) in from 0 in
+  if query = "" then Some 3
+  else if name = query then Some 0
+  else if String.starts_with ~prefix:query name then Some 1
+  else if contains () then Some 2
+  else if subsequence 0 0 then Some 3
+  else None
+
+let workspace_symbols snapshot query =
+  List.concat_map (fun unit ->
+    if not (within snapshot.root unit.path) then [] else
+    List.filter_map (fun symbol ->
+      Option.map (fun rank -> rank, unit.ast.module_name, symbol) (symbol_rank query symbol.symbol_name))
+      (symbols unit.local)) snapshot.units
+  |> List.sort (fun (r1, m1, (a : resolved_symbol)) (r2, m2, (b : resolved_symbol)) ->
+       compare (r1, a.symbol_name, m1, a.symbol_loc) (r2, b.symbol_name, m2, b.symbol_loc))
+
+let symbols_json snapshot query =
+  let found = workspace_symbols snapshot query in
+  let shown = List.filteri (fun i _ -> i < max_symbol_results) found in
+  let row (_, container, s) = Printf.sprintf {|{"name":%s,"kind":%s,"container":%s,"definition":%s,"read_only":%b}|}
+    (json_encode_string s.symbol_name) (json_encode_string (kind s.symbol_kind)) (json_encode_string container)
+    (loc_json s.symbol_loc) (source_read_only snapshot s.symbol_loc.file) in
+  Printf.sprintf {|{"version":1,"workspace_root":%s,"snapshot":%s,"coordinate_encoding":"utf-8","complete":%b,"problems":%s,"inputs":%s,"query":%s,"truncated":%b,"symbols":%s}|}
+    (json_encode_string snapshot.root) (json_encode_string snapshot.id) (snapshot.problems = [])
+    (json_list problem_json snapshot.problems) (json_list input_json snapshot.inputs)
+    (json_encode_string query) (List.length found > max_symbol_results) (json_list row shown)
+
 let cached_snapshot = Query_cache.memo ~limit:2 ~max_weight:(2 * max_bytes)
   ~weight:(fun _ -> 0)
   ~value_weight:(fun snapshot -> List.fold_left (fun total (_, source) -> total + String.length source) 0 snapshot.inputs)
   build
 
+(* Cross-file type definition. On a type name, the index's own resolution
+   (like go-to-definition). Otherwise the checker's type of the expression
+   under the cursor: a qualified "Lib.Price" resolves in module Lib; a bare
+   name resolves in the file's scope (its own and imported declarations),
+   then in the one project file that declares it. Ambiguity returns null. *)
+let type_definition snapshot filename line col =
+  let filename = canonical filename in
+  match at snapshot filename line col with
+  | Some use when use.symbol.symbol_kind = TypeSymbol -> Some use.symbol
+  | _ ->
+    let unit = List.find_opt (fun unit -> unit.path = filename) snapshot.units in
+    let source = match unit with Some unit -> Some unit.source | None -> List.assoc_opt filename snapshot.inputs in
+    let name = Option.bind source (fun source -> type_name_at_source filename source line col) in
+    let named env wanted = List.find_opt (fun item -> item.bound_name = wanted) env.type_defs
+      |> Option.map (fun item -> canonical_symbol snapshot.units (type_symbol item.bound_name item.bound_loc)) in
+    match name with
+    | None -> None
+    | Some name ->
+      match List.rev (String.split_on_char '.' name) with
+      | [] -> None
+      | base :: [] ->
+        (match Option.bind unit (fun unit -> named unit.scope base) with
+         | Some symbol -> Some symbol
+         | None ->
+           (match List.filter_map (fun unit -> if within snapshot.root unit.path then named unit.local base else None) snapshot.units with
+            | [symbol] -> Some symbol
+            | _ -> None))
+      | base :: qualifier ->
+        let qualifier = String.concat "." (List.rev qualifier) in
+        (match List.filter (fun unit -> unit.ast.module_name = qualifier) snapshot.units with
+         | [owner] -> named owner.local base
+         | _ -> None)
+
+let run_symbols ~filename query =
+  if String.length query > max_symbol_query || String.contains query '\000' || not (String.is_valid_utf_8 query) then
+    invalid_arg "invalid workspace symbol query";
+  let snapshot = cached_snapshot filename in
+  let current = build ~root:snapshot.root filename in
+  let snapshot = if current.id = snapshot.id then snapshot else
+    { snapshot with problems = { code = "stale-snapshot"; file = filename; message = "workspace changed during query" } :: snapshot.problems } in
+  symbols_json snapshot query
+
 let run ~filename flag arguments =
+  if flag = "--workspace-symbols-json" then (match arguments with
+    | [query] -> run_symbols ~filename query
+    | _ -> invalid_arg "invalid workspace symbol arguments") else
   let line, col, rename = match arguments with
     | [line; col] when flag <> "--workspace-rename-json" -> int_of_string line, int_of_string col, None
     | [line; col; name; expected] when flag = "--workspace-rename-json" -> int_of_string line, int_of_string col, Some (name, expected)
     | _ -> invalid_arg "invalid workspace query arguments" in
   if line < 0 || col < 0 then invalid_arg "negative workspace position";
   let snapshot = cached_snapshot filename in
-  let selected = at snapshot filename line col in
+  let selected = if flag = "--workspace-type-definition-json" then
+      Option.map (fun symbol -> { symbol; loc = symbol.symbol_loc; role = "declaration" })
+        (type_definition snapshot filename line col)
+    else at snapshot filename line col in
   let extra = match rename with None -> "" | Some (name, expected) -> rename_json snapshot selected name expected in
   (* One-shot clients have no mirror lock: reject concurrent input changes rather
      than returning edits checked against a different on-disk revision. *)

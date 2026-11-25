@@ -284,7 +284,10 @@ func TestServerAnswersSignatureTypeDefinitionAndReferences(t *testing.T) {
 	if !bytes.Contains(responses[2].Result, []byte(`"uri":`+testFileURIJSON("demo.tesl"))) {
 		t.Fatalf("references result = %s", responses[2].Result)
 	}
-	if len(compiler.flags) != 4 || compiler.flags[1] != "--signature-help-json" || compiler.flags[2] != "--type-definition-json" || compiler.flags[3] != "--workspace-references-json" {
+	// typeDefinition asks the workspace index first; this fake cannot answer it,
+	// so the server falls back to the same-file query.
+	if len(compiler.flags) != 5 || compiler.flags[1] != "--signature-help-json" || compiler.flags[2] != "--workspace-type-definition-json" ||
+		compiler.flags[3] != "--type-definition-json" || compiler.flags[4] != "--workspace-references-json" {
 		t.Fatalf("compiler flags = %#v", compiler.flags)
 	}
 }

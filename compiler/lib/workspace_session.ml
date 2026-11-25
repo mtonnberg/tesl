@@ -1,6 +1,7 @@
 (** Version 1 local session transport. Each request is five length-prefixed byte
     strings: snapshot, flag, absolute staged file, line, column. Workspace rename
-    appends two frames (new name, expected semantic snapshot). Responses are
+    appends two frames (new name, expected semantic snapshot). Workspace symbol
+    search sends empty line/column frames and appends one query frame. Responses are
     length-prefixed JSON. Framing deliberately uses only the OCaml standard
     library; neither source bytes nor filenames undergo shell/string parsing.
     The owner must keep the complete staged tree immutable during a request. *)
@@ -54,7 +55,7 @@ let run input output =
   set_binary_mode_out output true;
   Query_cache.set_enabled true;
   Fun.protect ~finally:(fun () -> Query_cache.set_enabled false; Checker.clear_import_parse_cache ()) (fun () ->
-    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"dependency-inputs\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\"]}";
+    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"dependency-inputs\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\",\"workspace-symbols-v1\",\"workspace-type-definition-v1\"]}";
     let current = ref None in
     let rec loop () =
       match (try Some (read_frame input 128) with End_of_file -> None) with
@@ -68,7 +69,8 @@ let run input output =
           let extra = if flag = "--workspace-rename-json" then begin
             let name = read_frame input 128 in
             let expected = read_frame input 128 in [name; expected]
-          end else [] in
+          end else if flag = "--workspace-symbols-json" then [read_frame input 512]
+          else [] in
           flag, filename, line, col, extra
           with End_of_file -> failwith "truncated session request" in
         let response = try
@@ -82,7 +84,8 @@ let run input output =
             Hashtbl.clear Validation_common.literal_occ_content;
             current := Some (snapshot, inputs)
           end;
-          let position = if line = "" && col = "" then [] else [line; col] @ extra in
+          let position = if flag = "--workspace-symbols-json" then extra
+            else if line = "" && col = "" then [] else [line; col] @ extra in
           let result = cached_query (flag, filename, position) in
           Printf.sprintf "{\"version\":1,\"snapshot\":%s,\"exit_code\":%d,\"result\":%s,\"error\":null,\"cache_hits\":%d,\"cache_misses\":%d}"
             (Compile.json_encode_string snapshot) result.exit_code result.json !Query_cache.hits !Query_cache.misses

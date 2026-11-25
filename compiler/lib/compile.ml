@@ -1941,6 +1941,31 @@ let type_at_source filename source line col =
                    ty = binding.display_ty }
           else None) bindings
 
+(* Like [head_type_name] but keeps a module qualifier: "Lib.Price Int" ->
+   "Lib.Price". The workspace index resolves the qualifier to its module. *)
+let qualified_head_type_name (display_ty : string) : string option =
+  let s = String.trim display_ty in
+  let n = String.length s in
+  let rec take i = if i < n && (is_ident_char s.[i] || s.[i] = '.') then take (i + 1) else i in
+  let stop = take 0 in
+  if stop = 0 then None else Some (String.sub s 0 stop)
+
+(* The (possibly module-qualified) head type name at the cursor, from the same
+   answer as --type-at-json. A function type yields its final result type
+   ("Int -> Lib.Price" -> "Lib.Price"); parenthesised types keep their head. *)
+let type_name_at_source filename source line col : string option =
+  Option.bind (type_at_source filename source line col) (fun info ->
+    let ty = info.ty in
+    let rec last_arrow from found =
+      match String.index_from_opt ty from '>' with
+      | Some i when i > 0 && ty.[i - 1] = '-' -> last_arrow (i + 1) (Some (i + 1))
+      | Some i -> last_arrow (i + 1) found
+      | None -> found in
+    let result = if String.contains ty '(' then ty else match last_arrow 0 None with
+      | Some i -> String.sub ty i (String.length ty - i)
+      | None -> ty in
+    qualified_head_type_name result)
+
 let type_at_file filename line col =
   let source = Source_input.read_text filename in
   type_at_source filename source line col

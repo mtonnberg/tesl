@@ -52,25 +52,129 @@ type WorkspaceRename struct {
 	Checked          string               `json:"checked"`
 	Files            []WorkspaceFileEdits `json:"files"`
 }
+
+// WorkspaceSymbolMatch is one declaration from --workspace-symbols-json.
+type WorkspaceSymbolMatch struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Container  string            `json:"container"`
+	Definition WorkspaceLocation `json:"definition"`
+	ReadOnly   bool              `json:"read_only"`
+}
+
+// WorkspaceSymbolsResponse is the project-wide declaration search result. It
+// shares the snapshot, completeness and input-precondition fields of
+// WorkspaceResponse so callers convert positions against the same bytes.
+type WorkspaceSymbolsResponse struct {
+	Version            int                    `json:"version"`
+	Root               string                 `json:"workspace_root"`
+	Snapshot           string                 `json:"snapshot"`
+	CoordinateEncoding string                 `json:"coordinate_encoding"`
+	Complete           bool                   `json:"complete"`
+	Problems           []WorkspaceProblem     `json:"problems"`
+	Inputs             []WorkspaceInput       `json:"inputs"`
+	Query              string                 `json:"query"`
+	Truncated          bool                   `json:"truncated"`
+	Symbols            []WorkspaceSymbolMatch `json:"symbols"`
+}
+
+// Response returns the shared snapshot fields, for WorkspaceInputTexts.
+func (response WorkspaceSymbolsResponse) Response() WorkspaceResponse {
+	return WorkspaceResponse{Version: response.Version, Root: response.Root, Snapshot: response.Snapshot,
+		CoordinateEncoding: response.CoordinateEncoding, Complete: response.Complete,
+		Problems: response.Problems, Inputs: response.Inputs}
+}
+
+type WorkspaceProblem = struct {
+	Code    string `json:"code"`
+	File    string `json:"file"`
+	Message string `json:"message"`
+}
+
 type WorkspaceResponse struct {
-	Version            int    `json:"version"`
-	Root               string `json:"workspace_root"`
-	Snapshot           string `json:"snapshot"`
-	CoordinateEncoding string `json:"coordinate_encoding"`
-	Complete           bool   `json:"complete"`
-	Problems           []struct {
-		Code    string `json:"code"`
-		File    string `json:"file"`
-		Message string `json:"message"`
-	} `json:"problems"`
-	Inputs     []WorkspaceInput     `json:"inputs"`
-	Symbol     *WorkspaceSymbol     `json:"symbol"`
-	References []WorkspaceReference `json:"references"`
-	Rename     *WorkspaceRename     `json:"rename"`
+	Version            int                  `json:"version"`
+	Root               string               `json:"workspace_root"`
+	Snapshot           string               `json:"snapshot"`
+	CoordinateEncoding string               `json:"coordinate_encoding"`
+	Complete           bool                 `json:"complete"`
+	Problems           []WorkspaceProblem   `json:"problems"`
+	Inputs             []WorkspaceInput     `json:"inputs"`
+	Symbol             *WorkspaceSymbol     `json:"symbol"`
+	References         []WorkspaceReference `json:"references"`
+	Rename             *WorkspaceRename     `json:"rename"`
 }
 
 func workspaceFlag(flag string) bool {
-	return flag == "--workspace-definition-json" || flag == "--workspace-references-json" || flag == "--workspace-rename-json"
+	return flag == "--workspace-definition-json" || flag == "--workspace-references-json" || flag == "--workspace-rename-json" ||
+		flag == "--workspace-symbols-json" || flag == "--workspace-type-definition-json"
+}
+
+// MaxWorkspaceSymbolQuery matches the compiler's query bound.
+const MaxWorkspaceSymbolQuery = 128
+
+func validateWorkspaceSymbolsJSON(payload []byte) error {
+	var response WorkspaceSymbolsResponse
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	if err := decoder.Decode(&response); err != nil {
+		return err
+	}
+	root, err := decodeObject(payload, "workspace symbols")
+	if err != nil {
+		return err
+	}
+	for _, field := range []string{"complete", "truncated"} {
+		if _, ok := root[field].(bool); !ok {
+			return fmt.Errorf("workspace symbols %s must be boolean", field)
+		}
+	}
+	for _, field := range []string{"problems", "inputs", "symbols"} {
+		if _, err := requiredArray(root, field); err != nil {
+			return err
+		}
+	}
+	if response.Root == "" || !filepath.IsAbs(response.Root) || response.Snapshot == "" || response.CoordinateEncoding != "utf-8" ||
+		response.Complete != (len(response.Problems) == 0) || len(response.Query) > MaxWorkspaceSymbolQuery {
+		return errors.New("invalid workspace symbols scope or completeness")
+	}
+	inputs := make(map[string]bool)
+	for _, input := range response.Inputs {
+		decoded, err := hex.DecodeString(input.ContentHash)
+		if !filepath.IsAbs(input.File) || strings.ContainsRune(input.File, 0) || err != nil || len(decoded) != md5.Size || inputs[input.File] {
+			return errors.New("invalid or duplicate workspace input")
+		}
+		inputs[input.File] = true
+	}
+	for _, problem := range response.Problems {
+		if problem.Code == "" || problem.File == "" || problem.Message == "" {
+			return errors.New("incomplete workspace problem")
+		}
+	}
+	return validateObjectArray(root, "symbols", func(value map[string]any, name string) error {
+		for _, field := range []string{"name", "kind", "container"} {
+			if text, err := requiredString(value, field); err != nil || text == "" {
+				return fmt.Errorf("invalid %s %s", name, field)
+			}
+		}
+		switch value["kind"] {
+		case "term", "type", "constructor":
+		default:
+			return fmt.Errorf("invalid %s kind", name)
+		}
+		if _, ok := value["read_only"].(bool); !ok {
+			return fmt.Errorf("%s read_only must be boolean", name)
+		}
+		loc, err := valueObject(value["definition"], name)
+		if err != nil {
+			return err
+		}
+		if err := validateLocation(loc, name, true); err != nil {
+			return err
+		}
+		if file, _ := loc["file"].(string); !inputs[file] {
+			return fmt.Errorf("%s definition has no input precondition", name)
+		}
+		return nil
+	})
 }
 
 func validateWorkspaceJSON(flag string, root map[string]any, payload []byte) error {

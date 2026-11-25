@@ -307,6 +307,11 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeReferences(ctx, request.ID, request.Params, writer)
+	case "workspace/symbol":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeWorkspaceSymbols(ctx, request.ID, request.Params, writer)
 	case "textDocument/prepareRename":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -414,6 +419,7 @@ func initializeResult() map[string]any {
 			"declarationProvider":        true,
 			"typeDefinitionProvider":     true,
 			"referencesProvider":         true,
+			"workspaceSymbolProvider":    true,
 			"renameProvider":             map[string]any{"prepareProvider": true},
 			"documentFormattingProvider": true,
 			"completionProvider":         map[string]any{"resolveProvider": true, "triggerCharacters": []string{"."}},
@@ -988,6 +994,12 @@ type typeDefinitionResponse struct {
 }
 
 func (server *Server) writeTypeDefinition(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
+	// Prefer the compiler's project index, which follows imports. If the index
+	// is unavailable or incomplete (for example a parse error in another file),
+	// fall back to the same-file answer rather than failing the request.
+	if location, found := server.workspaceTypeDefinition(ctx, raw); found {
+		return server.writeResult(writer, id, location)
+	}
 	payload, doc, err := server.queryAt(ctx, raw, "--type-definition-json")
 	if err != nil {
 		return server.writeError(writer, id, internalError, err.Error())

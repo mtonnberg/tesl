@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
@@ -199,4 +200,73 @@ func (server *Server) writeRename(ctx context.Context, id json.RawMessage, raw j
 		changes = append(changes, map[string]any{"textDocument": map[string]any{"uri": protocol.PathToURI(file.File), "version": version}, "edits": edits})
 	}
 	return server.writeResult(writer, id, map[string]any{"documentChanges": changes})
+}
+
+// LSP SymbolKind values for the compiler's three declaration namespaces.
+var workspaceSymbolKinds = map[string]int{"term": 12, "type": 23, "constructor": 9}
+
+// writeWorkspaceSymbols answers workspace/symbol from the compiler's project
+// index. The index needs one file to locate the project root (tesl.toml); any
+// open document works, so with no document open the result is empty.
+func (server *Server) writeWorkspaceSymbols(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
+	var params struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return server.writeError(writer, id, invalidRequest, "workspace/symbol: invalid params")
+	}
+	if len(params.Query) > tooling.MaxWorkspaceSymbolQuery {
+		return server.writeResult(writer, id, []any{})
+	}
+	if server.compiler == nil {
+		return server.writeError(writer, id, internalError, "compiler client is not configured")
+	}
+	uris := make([]string, 0, len(server.documents))
+	for uri := range server.documents {
+		uris = append(uris, uri)
+	}
+	if len(uris) == 0 {
+		return server.writeResult(writer, id, []any{})
+	}
+	sort.Strings(uris)
+	payload, _, err := server.querySourceJSON(ctx, "--workspace-symbols-json", server.documents[uris[0]], server.sourceOverlays(), params.Query)
+	if err != nil {
+		return server.writeError(writer, id, internalError, err.Error())
+	}
+	var response tooling.WorkspaceSymbolsResponse
+	if err := decodeVersioned("--workspace-symbols-json", payload, &response); err != nil {
+		return server.writeError(writer, id, internalError, err.Error())
+	}
+	texts, err := tooling.WorkspaceInputTexts(ctx, response.Response(), server.sourceOverlays())
+	if err != nil {
+		return server.writeError(writer, id, -32801, err.Error())
+	}
+	result := make([]map[string]any, 0, len(response.Symbols))
+	for _, symbol := range response.Symbols {
+		location, err := workspaceLocation(symbol.Definition, texts)
+		if err != nil {
+			return server.writeError(writer, id, internalError, err.Error())
+		}
+		result = append(result, map[string]any{"name": symbol.Name, "kind": workspaceSymbolKinds[symbol.Kind],
+			"containerName": symbol.Container, "location": location})
+	}
+	return server.writeResult(writer, id, result)
+}
+
+// workspaceTypeDefinition returns the cross-file type definition, or found=false
+// when the workspace index cannot answer and the caller should fall back.
+func (server *Server) workspaceTypeDefinition(ctx context.Context, raw json.RawMessage) (map[string]any, bool) {
+	response, _, err := server.workspaceQuery(ctx, raw, "--workspace-type-definition-json")
+	if err != nil || response.Symbol == nil {
+		return nil, false
+	}
+	texts, err := tooling.WorkspaceInputTexts(ctx, response, server.sourceOverlays())
+	if err != nil {
+		return nil, false
+	}
+	location, err := workspaceLocation(response.Symbol.Definition, texts)
+	if err != nil {
+		return nil, false
+	}
+	return location, true
 }

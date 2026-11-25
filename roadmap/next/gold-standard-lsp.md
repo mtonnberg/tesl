@@ -191,13 +191,18 @@ stale work never overwrites newer diagnostics.
 - [x] Compiler-owned cross-file definition and references, including declaration
   identity and explicit completeness, through LSP and CLI/session/MCP.
 - [ ] Cross-file type-definition, use-kind filtering, and pagination for large
-  reference sets where supported by the client.
+  reference sets where supported by the client. *(Cross-file type definition
+  shipped: `--workspace-type-definition-json`, LSP `textDocument/typeDefinition`,
+  MCP `tesl.workspace_type_definition`. Use-kind filtering and pagination remain.)*
 - [ ] Conflict-checked rename across imports and callers; file/module moves
   produce import updates under the same edit-precondition rules. *(Symbol rename
   is done — see "Implemented so far"; file/module moves and rename inside an
   already-invalid workspace remain.)*
 - [ ] Workspace symbol search and diagnostics for affected unopened files,
   with bounded partial results, progress, and clearing of obsolete diagnostics.
+  *(Workspace symbol search shipped: `--workspace-symbols-json`, LSP
+  `workspace/symbol`, MCP `tesl.workspace_symbols`. Diagnostics for unopened
+  files remain.)*
 - [ ] Incoming/outgoing call navigation using resolved calls; explicitly mark
   unknown or indirect targets instead of inventing a complete call graph.
 - [ ] Expose the same project operations through targeted CLI/session and MCP

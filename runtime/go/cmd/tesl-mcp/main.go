@@ -153,6 +153,14 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		args = sourceQueryArgs("--workspace-definition-json", file, line, col)
 	case "tesl.workspace_references":
 		args = sourceQueryArgs("--workspace-references-json", file, line, col)
+	case "tesl.workspace_type_definition":
+		args = sourceQueryArgs("--workspace-type-definition-json", file, line, col)
+	case "tesl.workspace_symbols":
+		query, ok := arguments["query"].(string)
+		if file == "" || !ok || len(query) > tooling.MaxWorkspaceSymbolQuery {
+			return nil, errors.New("file and a query of at most 128 UTF-8 bytes are required")
+		}
+		args = []string{"--workspace-symbols-json", file, query}
 	case "tesl.workspace_rename":
 		name, nameOK := arguments["new_name"].(string)
 		snapshot, snapshotOK := arguments["expected_snapshot"].(string)
@@ -348,6 +356,7 @@ func debugInspectCommand() string {
 func toolDefinitions() []map[string]any {
 	types := map[string]any{"type": "object", "required": []string{"file"}, "properties": map[string]any{"file": map[string]string{"type": "string"}}}
 	position := map[string]any{"type": "object", "required": []string{"file", "line", "col"}, "properties": map[string]any{"file": map[string]string{"type": "string"}, "line": map[string]string{"type": "integer"}, "col": map[string]string{"type": "integer"}}}
+	symbols := map[string]any{"type": "object", "required": []string{"file", "query"}, "properties": map[string]any{"file": map[string]string{"type": "string"}, "query": map[string]string{"type": "string"}}}
 	rename := map[string]any{"type": "object", "required": []string{"file", "line", "col", "new_name", "expected_snapshot"}, "properties": map[string]any{
 		"file": map[string]string{"type": "string"}, "line": map[string]any{"type": "integer", "minimum": 0}, "col": map[string]any{"type": "integer", "minimum": 0},
 		"new_name": map[string]string{"type": "string"}, "expected_snapshot": map[string]string{"type": "string"},
@@ -396,6 +405,8 @@ func toolDefinitions() []map[string]any {
 		{"name": "tesl.references", "description": "Same-file occurrences.", "inputSchema": position},
 		{"name": "tesl.workspace_definition", "description": "Compiler-resolved cross-file definition and immutable workspace snapshot; UTF-8 byte positions.", "inputSchema": position},
 		{"name": "tesl.workspace_references", "description": "Cross-file semantic references, including import/export clauses, with explicit completeness and source preconditions.", "inputSchema": position},
+		{"name": "tesl.workspace_type_definition", "description": "Declaration of the type of the value or type name at a position, across files (follows imports; a function call uses its result type). symbol is null for types with no project declaration, such as Int. UTF-8 byte positions.", "inputSchema": position},
+		{"name": "tesl.workspace_symbols", "description": "Search the project's top-level declarations (functions, types, constructors) by name across all files; case-insensitive exact, prefix, substring, then subsequence matches. file is any project file; an empty query lists everything (bounded, see truncated). Returns locations and source preconditions. For the standard library use tesl.search.", "inputSchema": symbols},
 		{"name": "tesl.workspace_rename", "description": "Check a workspace rename proposal against expected_snapshot from workspace navigation. Returns edits and all source preconditions; never changes files. Incomplete indexes and binding conflicts are refused.", "inputSchema": rename},
 		{"name": "tesl.proof_obligations", "description": "Unproven compiler obligations.", "inputSchema": types},
 		{"name": "tesl.debug_inspect", "description": "Run a debug target to an agent-selected breakpoint.", "inputSchema": debugInspect},
@@ -405,7 +416,7 @@ func toolDefinitions() []map[string]any {
 
 func isSourceQueryTool(name string) bool {
 	switch name {
-	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references", "tesl.workspace_definition", "tesl.workspace_references", "tesl.workspace_rename":
+	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references", "tesl.workspace_definition", "tesl.workspace_references", "tesl.workspace_rename", "tesl.workspace_type_definition":
 		return true
 	default:
 		return false
