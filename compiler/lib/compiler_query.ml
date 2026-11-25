@@ -9,7 +9,7 @@ let position_flags = ["--definition-json"; "--occurrences-json"; "--type-at-json
 let file_flags = ["--check-json"; "--check-json-v2"; "--agent-context-json"; "agent-context";
   "--local-bindings-json"; "--semantic-json"; "--format-json"]
 let workspace_flags = ["--workspace-definition-json"; "--workspace-references-json"; "--workspace-rename-json";
-  "--workspace-symbols-json"]
+  "--workspace-symbols-json"; "--workspace-type-definition-json"]
 let supports flag = List.mem flag (position_flags @ file_flags @ workspace_flags)
 let valid_args flag position =
   if flag = "--workspace-rename-json" then List.length position = 4

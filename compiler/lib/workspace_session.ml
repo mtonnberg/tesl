@@ -55,7 +55,7 @@ let run input output =
   set_binary_mode_out output true;
   Query_cache.set_enabled true;
   Fun.protect ~finally:(fun () -> Query_cache.set_enabled false; Checker.clear_import_parse_cache ()) (fun () ->
-    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"dependency-inputs\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\",\"workspace-symbols-v1\"]}";
+    write_frame output "{\"version\":1,\"protocol\":\"tesl-workspace\",\"invalidation\":\"dependency-inputs\",\"capabilities\":[\"workspace-navigation\",\"workspace-rename-arguments-v1\",\"workspace-symbols-v1\",\"workspace-type-definition-v1\"]}";
     let current = ref None in
     let rec loop () =
       match (try Some (read_frame input 128) with End_of_file -> None) with

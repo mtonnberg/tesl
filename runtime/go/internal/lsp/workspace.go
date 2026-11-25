@@ -252,3 +252,21 @@ func (server *Server) writeWorkspaceSymbols(ctx context.Context, id json.RawMess
 	}
 	return server.writeResult(writer, id, result)
 }
+
+// workspaceTypeDefinition returns the cross-file type definition, or found=false
+// when the workspace index cannot answer and the caller should fall back.
+func (server *Server) workspaceTypeDefinition(ctx context.Context, raw json.RawMessage) (map[string]any, bool) {
+	response, _, err := server.workspaceQuery(ctx, raw, "--workspace-type-definition-json")
+	if err != nil || response.Symbol == nil {
+		return nil, false
+	}
+	texts, err := tooling.WorkspaceInputTexts(ctx, response, server.sourceOverlays())
+	if err != nil {
+		return nil, false
+	}
+	location, err := workspaceLocation(response.Symbol.Definition, texts)
+	if err != nil {
+		return nil, false
+	}
+	return location, true
+}

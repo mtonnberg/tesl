@@ -189,7 +189,9 @@ stale work never overwrites newer diagnostics.
 - [x] Compiler-owned cross-file definition and references, including declaration
   identity and explicit completeness, through LSP and CLI/session/MCP.
 - [ ] Cross-file type-definition, use-kind filtering, and pagination for large
-  reference sets where supported by the client.
+  reference sets where supported by the client. *(Cross-file type definition
+  shipped: `--workspace-type-definition-json`, LSP `textDocument/typeDefinition`,
+  MCP `tesl.workspace_type_definition`. Use-kind filtering and pagination remain.)*
 - [ ] Conflict-checked rename across imports and callers; file/module moves
   produce import updates under the same edit-precondition rules.
 - [ ] Workspace symbol search and diagnostics for affected unopened files,

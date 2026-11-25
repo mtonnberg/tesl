@@ -307,8 +307,28 @@ let workspace_symbol_truncation () =
     check bool "bounded result says it was truncated" true (contains json {|"truncated":true|});
     check bool "rank then name order is stable" true (contains json {|"name":"item000"|} && not (contains json {|"name":"item204"|})))
 
+let cross_file_type_definition () =
+  let lib = "module Lib exposing [Price, makePrice]\nimport Tesl.Prelude exposing [Int]\ntype Price = Int\nfn makePrice(n: Int) -> Price = Price n\n" in
+  let main = "module Main exposing [run, keep]\nimport Tesl.Prelude exposing [Int]\nimport Lib exposing [Price, makePrice]\n" ^
+    "fn run(n: Int) -> Int =\n  let p = makePrice n\n  n\nfn keep(q: Price) -> Price = q\n" in
+  with_project ["lib.tesl", lib; "main.tesl", main] (fun root ->
+    let index = build (main_path root) in complete index;
+    let lib_path = Filename.concat root "lib.tesl" in
+    let target line col = Option.map (fun (s : Compile.resolved_symbol) -> s.symbol_name, s.symbol_loc.file, s.symbol_loc.start.line)
+      (type_definition index (main_path root) line col) in
+    let price = Some ("Price", lib_path, 2) in
+    check (option (triple string string int)) "binding of imported type" price (target 4 6);
+    check (option (triple string string int)) "call uses the function's result type" price (target 4 10);
+    check (option (triple string string int)) "value of an imported annotated type" price (target 6 30);
+    check (option (triple string string int)) "type name in an annotation" price (target 6 11);
+    check (option (triple string string int)) "primitive has no project declaration" None (target 3 7);
+    let json = run ~filename:(main_path root) "--workspace-type-definition-json" ["4"; "6"] in
+    check bool "workspace response names the declaration" true
+      (contains json {|"name":"Price"|} && contains json {|"kind":"type"|} && contains json {|"complete":true|}))
+
 let () = Alcotest.run "Workspace semantic index" ["identity and edits", List.map (fun (name, test) -> test_case name `Quick test)
-  ["workspace symbol search", workspace_symbol_search; "workspace symbol truncation", workspace_symbol_truncation;
+  ["cross-file type definition", cross_file_type_definition;
+   "workspace symbol search", workspace_symbol_search; "workspace symbol truncation", workspace_symbol_truncation;
    "migration source ownership", migration_source_ownership;
    "symlinked temporary parent", symlinked_temporary_parent;
    "interpolation local scope", interpolation_local_scope; "qualified import all", import_all; "interpolation escaped prefix", interpolation_escapes;

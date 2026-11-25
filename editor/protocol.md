@@ -620,6 +620,10 @@ all open buffers, including sibling snapshots and migration roots.
   unopened files. Rename is advertised only when the client supports
   `documentChanges` and `transactional` or `textOnlyTransactional` failure handling. Clients must apply the complete proposal; this server never
   applies filesystem edits itself. Binding conflicts return no edits.
+- `textDocument/typeDefinition` asks `--workspace-type-definition-json` first and
+  converts the target from its verified source bytes. If the project index cannot
+  answer (for example a parse error in another file) or finds no project
+  declaration, it falls back to the same-file `--type-definition-json` answer.
 - `workspace/symbol` — project-wide declaration search from `--workspace-symbols-json`.
   Returns `SymbolInformation[]` with `containerName` set to the declaring module and
   kind Function (term), Struct (type) or Constructor (constructor). The compiler needs
@@ -649,7 +653,7 @@ The compiler first writes a framed UTF-8 JSON handshake:
 
 ```json
 {"version":1,"protocol":"tesl-workspace","invalidation":"dependency-inputs",
- "capabilities":["workspace-navigation","workspace-rename-arguments-v1","workspace-symbols-v1"]}
+ "capabilities":["workspace-navigation","workspace-rename-arguments-v1","workspace-symbols-v1","workspace-type-definition-v1"]}
 ```
 
 Existing source queries and workspace navigation contain five consecutive frames, in this order:
@@ -668,6 +672,8 @@ New name (at most 128 bytes) and Expected semantic snapshot (at most 128 bytes).
 `--workspace-symbols-json` (capability `workspace-symbols-v1`) sends empty Line and
 Column frames and adds one frame after Column: the Query (at most 128 bytes, UTF-8,
 no NUL). A client must not send it to a compiler whose handshake lacks the capability.
+`--workspace-type-definition-json` (capability `workspace-type-definition-v1`) uses
+the ordinary five frames.
 No other flag changes its framing. Clients must check the corresponding capability
 before sending these flags, and include both extra arguments in query-cache keys.
 The expected semantic snapshot comes from the nested navigation result below; it
@@ -737,7 +743,16 @@ tesl-compiler --workspace-definition-json FILE LINE COL
 tesl-compiler --workspace-references-json FILE LINE COL
 tesl-compiler --workspace-rename-json FILE LINE COL NEW_NAME EXPECTED_SNAPSHOT
 tesl-compiler --workspace-symbols-json FILE QUERY
+tesl-compiler --workspace-type-definition-json FILE LINE COL
 ```
+
+`--workspace-type-definition-json` returns the ordinary navigation response with
+`symbol` set to the declaration of the type at the position. On a type name it is
+that name's resolved declaration. Otherwise it uses the `--type-at-json` type of the
+value under the cursor; a function type uses its final result type. A qualified
+`Lib.Price` resolves in module `Lib`; a bare name resolves in the file's own and
+imported declarations, then in the single project file that declares it. `symbol`
+is null for types without a project declaration (`Int`) or with an ambiguous one.
 
 `--workspace-symbols-json` searches the top-level declarations of every project file
 under the `tesl.toml` root that contains FILE (functions, types, constructors,

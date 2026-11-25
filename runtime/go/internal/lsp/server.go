@@ -994,6 +994,12 @@ type typeDefinitionResponse struct {
 }
 
 func (server *Server) writeTypeDefinition(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
+	// Prefer the compiler's project index, which follows imports. If the index
+	// is unavailable or incomplete (for example a parse error in another file),
+	// fall back to the same-file answer rather than failing the request.
+	if location, found := server.workspaceTypeDefinition(ctx, raw); found {
+		return server.writeResult(writer, id, location)
+	}
 	payload, doc, err := server.queryAt(ctx, raw, "--type-definition-json")
 	if err != nil {
 		return server.writeError(writer, id, internalError, err.Error())

@@ -25,6 +25,7 @@ compiler-query client.
 | `tesl.references` | `{file, line, col}` | `--occurrences-json` | 0-based line, 0-based col. Same-file occurrences. |
 | `tesl.workspace_definition` | `{file, line, col}` | `--workspace-definition-json` | Cross-file compiler identity, definition, snapshot and exact input hashes; zero-based UTF-8 byte columns. |
 | `tesl.workspace_references` | `{file, line, col}` | `--workspace-references-json` | Compiler-resolved workspace references, including exposing clauses. Inspect `complete` and `problems`; partial indexes never authorize a rename. |
+| `tesl.workspace_type_definition` | `{file, line, col}` | `--workspace-type-definition-json` | Declaration of the type of the value (or type name) at a position, across files; a call uses its result type. `symbol` is null for `Int` and other types without a project declaration. |
 | `tesl.workspace_symbols` | `{file, query}` | `--workspace-symbols-json` | Find project declarations by name across all files (case-insensitive exact, prefix, substring, subsequence). `file` is any project file; empty `query` lists all, bounded at 200 (`truncated`). Standard library: use `tesl.search`. |
 | `tesl.workspace_rename` | `{file, line, col, new_name, expected_snapshot}` | `--workspace-rename-json` | Checked proposal against the semantic snapshot returned by workspace navigation. Returns all file edits and source preconditions; never applies edits. |
 | `tesl.proof_obligations` | `{file}` | `--agent-context-json` (sliced) | Just the `proof_obligations` array. |

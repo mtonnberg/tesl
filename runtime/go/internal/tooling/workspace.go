@@ -106,7 +106,7 @@ type WorkspaceResponse struct {
 
 func workspaceFlag(flag string) bool {
 	return flag == "--workspace-definition-json" || flag == "--workspace-references-json" || flag == "--workspace-rename-json" ||
-		flag == "--workspace-symbols-json"
+		flag == "--workspace-symbols-json" || flag == "--workspace-type-definition-json"
 }
 
 // MaxWorkspaceSymbolQuery matches the compiler's query bound.

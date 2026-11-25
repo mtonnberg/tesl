@@ -80,8 +80,10 @@ Use these for a *specific* question — never dump a whole module into context.
 > preconditions still match. These queries use zero-based UTF-8 byte columns.
 > `--workspace-symbols-json FILE QUERY` finds project declarations by name across
 > all files (functions, types, constructors), ranked exact/prefix/substring/subsequence.
+> `--workspace-type-definition-json FILE L C` jumps to the declaration of the type at
+> a position, across files.
 > MCP exposes `tesl.workspace_definition`, `tesl.workspace_references`,
-> `tesl.workspace_symbols` and `tesl.workspace_rename`; see `editor/protocol.md`
+> `tesl.workspace_type_definition`, `tesl.workspace_symbols` and `tesl.workspace_rename`; see `editor/protocol.md`
 > for scope and limits.
 
 > **Diagnostic JSON shapes differ by design.** `agent-context` and `--check-json`

@@ -139,3 +139,36 @@ func TestMCPWorkspaceSymbols(t *testing.T) {
 		t.Fatal("tesl.workspace_symbols is not discoverable")
 	}
 }
+
+func TestMCPWorkspaceTypeDefinition(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compiler); err != nil {
+		t.Skip("build compiler for workspace MCP integration")
+	}
+	project := t.TempDir()
+	for name, text := range map[string]string{"tesl.toml": "[project]\nname=\"test\"\n",
+		"main.tesl": "module Main exposing [run]\nimport Tesl.Prelude exposing [Int]\nimport Lib exposing [makePrice]\nfn run(n: Int) -> Int =\n  let p = makePrice n\n  n\n",
+		"lib.tesl":  "module Lib exposing [Price, makePrice]\nimport Tesl.Prelude exposing [Int]\ntype Price = Int\nfn makePrice(n: Int) -> Price = Price n\n"} {
+		if err := os.WriteFile(filepath.Join(project, name), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := server{compiler: tooling.Client{Executable: compiler, Sessions: tooling.NewWorkspaceSessions(), Environment: append(os.Environ(), "TESL_REPO_ROOT="+root)}}
+	defer func() { _ = server.compiler.Close() }()
+	payload, err := server.callTool(context.Background(), "tesl.workspace_type_definition",
+		map[string]any{"file": filepath.Join(project, "main.tesl"), "line": float64(4), "col": float64(6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response tooling.WorkspaceResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Symbol == nil || response.Symbol.Name != "Price" || response.Symbol.Definition.File != filepath.Join(project, "lib.tesl") {
+		t.Fatalf("type definition = %s", payload)
+	}
+}

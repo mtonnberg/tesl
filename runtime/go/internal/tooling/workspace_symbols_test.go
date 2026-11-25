@@ -62,3 +62,11 @@ func TestWorkspaceSymbolsSessionArgumentsAndCapability(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceTypeDefinitionRequiresCapability(t *testing.T) {
+	process := &workspaceProcess{capabilities: map[string]bool{"workspace-navigation": true}}
+	if _, _, err := process.query(context.Background(), "snapshot", "--workspace-type-definition-json", "file", []string{"0", "0"}, 1024); err == nil ||
+		!strings.Contains(err.Error(), "type definition capability") {
+		t.Fatalf("older compiler session accepted type definition: %v", err)
+	}
+}

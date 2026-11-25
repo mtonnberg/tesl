@@ -276,3 +276,70 @@ func TestWorkspaceSymbolsWithoutOpenDocumentIsEmpty(t *testing.T) {
 		t.Fatalf("workspace/symbol without documents = %+v", response)
 	}
 }
+
+func TestWorkspaceTypeDefinitionAcrossFilesRealCompiler(t *testing.T) {
+	root := t.TempDir()
+	lib := "module Lib exposing [Price, makePrice]\nimport Tesl.Prelude exposing [Int]\ntype Price = Int\nfn makePrice(n: Int) -> Price = Price n\n"
+	main := "module Main exposing [run]\nimport Tesl.Prelude exposing [Int]\nimport Lib exposing [makePrice]\nfn run(n: Int) -> Int =\n  let p = makePrice n\n  n\n"
+	for name, text := range map[string]string{"tesl.toml": "[project]\nname=\"test\"\n", "lib.tesl": lib, "main.tesl": main} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := NewServer(workspaceCompiler(t))
+	path, libPath := filepath.Join(root, "main.tesl"), filepath.Join(root, "lib.tesl")
+	uri, libURI := protocol.PathToURI(path), protocol.PathToURI(libPath)
+	// An unsaved edit moves the declaration down one line; the jump must follow the buffer.
+	lib = strings.Replace(lib, "type Price", "# money\ntype Price", 1)
+	server.documents[uri] = document{Path: path, URI: uri, Text: main, Version: 1}
+	server.documents[libURI] = document{Path: libPath, URI: libURI, Text: lib, Version: 2}
+	position, err := protocol.NewLineIndex(main).Position(strings.Index(main, "p = "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := completionResponseFor(t, server, "textDocument/typeDefinition", workspaceParams(uri, position))
+	var location struct {
+		URI   string `json:"uri"`
+		Range struct {
+			Start protocol.Position `json:"start"`
+		} `json:"range"`
+	}
+	want, err := protocol.NewLineIndex(lib).Position(strings.Index(lib, "Price = Int"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != nil || json.Unmarshal(response.Result, &location) != nil || location.URI != libURI || location.Range.Start != want {
+		t.Fatalf("typeDefinition = %s %+v, want %s at %+v", response.Result, response.Error, libURI, want)
+	}
+	// A primitive has no project declaration: the result is null, not an error.
+	intPosition, err := protocol.NewLineIndex(main).Position(strings.Index(main, "n: Int"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	primitive := completionResponseFor(t, server, "textDocument/typeDefinition", workspaceParams(uri, intPosition))
+	if primitive.Error != nil || string(primitive.Result) != "null" {
+		t.Fatalf("primitive typeDefinition = %s %+v", primitive.Result, primitive.Error)
+	}
+}
+
+func TestWorkspaceTypeDefinitionFallsBackWhenIndexIsIncomplete(t *testing.T) {
+	root := t.TempDir()
+	main := "module Main exposing [keep]\nimport Tesl.Prelude exposing [Int]\nrecord Box {\n  size: Int\n}\nfn keep(b: Box) -> Box = b\n"
+	for name, text := range map[string]string{"tesl.toml": "[project]\nname=\"test\"\n", "main.tesl": main, "broken.tesl": "module Broken exposing [\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := NewServer(workspaceCompiler(t))
+	path := filepath.Join(root, "main.tesl")
+	uri := protocol.PathToURI(path)
+	server.documents[uri] = document{Path: path, URI: uri, Text: main, Version: 1}
+	position, err := protocol.NewLineIndex(main).Position(strings.LastIndex(main, "b\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := completionResponseFor(t, server, "textDocument/typeDefinition", workspaceParams(uri, position))
+	if response.Error != nil || !strings.Contains(string(response.Result), uri) {
+		t.Fatalf("same-file fallback = %s %+v", response.Result, response.Error)
+	}
+}

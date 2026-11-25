@@ -330,6 +330,9 @@ func (process *workspaceProcess) query(ctx context.Context, snapshot, flag, path
 	if flag == "--workspace-symbols-json" && !process.capabilities["workspace-symbols-v1"] {
 		return nil, Result{}, errors.New("compiler: workspace symbol search capability is unavailable")
 	}
+	if flag == "--workspace-type-definition-json" && !process.capabilities["workspace-type-definition-v1"] {
+		return nil, Result{}, errors.New("compiler: workspace type definition capability is unavailable")
+	}
 	symbols := flag == "--workspace-symbols-json"
 	if symbols && len(position) == 1 {
 		// Line and column frames stay empty; the query follows as one extra frame.

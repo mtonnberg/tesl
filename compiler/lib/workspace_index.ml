@@ -469,6 +469,39 @@ let cached_snapshot = Query_cache.memo ~limit:2 ~max_weight:(2 * max_bytes)
   ~value_weight:(fun snapshot -> List.fold_left (fun total (_, source) -> total + String.length source) 0 snapshot.inputs)
   build
 
+(* Cross-file type definition. On a type name, the index's own resolution
+   (like go-to-definition). Otherwise the checker's type of the expression
+   under the cursor: a qualified "Lib.Price" resolves in module Lib; a bare
+   name resolves in the file's scope (its own and imported declarations),
+   then in the one project file that declares it. Ambiguity returns null. *)
+let type_definition snapshot filename line col =
+  let filename = canonical filename in
+  match at snapshot filename line col with
+  | Some use when use.symbol.symbol_kind = TypeSymbol -> Some use.symbol
+  | _ ->
+    let unit = List.find_opt (fun unit -> unit.path = filename) snapshot.units in
+    let source = match unit with Some unit -> Some unit.source | None -> List.assoc_opt filename snapshot.inputs in
+    let name = Option.bind source (fun source -> type_name_at_source filename source line col) in
+    let named env wanted = List.find_opt (fun item -> item.bound_name = wanted) env.type_defs
+      |> Option.map (fun item -> canonical_symbol snapshot.units (type_symbol item.bound_name item.bound_loc)) in
+    match name with
+    | None -> None
+    | Some name ->
+      match List.rev (String.split_on_char '.' name) with
+      | [] -> None
+      | base :: [] ->
+        (match Option.bind unit (fun unit -> named unit.scope base) with
+         | Some symbol -> Some symbol
+         | None ->
+           (match List.filter_map (fun unit -> if within snapshot.root unit.path then named unit.local base else None) snapshot.units with
+            | [symbol] -> Some symbol
+            | _ -> None))
+      | base :: qualifier ->
+        let qualifier = String.concat "." (List.rev qualifier) in
+        (match List.filter (fun unit -> unit.ast.module_name = qualifier) snapshot.units with
+         | [owner] -> named owner.local base
+         | _ -> None)
+
 let run_symbols ~filename query =
   if String.length query > max_symbol_query || String.contains query '\000' || not (String.is_valid_utf_8 query) then
     invalid_arg "invalid workspace symbol query";
@@ -488,7 +521,10 @@ let run ~filename flag arguments =
     | _ -> invalid_arg "invalid workspace query arguments" in
   if line < 0 || col < 0 then invalid_arg "negative workspace position";
   let snapshot = cached_snapshot filename in
-  let selected = at snapshot filename line col in
+  let selected = if flag = "--workspace-type-definition-json" then
+      Option.map (fun symbol -> { symbol; loc = symbol.symbol_loc; role = "declaration" })
+        (type_definition snapshot filename line col)
+    else at snapshot filename line col in
   let extra = match rename with None -> "" | Some (name, expected) -> rename_json snapshot selected name expected in
   (* One-shot clients have no mirror lock: reject concurrent input changes rather
      than returning edits checked against a different on-disk revision. *)
